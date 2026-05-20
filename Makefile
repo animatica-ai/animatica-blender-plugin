@@ -4,7 +4,7 @@
 # top-level `proscenium_blender/` directory inside, which is exactly what
 # Blender's `Install Addon…` UI expects.
 #
-# `make install` symlinks the source tree into your Blender 4.x addons
+# `make install` symlinks the source tree into your Blender 5+ addons
 # directory so editing files lands live in Blender on the next reload.
 # Override BLENDER_ADDONS_DIR if your install path is non-standard.
 
@@ -13,8 +13,8 @@ VERSION       := $(shell python3 -c "import re,pathlib;t=pathlib.Path('$(ADDON)/
 DIST          := dist
 ZIP           := $(DIST)/proscenium-blender-$(VERSION).zip
 
-# macOS default Blender 4.x addon path. Override on Linux/Windows.
-BLENDER_ADDONS_DIR ?= $(HOME)/Library/Application Support/Blender/4.2/scripts/addons
+# macOS default Blender 5.x addon path. Override on Linux/Windows.
+BLENDER_ADDONS_DIR ?= $(HOME)/Library/Application Support/Blender/5.0/scripts/addons
 
 .PHONY: zip clean install uninstall info
 

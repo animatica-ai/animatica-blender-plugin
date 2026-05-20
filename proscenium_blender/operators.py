@@ -1301,7 +1301,7 @@ class PROSCENIUM_OT_open_upgrade(Operator):
         return {'FINISHED'}
 
 
-DISCORD_HELP_URL = "https://discord.gg/A8CrURBewz"
+DISCORD_HELP_URL = "https://discord.com/invite/A8CrURBewz"
 
 
 class PROSCENIUM_OT_open_discord_help(Operator):

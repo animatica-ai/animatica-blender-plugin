@@ -40,12 +40,17 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           body: |
-            **Install in Blender 4.x:**
+            **Install in Blender 5.0+:**
 
             1. Download `proscenium-blender-${{ github.ref_name }}.zip` below
             2. Edit → Preferences → Add-ons → Install…
             3. Pick the downloaded zip
-            4. Tick **Proscenium — AI Motion Generation**
+            4. Enable **Proscenium — AI Motion Generation**
 
-            See the [README](https://github.com/animatica-ai/proscenium-blender#readme)
-            for configuration (server URL) and usage.
+            Sign in with your [Animatica](https://animatica.ai) account under **Preferences → Add-ons → Proscenium**.
+
+            **New to Proscenium?** Watch the [video tutorial playlist](https://www.youtube.com/watch?v=Wc349qOwjfM&list=PLAJ2UfUYhFQKZpFS8eh1eGUWJ0PAys1n1) on YouTube.
+
+            **Need help?** Join the [Animatica Discord](https://discord.com/invite/A8CrURBewz).
+
+            Docs: [README](https://github.com/animatica-ai/proscenium-blender#readme) · [Using Proscenium](https://github.com/animatica-ai/proscenium-blender/blob/main/docs/usage.md)

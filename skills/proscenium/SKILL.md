@@ -5,7 +5,7 @@ description: Drives the Proscenium Blender addon — AI motion generation via th
 
 # Proscenium for Blender
 
-Proscenium is a Blender 4.x addon that generates skeletal motion from text prompts by talking MMCP HTTP to a server (self-hosted [motionmcp-kimodo](https://github.com/animatica-ai/motionmcp-kimodo) or Animatica Cloud). The addon is ML-free — it assembles a JSON request describing segments + constraints, POSTs `/generate`, then bakes the returned glTF onto a target armature.
+Proscenium is a Blender 5+ addon that generates skeletal motion from text prompts by talking MMCP HTTP to a server (self-hosted [motionmcp-kimodo](https://github.com/animatica-ai/motionmcp-kimodo) or Animatica Cloud). The addon is ML-free — it assembles a JSON request describing segments + constraints, POSTs `/generate`, then bakes the returned glTF onto a target armature.
 
 Everything in this skill is driven from Python through the Blender MCP's `execute_blender_code` tool. Operators live in the `proscenium.*` namespace and scene-level state lives at `bpy.context.scene.proscenium`.
 
