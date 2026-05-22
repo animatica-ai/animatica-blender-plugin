@@ -252,6 +252,257 @@ def bake_gltf_to_armature(
     return new_action
 
 
+def splice_gltf_into_action(
+    gltf: dict[str, Any],
+    armature_obj: bpy.types.Object,
+    action: bpy.types.Action,
+    *,
+    sample_index: int = 0,
+    request_start_frame: int,
+    target_range: tuple[int, int],
+    anchor_frames: set[int] | None = None,
+) -> None:
+    """Replace keyframes in ``target_range`` on ``action`` with new gltf data.
+
+    For every fcurve on ``action``:
+      * Remove existing keyframe points whose frame falls inside
+        ``target_range`` (inclusive on both ends).
+      * Insert new keys decoded from ``gltf`` at frames inside the range,
+        with timestamps translated via ``request_start_frame`` (the scene
+        frame that ``gltf`` time=0 maps to).
+
+    Keys outside the target range are left untouched — that's the whole
+    point: this is the "regenerate one block, keep neighbours intact" path.
+
+    After insertion, every key in the target range is tagged ``'KEYFRAME'``
+    if its frame is in ``anchor_frames`` else ``'GENERATED'``, matching the
+    convention used by :func:`bake_gltf_to_armature` so the preview
+    Accept/Reject machinery (which sorts by keyframe type) still works.
+
+    Caller is responsible for ensuring ``action`` is the armature's active
+    action — Blender's ``keyframe_insert`` writes through
+    ``animation_data.action``, so a mismatched active action would land
+    keys on the wrong action.
+    """
+    if armature_obj is None or armature_obj.type != 'ARMATURE':
+        raise ValueError("splice target must be an ARMATURE object")
+    if action is None:
+        raise ValueError("splice target action is None")
+
+    animations = gltf.get("animations") or []
+    if not animations:
+        raise ValueError("response has no animations[]")
+    if sample_index < 0 or sample_index >= len(animations):
+        raise ValueError(f"sample_index {sample_index} out of range (0..{len(animations) - 1})")
+
+    fs_target, fe_target = int(target_range[0]), int(target_range[1])
+    if fe_target < fs_target:
+        raise ValueError(f"target_range start > end: ({fs_target}, {fe_target})")
+
+    nodes = gltf.get("nodes") or []
+    anim  = animations[sample_index]
+    samplers = anim.get("samplers") or []
+    channels = anim.get("channels") or []
+
+    decoded_outputs: dict[int, list[tuple]] = {}
+    decoded_inputs:  dict[int, list[float]] = {}
+
+    def _input_for(sampler_idx: int) -> list[float]:
+        s = samplers[sampler_idx]
+        in_idx = s["input"]
+        if in_idx not in decoded_inputs:
+            decoded_inputs[in_idx] = _read_floats(gltf, in_idx, "SCALAR")
+        return decoded_inputs[in_idx]
+
+    def _quats_for(sampler_idx: int) -> list[tuple[float, float, float, float]]:
+        s = samplers[sampler_idx]
+        out_idx = s["output"]
+        if out_idx not in decoded_outputs:
+            floats = _read_floats(gltf, out_idx, "VEC4")
+            decoded_outputs[out_idx] = [
+                (floats[i], floats[i + 1], floats[i + 2], floats[i + 3])
+                for i in range(0, len(floats), 4)
+            ]
+        return decoded_outputs[out_idx]
+
+    def _vec3s_for(sampler_idx: int) -> list[tuple[float, float, float]]:
+        s = samplers[sampler_idx]
+        out_idx = s["output"]
+        if out_idx not in decoded_outputs:
+            floats = _read_floats(gltf, out_idx, "VEC3")
+            decoded_outputs[out_idx] = [
+                (floats[i], floats[i + 1], floats[i + 2])
+                for i in range(0, len(floats), 3)
+            ]
+        return decoded_outputs[out_idx]
+
+    pose = armature_obj.pose
+    for pb in pose.bones:
+        pb.rotation_mode = 'QUATERNION'
+
+    mw_rot   = armature_obj.matrix_world.to_quaternion().to_matrix()
+    mw_rot_t = mw_rot.transposed()
+    arm_world_inv = armature_obj.matrix_world.inverted()
+
+    # Step 1a — snapshot user-authored keys (kp.type != 'GENERATED') sitting
+    # inside the target range so they survive the splice. These are keys the
+    # user added during preview (Blender's default for manually-inserted
+    # keyframes is type='KEYFRAME') plus any boundary anchors from prior
+    # regens. The model regenerates the rest of the range around them, and
+    # the builder also sends each preserved frame as a pose_keyframe
+    # constraint so the new motion actually transitions through these poses
+    # rather than just having them re-stamped on top.
+    #
+    # We capture full kp state (handles, interpolation, easing, type) so the
+    # user's tangents aren't silently flattened to AUTO_CLAMPED defaults.
+    from .constraints_ui import _ensure_fcurve, _iter_fcurve_collections
+
+    preserved: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for fcurves in _iter_fcurve_collections(action):
+        for fc in fcurves:
+            key = (fc.data_path, fc.array_index)
+            for kp in fc.keyframe_points:
+                f = int(round(kp.co.x))
+                if not (fs_target <= f <= fe_target):
+                    continue
+                if kp.type == 'GENERATED':
+                    continue
+                preserved.setdefault(key, []).append({
+                    "co":                (float(kp.co.x),         float(kp.co.y)),
+                    "handle_left":       (float(kp.handle_left.x), float(kp.handle_left.y)),
+                    "handle_right":      (float(kp.handle_right.x), float(kp.handle_right.y)),
+                    "handle_left_type":  kp.handle_left_type,
+                    "handle_right_type": kp.handle_right_type,
+                    "interpolation":     kp.interpolation,
+                    "easing":            kp.easing,
+                    "type":              kp.type,
+                })
+
+    # Step 1b — wipe existing keys in the target range on every fcurve.
+    # Neighbours' keys (outside the range) are untouched.
+    for fcurves in _iter_fcurve_collections(action):
+        for fc in list(fcurves):
+            kps = fc.keyframe_points
+            for i in range(len(kps) - 1, -1, -1):
+                f = int(round(kps[i].co.x))
+                if fs_target <= f <= fe_target:
+                    kps.remove(kps[i], fast=True)
+            fc.update()
+            if len(fc.keyframe_points) == 0:
+                fcurves.remove(fc)
+
+    # Step 2 — insert new keys from the gltf, filtered to the target range.
+    # Same coordinate-conversion chain as bake_gltf_to_armature.
+    for ch in channels:
+        target = ch.get("target") or {}
+        if target.get("path") != ROTATION_PATH:
+            continue
+        node_idx = target.get("node")
+        if node_idx is None or node_idx >= len(nodes):
+            continue
+        joint_name = nodes[node_idx].get("name", "")
+        bone = pose.bones.get(joint_name)
+        if bone is None:
+            continue
+
+        sampler_idx = ch["sampler"]
+        timestamps  = _input_for(sampler_idx)
+        quats       = _quats_for(sampler_idx)
+
+        ML     = bone.bone.matrix_local.to_3x3()
+        ML_inv = ML.transposed()
+
+        for ts, q_mmcp in zip(timestamps, quats):
+            frame = _frame_from_time(ts, gltf, request_start_frame)
+            if not (fs_target <= frame <= fe_target):
+                continue
+            qx, qy, qz, qw = q_mmcp
+            R_mmcp          = Quaternion((qw, qx, qy, qz)).to_matrix()
+            R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
+            R_blender_arm   = mw_rot_t @ R_blender_world @ mw_rot
+            R_bone          = ML_inv @ R_blender_arm @ ML
+            bone.rotation_quaternion = R_bone.to_quaternion()
+            bone.keyframe_insert(data_path="rotation_quaternion", frame=frame)
+
+    for ch in channels:
+        target = ch.get("target") or {}
+        if target.get("path") != TRANSLATION_PATH:
+            continue
+        node_idx = target.get("node")
+        if node_idx is None or node_idx >= len(nodes):
+            continue
+        joint_name = nodes[node_idx].get("name", "")
+        bone = pose.bones.get(joint_name)
+        if bone is None:
+            continue
+
+        sampler_idx = ch["sampler"]
+        timestamps  = _input_for(sampler_idx)
+        positions   = _vec3s_for(sampler_idx)
+
+        rest_head = bone.bone.head_local
+        ML        = bone.bone.matrix_local.to_3x3()
+        ML_T      = ML.transposed()
+
+        for ts, p_mmcp in zip(timestamps, positions):
+            frame = _frame_from_time(ts, gltf, request_start_frame)
+            if not (fs_target <= frame <= fe_target):
+                continue
+            world     = Vector(coords.mmcp_pos_to_blender(p_mmcp))
+            arm_local = arm_world_inv @ world
+            delta     = arm_local - rest_head
+            bone.location = ML_T @ delta
+            bone.keyframe_insert(data_path="location", frame=frame)
+
+    # Step 3 — restore the user-authored keys captured in step 1a. We insert
+    # AFTER gltf so that at frames the model also wrote (very likely — the
+    # bake is dense), the user's value wins. ``keyframe_points.insert`` at
+    # an existing frame updates in-place, so a single insert call is enough.
+    user_key_frames: set[int] = set()
+    for (data_path, array_index), kps in preserved.items():
+        fc = _ensure_fcurve(action, data_path, array_index)
+        if fc is None:
+            continue
+        for state in kps:
+            kp = fc.keyframe_points.insert(state["co"][0], state["co"][1])
+            kp.handle_left       = state["handle_left"]
+            kp.handle_right      = state["handle_right"]
+            kp.handle_left_type  = state["handle_left_type"]
+            kp.handle_right_type = state["handle_right_type"]
+            kp.interpolation     = state["interpolation"]
+            kp.easing            = state["easing"]
+            kp.type              = state["type"]
+            user_key_frames.add(int(round(state["co"][0])))
+        fc.update()
+
+    # Step 4 — re-tag the just-inserted gltf keys. Every key in target_range
+    # that we *didn't* restore in step 3 was written by gltf this pass, so we
+    # type it as KEYFRAME (in the anchor set) or GENERATED (otherwise).
+    # Restored user keys keep whatever type they came in with — skip them.
+    anchors = {int(round(f)) for f in (anchor_frames or set())}
+
+    def _tag_in_range(fcurves):
+        for fc in fcurves:
+            for kp in fc.keyframe_points:
+                f = int(round(kp.co[0]))
+                if not (fs_target <= f <= fe_target):
+                    continue
+                if f in user_key_frames:
+                    continue
+                kp.type = 'KEYFRAME' if f in anchors else 'GENERATED'
+
+    flat = getattr(action, "fcurves", None)
+    if flat is not None:
+        _tag_in_range(flat)
+    else:
+        for layer in getattr(action, "layers", ()):
+            for strip in getattr(layer, "strips", ()):
+                for slot in getattr(action, "slots", ()):
+                    cb = strip.channelbag(slot, ensure=False) if hasattr(strip, "channelbag") else None
+                    if cb is not None:
+                        _tag_in_range(cb.fcurves)
+
+
 def bake_gltf_to_actions_per_block(
     gltf: dict[str, Any],
     armature_obj: bpy.types.Object,

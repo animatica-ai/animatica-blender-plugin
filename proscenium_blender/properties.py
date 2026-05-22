@@ -33,6 +33,7 @@ def _serialize_blocks(blocks) -> str:
             "frame_end": b.frame_end,
             "enabled": b.enabled,
             "color": list(b.color),
+            "seed": int(getattr(b, "seed", 0)),
         }
         for b in blocks
     ])
@@ -73,6 +74,9 @@ def load_blocks_from_armature(arm_obj, settings):
             b.enabled = bool(item.get("enabled", True))
             color = item.get("color") or [0, 0, 0, 0]
             b.color = color[:4] + [0] * (4 - len(color))
+            # ``seed`` was added with per-block regenerate; older scenes serialised
+            # without it default to 0 (= "server picks a random seed").
+            b.seed = int(item.get("seed", 0))
         settings.active_block_index = int(arm_obj.get(_ACTIVE_KEY, 0))
         return
 
@@ -327,6 +331,16 @@ class PromptBlock(PropertyGroup):
         size=4,
         min=0.0, max=1.0,
         default=(0.0, 0.0, 0.0, 0.0),
+    )
+    seed: IntProperty(
+        name="Seed",
+        description=(
+            "Per-block seed used by Regenerate Range. 0 = let the server "
+            "pick a random seed. Full-timeline Generate ignores this field "
+            "and uses the global Seed setting instead — per-block seeds only "
+            "kick in on regenerate"
+        ),
+        default=0, min=0, max=999999,
     )
 
 

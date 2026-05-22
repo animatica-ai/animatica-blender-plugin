@@ -13,6 +13,7 @@ Provides:
 - register_keymaps() / unregister_keymaps()
 """
 
+import threading
 import time
 
 import bpy
@@ -620,14 +621,17 @@ class PROSCENIUM_OT_timeline_strip_context_menu(bpy.types.Operator):
             )
             op.index = self._hit_index
 
-            # Regenerate just this range (deactivated — not yet supported by API)
+            # Regenerate just this range — available during preview so the
+            # user can re-roll one block (typically after bumping the seed)
+            # without losing the neighbour bakes.
             regen_row = layout.row()
-            regen_row.enabled = False
-            regen_row.operator(
+            regen_row.enabled = bool(getattr(props, "is_previewing", False)) and not bool(getattr(props, "is_generating", False))
+            op = regen_row.operator(
                 "proscenium.regenerate_block",
                 text="Regenerate Range",
                 icon="FILE_REFRESH",
             )
+            op.block_index = self._hit_index
 
             layout.separator()
 
@@ -1065,15 +1069,284 @@ class PROSCENIUM_OT_remove_prompt_block(bpy.types.Operator):
 
 
 class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
-    """Regenerate just the active block.  Placeholder — currently just fires the
-    full-motion generate; per-block regen needs server-side support."""
+    """Regenerate just one prompt block while keeping the rest of the preview.
+
+    Pre-Accept only — operates on the live preview action. The two frames
+    immediately before/after the block (when present in the preview) are sent
+    as ``pose_keyframe`` observations so the new motion latches onto its
+    neighbours at the seams. Honours the current Seed setting, so the typical
+    workflow is "bump seed, right-click block, regenerate".
+    """
 
     bl_idname = "proscenium.regenerate_block"
     bl_label = "Regenerate Block"
 
+    block_index: IntProperty(
+        name="Block Index",
+        description="Which prompt block to regenerate (-1 = active block)",
+        default=-1,
+    )
+    seed: IntProperty(
+        name="Seed",
+        description=(
+            "Seed for this regeneration. 0 = server picks a random seed; "
+            "any positive value is reproducible. The chosen value is saved "
+            "onto the block so the next regenerate of the same strip "
+            "pre-fills with it"
+        ),
+        default=0, min=0, max=999999,
+    )
+
+    # Modal state — kept as plain class attributes; see PROSCENIUM_OT_generate_pose
+    # for why annotations are off-limits here under from __future__ import annotations.
+    _timer = None
+    _thread = None
+    _result = None
+    _error = None
+    _target_range = None
+    _request_start_frame = None
+    _anchor_frames = None
+
+    @classmethod
+    def poll(cls, context):
+        s = getattr(context.scene, "proscenium", None)
+        if s is None:
+            return False
+        if not getattr(s, "is_previewing", False):
+            return False
+        if getattr(s, "is_generating", False):
+            return False
+        return len(s.prompt_blocks) > 0
+
+    def _resolve_block_index(self, context) -> int:
+        s = context.scene.proscenium
+        idx = self.block_index if self.block_index >= 0 else s.active_block_index
+        if 0 <= idx < len(s.prompt_blocks):
+            return idx
+        return -1
+
+    def invoke(self, context, event):
+        # Pre-fill the seed dialog. Priority:
+        #   1. the block's stored seed (if non-zero) — the typical iteration
+        #      case, "I just regenerated with 42, let me bump to 43";
+        #   2. the global Seed setting — first regen on a fresh block, so
+        #      we follow whatever seed the user has loaded for the next gen.
+        s = context.scene.proscenium
+        idx = self._resolve_block_index(context)
+        if idx < 0:
+            self.report({'ERROR'}, "No prompt block selected")
+            return {'CANCELLED'}
+        block = s.prompt_blocks[idx]
+        self.seed = int(block.seed) if int(block.seed) > 0 else int(s.seed)
+        return context.window_manager.invoke_props_dialog(self, width=320)
+
+    def draw(self, context):
+        layout = self.layout
+        idx = self._resolve_block_index(context)
+        if idx >= 0:
+            block = context.scene.proscenium.prompt_blocks[idx]
+            label = (block.prompt or "(empty prompt)").strip() or "(empty prompt)"
+            if len(label) > 48:
+                label = label[:47] + "…"
+            layout.label(text=f"Regenerate: {label}", icon='FILE_REFRESH')
+            layout.label(text=f"Frames {block.frame_start}–{block.frame_end}")
+        layout.separator()
+        layout.prop(self, "seed")
+        layout.label(text="0 = server picks a random seed", icon='INFO')
+
     def execute(self, context):
-        bpy.ops.proscenium.generate('INVOKE_DEFAULT')
+        from . import constraints_ui, gltf_to_blender, mmcp_client, request_builder
+        from .operators import _live_target_armature_or_clear
+
+        s = context.scene.proscenium
+
+        idx = self._resolve_block_index(context)
+        if idx < 0:
+            self.report({'ERROR'}, "No prompt block selected")
+            return {'CANCELLED'}
+
+        if s.is_generating:
+            self.report({'WARNING'}, "Already generating — wait or click Cancel")
+            return {'CANCELLED'}
+
+        if not s.is_previewing:
+            self.report({'ERROR'}, "Regenerate Block works only on a live preview")
+            return {'CANCELLED'}
+
+        arm = _live_target_armature_or_clear(s)
+        if arm is None:
+            self.report({'ERROR'}, "Set a target armature first")
+            return {'CANCELLED'}
+
+        model_caps = mmcp_client.cached_model(s.model_id)
+        if model_caps is None:
+            self.report({'ERROR'}, "Connect to the server first")
+            return {'CANCELLED'}
+
+        preview_action = (
+            arm.animation_data.action
+            if arm.animation_data and arm.animation_data.action
+            else None
+        )
+        if preview_action is None or not preview_action.name.startswith(
+            request_builder._GENERATED_ACTION_PREFIXES
+        ):
+            self.report({'ERROR'}, "Active action isn't a Proscenium preview — generate first")
+            return {'CANCELLED'}
+
+        source_action = (
+            bpy.data.actions.get(s.source_action_name)
+            if s.source_action_name
+            else None
+        )
+
+        # Persist the user's seed choice onto the block so subsequent
+        # regens pre-fill with it (matches the way pose-generate stashes
+        # its last prompt onto the scene props).
+        block = s.prompt_blocks[idx]
+        block.seed = int(self.seed)
+        from . import properties
+        properties.save_blocks_to_armature(arm, s)
+
+        try:
+            req, (fs, fe) = request_builder.build_request_for_block(
+                block_index=idx,
+                model_id=s.model_id,
+                model_caps=model_caps,
+                armature_obj=arm,
+                prompt_blocks=s.prompt_blocks,
+                settings=s,
+                scene=context.scene,
+                constraint_objects=constraints_ui.walk_scene_constraints(context.scene),
+                preview_action=preview_action,
+                source_action=source_action,
+                seed_override=int(self.seed),
+            )
+        except request_builder.BuildError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+
+        # Frames sent as constraints become KEYFRAME-typed anchors after the
+        # splice; everything else from the bake gets typed GENERATED. Same
+        # contract as PROSCENIUM_OT_generate uses for the full-bake path.
+        anchor_frames: set[int] = set()
+        for c in req.get("constraints", []):
+            t = c.get("type")
+            if t == "pose_keyframe":
+                anchor_frames.add(int(c["frame"]) + fs)
+            elif t == "effector_target":
+                for f in c.get("frames", []) or ():
+                    anchor_frames.add(int(f) + fs)
+
+        self._target_range = (fs, fe)
+        self._request_start_frame = fs
+        self._anchor_frames = anchor_frames
+        self._result = None
+        self._error = None
+
+        s.is_generating = True
+        s.cancel_requested = False
+        self._thread = threading.Thread(
+            target=self._worker,
+            args=(mmcp_client.get_mmcp_url(), req),
+            daemon=True,
+        )
+        self._thread.start()
+
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.1, window=context.window)
+        wm.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def _worker(self, server_url, req):
+        from . import mmcp_client
+        try:
+            client = mmcp_client.MmcpClient(server_url)
+            self._result = client.generate(req)
+        except Exception as exc:                          # noqa: BLE001 — surfaced to UI
+            self._error = exc
+
+    def modal(self, context, event):
+        from . import gltf_to_blender
+        from .operators import (
+            _clear_quota_state,
+            _live_target_armature_or_clear,
+            _stash_quota_state,
+        )
+
+        s = context.scene.proscenium
+
+        if event.type == 'ESC' or s.cancel_requested:
+            self._cleanup(context)
+            self.report({'INFO'}, "Regenerate cancelled (request still runs server-side)")
+            return {'CANCELLED'}
+
+        if event.type != 'TIMER':
+            return {'PASS_THROUGH'}
+
+        if self._thread is not None and self._thread.is_alive():
+            return {'RUNNING_MODAL'}
+
+        if self._error is not None:
+            self._cleanup(context)
+            _stash_quota_state(s, self._error)
+            self.report({'ERROR'}, f"Regenerate failed: {self._error}")
+            return {'CANCELLED'}
+
+        if self._result is None:
+            self._cleanup(context)
+            self.report({'ERROR'}, "Worker exited with no result")
+            return {'CANCELLED'}
+
+        _clear_quota_state(s)
+
+        arm = _live_target_armature_or_clear(s)
+        if arm is None:
+            self._cleanup(context)
+            self.report({'ERROR'}, "Target armature missing — regenerate aborted")
+            return {'CANCELLED'}
+
+        preview_action = (
+            arm.animation_data.action
+            if arm.animation_data and arm.animation_data.action
+            else None
+        )
+        if preview_action is None:
+            self._cleanup(context)
+            self.report({'ERROR'}, "Preview action vanished mid-regen")
+            return {'CANCELLED'}
+
+        try:
+            gltf_to_blender.splice_gltf_into_action(
+                self._result,
+                arm,
+                preview_action,
+                sample_index=0,
+                request_start_frame=self._request_start_frame,
+                target_range=self._target_range,
+                anchor_frames=self._anchor_frames,
+            )
+        except Exception as exc:                          # noqa: BLE001 — surfaced to UI
+            self._cleanup(context)
+            self.report({'ERROR'}, f"Splice failed: {exc}")
+            return {'CANCELLED'}
+
+        self._cleanup(context)
+        for area in context.screen.areas:
+            area.tag_redraw()
+        self.report({'INFO'}, "Block regenerated")
         return {'FINISHED'}
+
+    def _cleanup(self, context):
+        s = context.scene.proscenium
+        if self._timer is not None:
+            try:
+                context.window_manager.event_timer_remove(self._timer)
+            except Exception:
+                pass
+            self._timer = None
+        s.is_generating = False
+        s.cancel_requested = False
 
 
 # ---------------------------------------------------------------------------

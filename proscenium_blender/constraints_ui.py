@@ -853,6 +853,118 @@ def sample_pose_keyframes(
     return constraints
 
 
+def sample_pose_at_frame(
+    armature_obj: bpy.types.Object,
+    *,
+    source_action: bpy.types.Action,
+    sample_frame: int,
+    request_frame: int,
+    fill_mode: str = "rest",
+    bone_names: set[str] | None = None,
+) -> dict[str, Any] | None:
+    """Sample one ``pose_keyframe`` constraint from any action at one frame.
+
+    Unlike :func:`sample_pose_keyframes`, this does **not** consult the
+    feedback-loop guard that refuses to read from Proscenium-generated
+    actions. The caller decides which action to read — used by single-block
+    regen to grab boundary observations from the preview bake, which is
+    exactly the case ``sample_pose_keyframes`` is built to refuse.
+
+    ``sample_frame`` is the Blender scene frame to evaluate the pose at;
+    ``request_frame`` is the timeline-relative index that lands in the
+    constraint dict's ``frame`` field. Default ``fill_mode="rest"`` so
+    boundary observations pin the full body — the contract is "the body is
+    exactly here at this frame", not "freely interpolate around these EE
+    positions".
+
+    When ``bone_names`` is provided, ``joint_rotations`` is restricted to
+    those bones (intersected with the rig's natural sample set — deform
+    bones on a control rig, all pose bones otherwise). Used by per-block
+    regen to pin only the bones the user actually edited, leaving the rest
+    of the body free for the model to interpolate. ``None`` samples the
+    full pose (matching the boundary-observation use case).
+    """
+    if armature_obj is None or source_action is None:
+        return None
+
+    from . import request_builder  # noqa: PLC0415 — module-load circular
+
+    deform_bones = request_builder.detect_deform_bones(armature_obj)
+    is_control_rig = request_builder.is_control_rig(armature_obj)
+
+    sample_bone_names = (
+        deform_bones
+        if is_control_rig
+        else {pb.name for pb in armature_obj.pose.bones}
+    )
+    if bone_names is not None:
+        sample_bone_names = sample_bone_names & bone_names
+    if not sample_bone_names:
+        return None
+
+    if armature_obj.animation_data is None:
+        armature_obj.animation_data_create()
+    saved_action = armature_obj.animation_data.action
+    armature_obj.animation_data.action = source_action
+
+    scene = bpy.context.scene
+    original = scene.frame_current
+
+    S = _MMCP_TO_BLENDER
+    S_inv = S.transposed()
+    mw_rot = armature_obj.matrix_world.to_quaternion().to_matrix()
+    mw_rot_t = mw_rot.transposed()
+
+    root_pb = next(
+        (pb for pb in armature_obj.pose.bones if pb.parent is None),
+        None,
+    )
+    sample_root = root_pb
+    if is_control_rig and root_pb is not None and root_pb.name not in deform_bones:
+        for pb in armature_obj.pose.bones:
+            if pb.name in deform_bones:
+                cur = pb
+                while cur.parent is not None and cur.parent.name in deform_bones:
+                    cur = cur.parent
+                sample_root = cur
+                break
+
+    try:
+        scene.frame_set(sample_frame)
+        bpy.context.view_layer.update()
+
+        joint_rotations: dict[str, list[float]] = {}
+        for pb in armature_obj.pose.bones:
+            if pb.name not in sample_bone_names:
+                continue
+            R_basis = _evaluated_local_basis(pb).to_3x3()
+            ML = pb.bone.matrix_local.to_3x3()
+            R_blender_arm = ML @ R_basis @ ML.transposed()
+            R_blender_world = mw_rot @ R_blender_arm @ mw_rot_t
+            R_mmcp = S_inv @ R_blender_world @ S
+            w, x, y, z = R_mmcp.to_quaternion()
+            joint_rotations[pb.name] = [x, y, z, w]
+
+        if not joint_rotations:
+            return None
+
+        entry: dict[str, Any] = {
+            "type":            "pose_keyframe",
+            "frame":           int(request_frame),
+            "joint_rotations": joint_rotations,
+            "fill_mode":       fill_mode,
+        }
+        if sample_root is not None:
+            root_world = (armature_obj.matrix_world @ sample_root.matrix).translation
+            root_mmcp = coords.blender_pos_to_mmcp(root_world)
+            entry["root_position"] = list(root_mmcp)
+        return entry
+    finally:
+        scene.frame_set(original)
+        if saved_action is not None:
+            armature_obj.animation_data.action = saved_action
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

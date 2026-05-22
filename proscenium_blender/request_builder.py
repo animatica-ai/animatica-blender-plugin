@@ -171,6 +171,226 @@ def build_request(
     return request
 
 
+def build_request_for_block(
+    *,
+    block_index: int,
+    model_id: str,
+    model_caps: dict[str, Any],
+    armature_obj: bpy.types.Object,
+    prompt_blocks: list,
+    settings,
+    scene: bpy.types.Scene,
+    constraint_objects: dict[str, list[bpy.types.Object]],
+    preview_action: bpy.types.Action,
+    source_action: bpy.types.Action | None,
+    seed_override: int | None = None,
+) -> tuple[dict[str, Any], tuple[int, int]]:
+    """Build a tight ``GenerateRequest`` covering just one prompt block.
+
+    Used for "regenerate this block only" — the request scope is the single
+    block's frame range and the only TextSegment is its prompt. Continuity
+    with neighbouring blocks comes from boundary ``pose_keyframe``
+    observations sampled from ``preview_action`` at the frames immediately
+    before/after the block. The model treats those as hard pins, so the
+    new motion starts and ends on top of whatever the previous bake left
+    at the seams.
+
+    User-authored anchors inside the block range are picked up directly
+    from the preview action (any ``kp.type != 'GENERATED'`` rotation key
+    is treated as a user anchor — Blender stamps that type onto manual
+    keyframe inserts, and the original bake also promotes constraint
+    frames to it). The ``source_action`` parameter is retained for symmetry
+    with the full-generate API and forward-compatibility but isn't read on
+    the regen path — see the inline note below the effector-targets loop.
+
+    Returns ``(request_dict, (block_start, block_end))`` — the caller needs
+    the range to drive the splice step. Raises ``BuildError`` on invalid
+    state.
+    """
+    del source_action  # see docstring — unused on the per-block regen path
+    if armature_obj is None or armature_obj.type != 'ARMATURE':
+        raise BuildError("Set a target armature first")
+    if preview_action is None:
+        raise BuildError("No preview to regenerate from")
+    if not (0 <= block_index < len(prompt_blocks or ())):
+        raise BuildError("No active prompt block selected")
+
+    target = prompt_blocks[block_index]
+    if not getattr(target, "enabled", True):
+        raise BuildError("Block is disabled — enable it to regenerate")
+
+    block_start = int(target.frame_start)
+    block_end = int(target.frame_end)
+    if block_end < block_start:
+        raise BuildError("Block has an empty frame range")
+    total_frames = block_end - block_start + 1
+
+    canonical = model_caps.get("canonical_skeleton") or {}
+    canonical_joint_names = {j["name"] for j in canonical.get("joints", [])}
+    supports_retargeting = bool(model_caps.get("supports_retargeting", False))
+
+    request_skeleton = armature_to_skeleton(armature_obj)
+    armature_bones = {pb.name for pb in armature_obj.pose.bones}
+    if not supports_retargeting:
+        if not canonical_joint_names:
+            raise BuildError(f"Model {model_id!r} has no canonical_skeleton.joints")
+        missing = canonical_joint_names - armature_bones
+        if missing:
+            raise BuildError(
+                f"Armature {armature_obj.name!r} is missing {len(missing)} canonical joint(s) "
+                f"(first few: {sorted(missing)[:5]}). "
+                f"This server does not support retargeting — pick a rig that "
+                f"mirrors the canonical skeleton, or use 'Import canonical skeleton'"
+            )
+        request_skeleton = canonical
+
+    prompt = (target.prompt or "").strip()
+    if prompt:
+        segments: list[dict[str, Any]] = [{
+            "type":            "text",
+            "prompt":          prompt,
+            "duration_frames": total_frames,
+        }]
+    else:
+        segments = [{
+            "type":            "unconditioned",
+            "duration_frames": total_frames,
+        }]
+
+    frame_range = (block_start, block_end)
+
+    constraints: list[dict[str, Any]] = []
+
+    # Identify bones the user actually rotated at each user-keyed frame in
+    # the block range. Pressing I → "Whole Character" stamps a KEYFRAME on
+    # every bone using each bone's current value, so most KEYFRAME-typed
+    # kps have values identical to the surrounding GENERATED frames; only
+    # bones with a real value delta count as user edits.
+    edited_bones_by_frame = _user_edited_bones_per_frame(
+        preview_action, block_start, block_end,
+    )
+
+    # Two kinds of anchor frames feed the model:
+    #
+    # 1. Block seams (block_start, block_end) → continuity. Sample the FULL
+    #    body pose from the neighbouring frame on the *other side* of the
+    #    seam (block_start - 1, block_end + 1). This is what keeps the new
+    #    motion from snapping at the join with adjacent blocks. If the user
+    #    edited bones AT the seam, override the boundary's joint_rotations
+    #    for those bones with the user's values — the seam constraint then
+    #    pins continuity for the un-edited body and the user's pose for
+    #    the edited bones, in one frame.
+    #
+    # 2. Interior user-edited frames → user pose. For frames strictly
+    #    between block_start and block_end with at least one edited bone,
+    #    emit a pose_keyframe constraint pinning ONLY those edited bones.
+    #    The rest of the body stays free for the model to interpolate.
+    preview_min, preview_max = _preview_frame_extent(preview_action)
+    has_left_data  = preview_min is not None and (block_start - 1) >= preview_min
+    has_right_data = preview_max is not None and (block_end + 1) <= preview_max
+
+    anchor_frames: set[int] = set(edited_bones_by_frame)
+    if has_left_data:
+        anchor_frames.add(block_start)
+    if has_right_data:
+        anchor_frames.add(block_end)
+
+    for f in sorted(anchor_frames):
+        edited_at_f = edited_bones_by_frame.get(f, set())
+
+        # Build the "boundary base" pose for this anchor frame, if it's a
+        # seam frame with neighbour data on the relevant side. Sampled from
+        # the *opposite* side of the seam — block_start anchors continuity
+        # from frame block_start - 1, block_end anchors continuity into
+        # block_end + 1.
+        base_constraint: dict[str, Any] | None = None
+        if f == block_start and has_left_data:
+            base_constraint = constraints_ui.sample_pose_at_frame(
+                armature_obj,
+                source_action=preview_action,
+                sample_frame=block_start - 1,
+                request_frame=0,
+            )
+        elif f == block_end and has_right_data:
+            base_constraint = constraints_ui.sample_pose_at_frame(
+                armature_obj,
+                source_action=preview_action,
+                sample_frame=block_end + 1,
+                request_frame=total_frames - 1,
+            )
+
+        # Build the "user override" pose for this anchor frame — only the
+        # bones the user actually rotated at f.
+        user_constraint: dict[str, Any] | None = None
+        if edited_at_f:
+            user_constraint = constraints_ui.sample_pose_at_frame(
+                armature_obj,
+                source_action=preview_action,
+                sample_frame=f,
+                request_frame=f - block_start,
+                bone_names=edited_at_f,
+            )
+
+        # Merge the two when both exist. Boundary stays the base (full
+        # body, request_frame correct); user values overwrite per-bone.
+        # Root position: prefer the user's if they posed the root, else
+        # keep the boundary's continuity anchor.
+        if base_constraint is not None and user_constraint is not None:
+            base_constraint["joint_rotations"].update(user_constraint["joint_rotations"])
+            if "root_position" in user_constraint:
+                base_constraint["root_position"] = user_constraint["root_position"]
+            constraints.append(base_constraint)
+        elif base_constraint is not None:
+            constraints.append(base_constraint)
+        elif user_constraint is not None:
+            constraints.append(user_constraint)
+
+    # Effector targets get the existing block-range filter automatically.
+    # Root paths are deliberately skipped — they describe whole-timeline
+    # trajectory and resampling onto a single block would compress the
+    # entire curve into the block's duration, which is wrong. Boundary
+    # ``pose_keyframe`` constraints already give the model enough start/end
+    # position information for the slice.
+    for empty in constraint_objects.get("effector_targets", []):
+        c = constraints_ui.sample_effector_target(
+            empty, frame_range=frame_range, total_frames=total_frames,
+        )
+        if c is not None:
+            constraints.append(c)
+
+    # NOTE: we deliberately do NOT also sample pose_keyframes from the
+    # source action here, even though that's what the full-generate path
+    # does. Reason: during preview, every source-action anchor lives on
+    # the preview action as a 'KEYFRAME'-typed kp (the original bake
+    # promoted constraint frames to that type), and the interior-anchor
+    # pass above already picks them up. Sampling source separately would
+    # double-count those frames; the only case it would *not* duplicate is
+    # source keys outside the preview's frame range, which by definition
+    # don't apply to a per-block regen anyway.
+
+    valid_joint_names = {j["name"] for j in request_skeleton.get("joints", [])}
+    _validate_constraint_joints(constraints, valid_joint_names)
+    _validate_constraint_count(constraints, model_caps)
+
+    options = build_options(settings)
+    if seed_override is not None:
+        # 0 means "let the server pick a random seed" (matches ``build_options``
+        # semantics for ``settings.seed``); any positive int is the seed.
+        options["seed"] = int(seed_override) if int(seed_override) > 0 else None
+
+    request: dict[str, Any] = {
+        "protocol_version": PROTOCOL_VERSION,
+        "model":            model_id,
+        "skeleton":         request_skeleton,
+        "options":          options,
+        "segments":         segments,
+    }
+    if constraints:
+        request["constraints"] = constraints
+
+    return request, (block_start, block_end)
+
+
 # ---------------------------------------------------------------------------
 # Segments
 # ---------------------------------------------------------------------------
@@ -419,6 +639,147 @@ def _collect_constraints(
         out.append(anchor)
 
     return out
+
+
+def _preview_frame_extent(
+    action: bpy.types.Action | None,
+) -> tuple[int | None, int | None]:
+    """Min/max keyed frame across every fcurve on ``action``. Used by the
+    per-block regen path to decide which boundary frames can supply a pose
+    observation — only those that actually lie inside the existing bake.
+    """
+    if action is None:
+        return None, None
+    lo: int | None = None
+    hi: int | None = None
+    for fc in constraints_ui.iter_action_fcurves(action):
+        for kp in fc.keyframe_points:
+            f = int(round(kp.co.x))
+            if lo is None or f < lo:
+                lo = f
+            if hi is None or f > hi:
+                hi = f
+    return lo, hi
+
+
+# Value-delta epsilon for the "did the user actually rotate this bone, or did
+# pressing I → Whole Character just re-stamp the existing pose value with a
+# KEYFRAME type?" check. Quaternion components are in [-1, 1]; 5e-3 is a few
+# tenths of a degree of rotation per component — well below user perception
+# but well above float-roundtrip noise from depsgraph evaluation.
+_EDIT_EPSILON = 5e-3
+
+
+def _user_edited_bones_per_frame(
+    action: bpy.types.Action | None,
+    frame_start: int,
+    frame_end: int,
+) -> dict[int, set[str]]:
+    """Map each user-keyed frame inside ``[frame_start, frame_end]`` to the
+    set of bones the user *actually* rotated at that frame.
+
+    Why this isn't just "bones with non-GENERATED keys at frame f":
+    pressing ``I`` in Pose mode with Blender's default "Whole Character" or
+    "Available" keying set inserts a KEYFRAME on every rotation channel of
+    every bone, *using each bone's current evaluated value*. For bones the
+    user didn't touch, that value equals the bake's GENERATED kp at frame
+    f, so the new KEYFRAME-typed kp has the same value as the kp it
+    replaced. Treating "kp.type != 'GENERATED'" as "the user edited this
+    bone" would over-constrain the regen request — every joint would be
+    pinned to the previous bake's pose at frame f — and the model would
+    fall back to producing motion that doesn't transition to the user's
+    deliberate edit.
+
+    Heuristic: a bone counts as edited at frame f when any of its rotation
+    quaternion components' value at f differs by more than ``_EDIT_EPSILON``
+    from the linear interpolation of the surrounding GENERATED keys on the
+    same fcurve. Bones whose value matches the natural interpolation are
+    the "incidentally keyed" ones — the user pressed I and the value got
+    re-stamped without actually changing.
+
+    For dense bakes (a GENERATED key every frame) the linear interp
+    collapses to "is the value at f equal to the value at f-1 / f+1?", which
+    is a tight delta check. For sparse anchors (a kp with no surrounding
+    GENERATED neighbours), the bone is conservatively flagged as edited —
+    we can't disprove the user's intent, so we honour it.
+    """
+    if action is None:
+        return {}
+
+    # First pass: collect every non-GENERATED rotation kp in range, grouped
+    # by (bone, frame) so we can evaluate "is this bone edited at frame f"
+    # across all 4 quaternion components in one pass.
+    candidates: dict[tuple[str, int], list[bpy.types.FCurve]] = {}
+    kp_value_at: dict[tuple[str, int, int], float] = {}  # (bone, frame, axis) -> value
+
+    for fc in constraints_ui.iter_action_fcurves(action):
+        if "rotation" not in fc.data_path:
+            continue
+        bone = constraints_ui._bone_name_from_data_path(fc.data_path)
+        if bone is None:
+            continue
+        for kp in fc.keyframe_points:
+            if kp.type == 'GENERATED':
+                continue
+            f = int(round(kp.co.x))
+            if not (frame_start <= f <= frame_end):
+                continue
+            candidates.setdefault((bone, f), []).append(fc)
+            kp_value_at[(bone, f, int(fc.array_index))] = float(kp.co.y)
+
+    edited: dict[int, set[str]] = {}
+    for (bone, f), fcs in candidates.items():
+        # Bone is edited if ANY of its rotation channels at frame f differs
+        # from the surrounding-GENERATED interpolation at f.
+        bone_edited = False
+        for fc in fcs:
+            axis = int(fc.array_index)
+            v_user = kp_value_at[(bone, f, axis)]
+            v_interp = _interp_from_generated(fc, f)
+            if v_interp is None:
+                # No surrounding GENERATED keys to compare against → trust
+                # the user; treat as edited.
+                bone_edited = True
+                break
+            if abs(v_user - v_interp) > _EDIT_EPSILON:
+                bone_edited = True
+                break
+        if bone_edited:
+            edited.setdefault(f, set()).add(bone)
+
+    return edited
+
+
+def _interp_from_generated(fc: bpy.types.FCurve, target_frame: int) -> float | None:
+    """Linearly interpolate ``fc``'s GENERATED keyframes at ``target_frame``.
+
+    Returns ``None`` when no GENERATED neighbours exist on either side
+    (sparse fcurve, no bake context). Used by ``_user_edited_bones_per_frame``
+    to decide whether a user kp's value matches what the bake would have
+    produced at that frame.
+    """
+    left: tuple[float, float] | None = None
+    right: tuple[float, float] | None = None
+    for kp in fc.keyframe_points:
+        if kp.type != 'GENERATED':
+            continue
+        x = float(kp.co.x)
+        if x < target_frame and (left is None or x > left[0]):
+            left = (x, float(kp.co.y))
+        elif x > target_frame and (right is None or x < right[0]):
+            right = (x, float(kp.co.y))
+        elif x == target_frame:
+            # GENERATED kp sitting on target_frame (rare — usually the
+            # user's KEYFRAME replaced it) — that's the most direct
+            # answer.
+            return float(kp.co.y)
+    if left is None or right is None:
+        return None
+    fl, vl = left
+    fr, vr = right
+    if fr == fl:
+        return vl
+    return vl + (target_frame - fl) * (vr - vl) / (fr - fl)
 
 
 def _start_anchor(
