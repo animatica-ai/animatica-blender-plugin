@@ -422,6 +422,79 @@ def detect_deform_bones(armature_obj: bpy.types.Object) -> set[str]:
     return {pb.name for pb in armature_obj.pose.bones if pb.bone.use_deform}
 
 
+# Face / head-detail joints the server's body retarget can't use. Listed by
+# the *first* dotted component of the bare bone name (after stripping a
+# leading ``DEF-`` if present). Rigify's metarig and its generated DEF
+# chain both use these tokens with `.L`/`.R`/`.NNN` suffixes — e.g.
+# ``brow.B.L.002``, ``DEF-lid.T.R.001``. We drop the entire face subtree so
+# it doesn't reach the body retargeter — analogous to how
+# ``hands_follow_forearm`` strips Mixamo finger subtrees inside the
+# retarget library. The bones stay on the rig; we just don't send them.
+_FACE_BONE_TOKENS: frozenset[str] = frozenset({
+    "brow", "cheek", "chin", "ear", "eye", "face", "forehead",
+    "jaw", "lid", "lip", "mouth", "nose", "teeth", "temple",
+    "tongue",
+})
+
+
+def _is_face_bone(name: str) -> bool:
+    """True if ``name`` looks like a face / head-detail bone — matches the
+    head token (first dotted component) against :data:`_FACE_BONE_TOKENS`.
+    Strips a leading ``DEF-`` first so Rigify's generated chain matches the
+    same way as the bare metarig names.
+    """
+    bare = name[4:] if name.startswith("DEF-") else name
+    head_token = bare.split(".", 1)[0].lower()
+    return head_token in _FACE_BONE_TOKENS
+
+
+# Rigify splits each major limb segment into two halves at generate time —
+# ``DEF-upper_arm.L``/``DEF-upper_arm.L.001``, ``DEF-forearm.L``/`.001``,
+# ``DEF-thigh.L``/`.001``, ``DEF-shin.L``/`.001``. The ``.001`` halves are
+# pure skinning helpers for bendy-bone smoothing — they don't appear on
+# the metarig (which has a single bone per segment) and they don't map to
+# anything in the canonical SOMA chain (shoulder/elbow/wrist =
+# upper_arm/forearm/hand, 3 joints per arm). Sending them doubles the
+# joint count on every limb and confuses the bone classifier's
+# region/side picks. We drop them at the request edge.
+_TWEAK_HALF_SEGMENTS: frozenset[str] = frozenset({
+    "upper_arm", "forearm", "thigh", "shin",
+})
+
+
+def _is_tweak_half(name: str) -> bool:
+    """True if ``name`` is a Rigify bendy ``.001`` half of a major limb
+    segment — e.g. ``DEF-upper_arm.L.001``, ``DEF-shin.R.001``.
+
+    Matches by stripping a leading ``DEF-``, splitting the rest by ``.``,
+    and asserting (a) the first component is in
+    :data:`_TWEAK_HALF_SEGMENTS` and (b) the final component is exactly
+    ``001``. Conservative enough to leave ``DEF-spine.001`` (a real spine
+    segment, not a tweak half) alone.
+    """
+    bare = name[4:] if name.startswith("DEF-") else name
+    parts = bare.split(".")
+    if len(parts) < 2 or parts[-1] != "001":
+        return False
+    return parts[0].lower() in _TWEAK_HALF_SEGMENTS
+
+
+# Arm-chain bones we rewrite to T-pose layout in the outgoing skeleton.
+# Rigify's default human metarig has the upper arm at ~28° below
+# horizontal — an A-pose that the bone classifier was not trained on and
+# that warps how the reverse retarget maps SOMA77 onto the rig. We send
+# horizontal arms instead, then pre-multiply the returned rotation keys
+# by the bone's actual rest rotation to compensate (see
+# :func:`t_pose_correction_quat` in ``gltf_to_blender``).
+_T_POSE_ARM_TOKENS: frozenset[str] = frozenset({"upper_arm", "forearm", "hand"})
+
+
+def is_t_pose_arm_bone(name: str) -> bool:
+    """True if ``name`` is an arm-chain bone subject to T-pose rewriting."""
+    bare = name[4:] if name.startswith("DEF-") else name
+    return bare.split(".", 1)[0].lower() in _T_POSE_ARM_TOKENS
+
+
 def is_control_rig(armature_obj: bpy.types.Object) -> bool:
     """``True`` when the armature's deform layer is driven from a separate
     control layer via constraints — what people mean by "control rig".
@@ -460,6 +533,108 @@ def _closest_deform_ancestor(pb: bpy.types.PoseBone, deform: set[str]):
     return p
 
 
+def _build_deform_parent_map(
+    armature_obj: bpy.types.Object,
+    deform: set[str],
+) -> dict[str, str | None]:
+    """Build a parent map for the deform-only skeleton tree.
+
+    Returns ``{deform_bone_name: parent_deform_bone_name | None}`` with
+    exactly one bone mapped to ``None`` (the root).
+
+    Strategy:
+      1. **Parent walk** — for each DEF bone, walk up ``pb.parent`` looking
+         for another DEF. Handles the common case where DEFs form a clean
+         chain in the bone hierarchy (Mixamo, plain deform rigs).
+      2. **Spatial fallback** — when the walk yields no DEF ancestor (which
+         happens on Rigify because DEFs parent through ``ORG-*``/``MCH-*``
+         intermediaries), use rest-pose tail-to-head proximity: each
+         orphan's parent is the DEF whose tail is closest to its head.
+      3. **Single root** — among bones that still have no parent (orphans
+         with no spatial match, or cycle-breakers), pick the one closest
+         to the armature's origin as the root and attach the rest to it.
+
+    The server requires exactly one ``parent: null`` joint per the MMCP
+    skeleton schema — without the fallback, Rigify rigs emit ~98 roots
+    and the request fails schema validation.
+    """
+    mw = armature_obj.matrix_world
+    head_w: dict[str, "Vector"] = {}
+    tail_w: dict[str, "Vector"] = {}
+    for name in deform:
+        pb = armature_obj.pose.bones[name]
+        head_w[name] = mw @ pb.bone.head_local
+        tail_w[name] = mw @ pb.bone.tail_local
+
+    parent_map: dict[str, str | None] = {}
+
+    # Step 1: parent walk.
+    for name in deform:
+        pb = armature_obj.pose.bones[name]
+        anc = _closest_deform_ancestor(pb, deform)
+        if anc is not None:
+            parent_map[name] = anc.name
+
+    # Step 2: spatial fallback for orphans, with cycle prevention.
+    orphans = [n for n in deform if n not in parent_map]
+    if orphans:
+        # Per-orphan: closest DEF tail to my head (any DEF, not just other orphans).
+        candidates: dict[str, tuple[str | None, float]] = {}
+        for name in orphans:
+            h = head_w[name]
+            best = None
+            best_dist = float("inf")
+            for other in deform:
+                if other == name:
+                    continue
+                d = (tail_w[other] - h).length
+                if d < best_dist:
+                    best_dist = d
+                    best = other
+            candidates[name] = (best, best_dist)
+
+        # Pick the root: the orphan whose closest-tail distance is largest
+        # (= most disconnected from any other bone's tail). Tiebreak by
+        # distance to armature origin so the pelvis wins over an outlier.
+        armature_origin = mw.translation
+        root = max(
+            orphans,
+            key=lambda n: (candidates[n][1], -(head_w[n] - armature_origin).length),
+        )
+        parent_map[root] = None
+
+        # Assign remaining orphans in order of increasing dist (closest matches
+        # first). Cycle prevention: walking up parent_map from the candidate
+        # must not reach ``name``. Stopping at an unresolved bone (one not yet
+        # in parent_map) is fine — that bone will get its own parent assigned
+        # in a later iteration, and the final tree resolves bottom-up.
+        for name in sorted([o for o in orphans if o != root], key=lambda n: candidates[n][1]):
+            candidate, _dist = candidates[name]
+            cur = candidate
+            cycle = False
+            visited_in_walk: set[str] = set()
+            while cur is not None:
+                if cur == name:
+                    cycle = True
+                    break
+                if cur in visited_in_walk:
+                    # Existing cycle not involving ``name`` — defensive; shouldn't
+                    # happen given how we build, but bail out cleanly if it does.
+                    break
+                visited_in_walk.add(cur)
+                cur = parent_map.get(cur)  # None when cur is root or not yet placed
+            parent_map[name] = root if cycle else candidate
+
+    # Sanity: exactly one root.
+    roots = [n for n in deform if parent_map.get(n) is None]
+    assert len(roots) == 1, (
+        f"_build_deform_parent_map produced {len(roots)} roots (expected 1): "
+        f"{roots[:5]}{'...' if len(roots) > 5 else ''}"
+    )
+
+    return parent_map
+
+
 def armature_to_skeleton(armature_obj: bpy.types.Object) -> dict[str, Any]:
     """Serialize the armature's rest layout to the MMCP `Skeleton` shape.
 
@@ -473,8 +648,9 @@ def armature_to_skeleton(armature_obj: bpy.types.Object) -> dict[str, Any]:
     When the armature has a control-rig setup (deform bones driven by
     constraints), only the deform bones are emitted — the server's bone
     classifier would otherwise see Ctrl_*/IK helpers/pole vectors and pick
-    wrong slots. Parent links of deform bones get rewritten to skip over
-    any non-deform intermediaries, keeping the rest hierarchy intact.
+    wrong slots. Parent links of deform bones get rewritten via
+    :func:`_build_deform_parent_map` so the result is a single tree (the
+    server's schema requires exactly one ``parent: null`` joint).
     """
     mw = armature_obj.matrix_world
     pose_bones = list(armature_obj.pose.bones)
@@ -483,22 +659,89 @@ def armature_to_skeleton(armature_obj: bpy.types.Object) -> dict[str, Any]:
     }
 
     deform = detect_deform_bones(armature_obj)
+
+    # Drop face / head-detail joints — they have no body-retarget equivalent
+    # and confuse the bone classifier's hand/foot/head slot picks. Tokens
+    # caught by :func:`_is_face_bone`; also sweep any descendants of a bone
+    # whose head token IS face (e.g. ``temple.L`` parented under ``face``)
+    # so the whole subtree disappears.
+    face_drop: set[str] = {n for n in deform if _is_face_bone(n)}
+    # Walk descendants of face-bone roots and add them too.
+    if face_drop:
+        all_pbs = {pb.name: pb for pb in armature_obj.pose.bones}
+        for n in list(face_drop):
+            stack = [all_pbs[n]] if n in all_pbs else []
+            while stack:
+                pb = stack.pop()
+                for child in pb.children:
+                    if child.bone.use_deform and child.name not in face_drop:
+                        face_drop.add(child.name)
+                    stack.append(child)
+    if face_drop:
+        deform = deform - face_drop
+
+    # Drop Rigify bendy ``.001`` mid-segments on the four major limb
+    # segments — pure skinning helpers that don't exist on the metarig
+    # and don't correspond to canonical SOMA joints. Children of a tweak
+    # half are real joints (the next segment), so we DON'T walk
+    # descendants here — only the tweak bone itself is removed and the
+    # deform parent map will re-wire its children up to the parent.
+    tweak_drop: set[str] = {n for n in deform if _is_tweak_half(n)}
+    if tweak_drop:
+        deform = deform - tweak_drop
+
     use_deform_filter = is_control_rig(armature_obj)
+    parent_map = _build_deform_parent_map(armature_obj, deform) if use_deform_filter else None
+
+    # The server requires parents to appear before their children in joints[].
+    # Blender's pose-bone iteration order tracks edit-bone parent links, which
+    # holds for plain rigs but breaks once ``_build_deform_parent_map`` rewires
+    # parents spatially (e.g. ``DEF-forehead.L → DEF-brow.T.L.002`` may flip
+    # the natural order). Emit in topological order: root, then each bone
+    # whose parent is already emitted.
+    if use_deform_filter:
+        emit_order = _topological_order(parent_map)
+        ordered_bones = [armature_obj.pose.bones[name] for name in emit_order]
+    else:
+        ordered_bones = pose_bones
 
     joints: list[dict[str, Any]] = []
-    for pb in pose_bones:
+    for pb in ordered_bones:
         if use_deform_filter and pb.name not in deform:
             continue
         if use_deform_filter:
-            parent = _closest_deform_ancestor(pb, deform)
+            parent_name = parent_map[pb.name]  # may be None for the root
         else:
-            parent = pb.parent
-        parent_name = parent.name if parent else None
-        if parent is None:
-            local = head_world_by_name[pb.name]
-        else:
-            local = head_world_by_name[pb.name] - head_world_by_name[parent.name]
-        mx, my, mz = coords.blender_pos_to_mmcp(local)
+            parent_name = pb.parent.name if pb.parent else None
+
+        # Force T-pose layout for the arm sub-chain in the *sent* skeleton.
+        # Rigify's metarig drapes arms ~28° below horizontal (A-pose), which
+        # the bone classifier was not trained on and which biases the
+        # reverse retarget. We rewrite ``forearm`` / ``hand`` parent-local
+        # offsets to be a pure horizontal extension of the parent's bone
+        # length so the server sees flat arms. The actual armature stays
+        # in its real A-pose (the bake reads from the live rig, not the
+        # request), so this only affects what the classifier + retarget
+        # see — the motion still lands on the real rig.
+        tposed = False
+        if parent_name is not None and is_t_pose_arm_bone(pb.name):
+            bare = pb.name[4:] if pb.name.startswith("DEF-") else pb.name
+            head_token = bare.split(".", 1)[0].lower()
+            if head_token in ("forearm", "hand"):
+                parent_pb = armature_obj.pose.bones.get(parent_name)
+                if parent_pb is not None:
+                    sign = -1.0 if (".R" in bare) else 1.0
+                    length = float(parent_pb.bone.length)
+                    mx, my, mz = sign * length, 0.0, 0.0
+                    tposed = True
+
+        if not tposed:
+            if parent_name is None:
+                local = head_world_by_name[pb.name]
+            else:
+                local = head_world_by_name[pb.name] - head_world_by_name[parent_name]
+            mx, my, mz = coords.blender_pos_to_mmcp(local)
+
         joints.append({
             "name":             pb.name,
             "parent":           parent_name,
@@ -510,6 +753,36 @@ def armature_to_skeleton(armature_obj: bpy.types.Object) -> dict[str, Any]:
         "coordinate_system": "right_handed_y_up",
         "units":             "meters",
     }
+
+
+def _topological_order(parent_map: dict[str, str | None]) -> list[str]:
+    """Return bone names in parent-before-child order given ``parent_map``.
+
+    BFS from the root so siblings emit in the order they were inserted into
+    the map (which mirrors the source iteration). Cycles in ``parent_map``
+    would leave some nodes unvisited; asserting catches that since the
+    server requires a tree.
+    """
+    children_of: dict[str, list[str]] = {}
+    roots: list[str] = []
+    for name, parent in parent_map.items():
+        if parent is None:
+            roots.append(name)
+        else:
+            children_of.setdefault(parent, []).append(name)
+
+    order: list[str] = []
+    queue = list(roots)
+    while queue:
+        name = queue.pop(0)
+        order.append(name)
+        queue.extend(children_of.get(name, ()))
+
+    assert len(order) == len(parent_map), (
+        f"_topological_order: visited {len(order)} of {len(parent_map)} bones "
+        f"— parent_map has a cycle or disconnected node"
+    )
+    return order
 
 
 def build_segments(prompt_blocks, frame_range: tuple[int, int]) -> list[dict[str, Any]]:

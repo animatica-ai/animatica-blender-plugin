@@ -39,7 +39,7 @@ from __future__ import annotations
 import bpy
 from mathutils import Matrix, Vector
 
-from . import blender_compat
+from . import _bake_common, blender_compat
 
 
 # ---------------------------------------------------------------------------
@@ -74,128 +74,72 @@ LEG_NAMES = {
 
 
 # ---------------------------------------------------------------------------
-# Geometry helpers — copied from ``lib/maths_geo.py`` (only the bits we use).
+# Shared helpers — bake loop, action/fcurve plumbing, select-without-3D-view,
+# and pole-vector geometry live in ``_bake_common`` so the Rigify baker can
+# reuse them. Re-export with the old underscore-prefixed names so existing
+# call sites in this module (and in ``gltf_to_blender``) keep working.
 # ---------------------------------------------------------------------------
 
-def _project_point_onto_plane(q: Vector, p: Vector, n: Vector) -> Vector:
-    n = n.normalized()
-    return q - ((q - p).dot(n)) * n
+_project_point_onto_plane = _bake_common.project_point_onto_plane
+_get_ik_pole_pos          = _bake_common.get_ik_pole_pos
+_has_slotted_actions      = _bake_common.has_slotted_actions
+_ensure_action_slot       = _bake_common.ensure_action_slot
+_action_fcurves           = _bake_common.action_fcurves
+_ensure_fcurve            = _bake_common.ensure_fcurve
 
 
-def _get_ik_pole_pos(b1, b2, axis: Vector) -> Vector:
-    """``method=2`` from ``lib/maths_geo.py:get_ik_pole_pos`` — pole sits
-    along ``axis`` (z-axis midpoint for legs, x-axis of forearm for arms),
-    distance equal to the lower bone's length. The addon uses this same
-    method for the per-frame bake; it gives a stable pole that matches the
-    Mixamo control-rig conventions.
+# ---------------------------------------------------------------------------
+# Mixamo-specific matrix override: handles Ctrl_*Pole_* bones whose pose
+# matrix is the geometric pole position derived from the source IK chain,
+# plus the CHILD_OF compensation those poles need to round-trip at playback.
+# ---------------------------------------------------------------------------
+
+def _make_pole_matrix_override(armature, ik_data: dict):
+    """Return a matrix_override callback for ``_bake_common.bake_control_bones``
+    that substitutes geometric pole positions for Ctrl_*Pole_* bones and
+    pre-inverts the CHILD_OF parent so the constraint round-trips at playback.
     """
-    return b2.head + (axis.normalized() * (b2.tail - b2.head).magnitude)
+    src_arm = ik_data.get("src_arm")
 
-
-# ---------------------------------------------------------------------------
-# Slotted-action compatibility (Blender 4.4+ / 5.0).
-# ---------------------------------------------------------------------------
-
-def _has_slotted_actions() -> bool:
-    return bpy.app.version >= (4, 4, 0)
-
-
-def _ensure_action_slot(anim_data, action, datablock) -> None:
-    """Make sure ``anim_data`` has a slot bound for ``datablock``.
-
-    In Blender 4.4+, an action without an assigned slot doesn't drive
-    anything — the fcurves resolve to nothing. ``anim_data.action = X``
-    used to do this implicitly; on 4.4+ you need to either pick from
-    ``action_suitable_slots`` or call ``fcurve_ensure_for_datablock`` to
-    create one.
-    """
-    if not _has_slotted_actions():
-        return
-    if not hasattr(anim_data, "action_slot"):
-        return
-    try:
-        if anim_data.action_slot is not None:
-            return
-        suitable = getattr(anim_data, "action_suitable_slots", None)
-        if suitable and len(suitable) > 0:
-            anim_data.action_slot = suitable[0]
-            return
-        if datablock is not None and hasattr(action, "fcurve_ensure_for_datablock"):
-            data_path = "location"
-            if (hasattr(datablock, "pose")
-                    and hasattr(datablock.pose, "bones")
-                    and len(datablock.pose.bones) > 0):
-                data_path = (
-                    f'pose.bones["{datablock.pose.bones[0].name}"].rotation_euler'
-                )
-            action.fcurve_ensure_for_datablock(datablock, data_path, index=0)
-    except Exception:
-        pass
-
-
-def _action_fcurves(action, datablock):
-    """Return the fcurve collection for ``action``, traversing the layered
-    action API on Blender 5.0+ where ``action.fcurves`` was removed.
-    """
-    if action is None:
-        return None
-    if bpy.app.version >= (5, 0, 0):
-        if not hasattr(action, "layers") or len(action.layers) == 0:
-            # Action has no layers yet — touch one fcurve to create them.
-            if datablock is not None and hasattr(action, "fcurve_ensure_for_datablock"):
-                try:
-                    bone_name = datablock.pose.bones[0].name
-                    action.fcurve_ensure_for_datablock(
-                        datablock, f'pose.bones["{bone_name}"].rotation_euler', index=0
-                    )
-                except Exception:
-                    return None
-        layer = action.layers[0]
-        if not hasattr(layer, "strips") or len(layer.strips) == 0:
+    def override(pb, _current_matrix):
+        if not (pb.name.startswith("Ctrl_ArmPole") or pb.name.startswith("Ctrl_LegPole")):
             return None
-        strip = layer.strips[0]
-        if not hasattr(strip, "channelbag"):
+        if src_arm is None:
             return None
-        slot = action.slots[0] if (hasattr(action, "slots") and len(action.slots) > 0) else None
-        if slot is None:
+
+        kind = "Leg" if "Leg" in pb.name else ("Arm" if "Arm" in pb.name else "")
+        side = pb.name.split("_")[-1]
+        if not kind or kind + side not in ik_data:
             return None
+
+        b1_name, b2_name = ik_data[kind + side]
+        b1 = src_arm.pose.bones.get(b1_name)
+        b2 = src_arm.pose.bones.get(b2_name)
+        if b1 is None or b2 is None:
+            return None
+
+        if kind == "Leg":
+            axis = (b1.z_axis * 0.5) + (b2.z_axis * 0.5)
+        else:
+            axis = b2.x_axis if side == "Left" else -b2.x_axis
+
         try:
-            cbag = strip.channelbag(slot)
-            if cbag is not None and hasattr(cbag, "fcurves"):
-                return cbag.fcurves
-        except Exception:
+            bmat = Matrix.Translation(_get_ik_pole_pos(b1, b2, axis))
+        except AttributeError:
             return None
-        return None
-    return getattr(action, "fcurves", None)
 
+        # CHILD_OF compensation — the pole control inherits from an IK chain
+        # bone via Child Of. The constraint re-applies at playback, so we
+        # pre-divide it out of the matrix we store.
+        co = pb.constraints.get("Child Of")
+        if co and co.subtarget and co.influence == 1.0 and not co.mute:
+            sb = armature.pose.bones.get(co.subtarget)
+            if sb is not None:
+                bmat = sb.matrix_channel.inverted() @ bmat
+        return bmat
 
-def _ensure_fcurve(action, datablock, data_path: str, index: int):
-    """Find or create the fcurve for ``data_path``/``index`` on ``action``."""
-    if hasattr(action, "fcurve_ensure_for_datablock"):
-        try:
-            return action.fcurve_ensure_for_datablock(datablock, data_path, index=index)
-        except Exception:
-            pass
-    fcurves = _action_fcurves(action, datablock)
-    if fcurves is None:
-        return None
-    for fc in fcurves:
-        if fc.data_path == data_path and fc.array_index == index:
-            return fc
-    if hasattr(fcurves, "new"):
-        try:
-            return fcurves.new(data_path, index=index)
-        except Exception:
-            return None
-    return None
+    return override
 
-
-# ---------------------------------------------------------------------------
-# Bake — port of ``lib/animation.py:bake_anim`` with two changes:
-#   * ``action`` is supplied by the caller instead of being created inline.
-#   * ``armature`` is supplied explicitly instead of read from the active
-#     object.
-# ---------------------------------------------------------------------------
 
 def _bake_control_bones(
     armature,
@@ -206,189 +150,18 @@ def _bake_control_bones(
     only_selected: bool,
     ik_data: dict,
 ) -> int:
-    """Sample each (selected) pose bone's local matrix at every integer
-    frame in ``[frame_start, frame_end]`` and write rotation/location/
-    scale fcurves for it into ``action``. Returns the number of bones
-    that contributed at least one keyframe.
-
-    For ``Ctrl_*Pole_*`` bones the pose-space matrix is replaced with a
-    geometric pole position derived from the IK chain bones in
-    ``ik_data``. Then ``CHILD_OF`` on the pole control is compensated
-    (the bake writes pre-CHILD_OF local space; the constraint is then a
-    no-op at playback).
-
-    Existing keyframes on the action at the same frames get overwritten
-    by this fcurve-foreach_set path; existing keyframes at *other*
-    frames are preserved (they're on different fcurves, in the case of
-    the deform bones we read from, or different frames on the same
-    fcurve if the user had pose keys on a control bone elsewhere).
+    """Bake selected control bones of ``armature`` into ``action`` over the
+    given frame range. Wraps the shared bake loop with a Mixamo-specific
+    pole-vector override (geometric pole pos + CHILD_OF compensation).
     """
-    scn = bpy.context.scene
-    bones_data: list[tuple[int, dict[str, Matrix]]] = []
-
-    def _is_selected(pb) -> bool:
-        return blender_compat.pose_bone_is_selected(pb)
-
-    def _get_bones_matrix() -> dict[str, Matrix]:
-        m: dict[str, Matrix] = {}
-        for pb in armature.pose.bones:
-            if only_selected and not _is_selected(pb):
-                continue
-
-            bmat = pb.matrix
-
-            if pb.name.startswith("Ctrl_ArmPole") or pb.name.startswith("Ctrl_LegPole"):
-                # IK pole: replace pose with geometric pole derived from
-                # source armature's IK chain.
-                src_arm = ik_data.get("src_arm")
-                if src_arm is None:
-                    continue
-
-                kind = "Leg" if "Leg" in pb.name else ("Arm" if "Arm" in pb.name else "")
-                side = pb.name.split("_")[-1]
-                if not kind or kind + side not in ik_data:
-                    continue
-
-                b1_name, b2_name = ik_data[kind + side]
-                b1 = src_arm.pose.bones.get(b1_name)
-                b2 = src_arm.pose.bones.get(b2_name)
-                if b1 is None or b2 is None:
-                    continue
-
-                if kind == "Leg":
-                    axis = (b1.z_axis * 0.5) + (b2.z_axis * 0.5)
-                else:  # Arm
-                    axis = b2.x_axis if side == "Left" else -b2.x_axis
-
-                try:
-                    bmat = Matrix.Translation(_get_ik_pole_pos(b1, b2, axis))
-                except AttributeError:
-                    continue
-
-                # CHILD_OF compensation — the pole control inherits from
-                # an IK chain bone via Child Of. The constraint will be
-                # re-applied at playback, so we have to pre-divide it
-                # out of the matrix we store.
-                co = pb.constraints.get("Child Of")
-                if co and co.subtarget and co.influence == 1.0 and not co.mute:
-                    sb = armature.pose.bones.get(co.subtarget)
-                    if sb is not None:
-                        bmat = sb.matrix_channel.inverted() @ bmat
-
-            m[pb.name] = armature.convert_space(
-                pose_bone=pb, matrix=bmat, from_space="POSE", to_space="LOCAL"
-            )
-        return m
-
-    saved_frame = scn.frame_current
-    for f in range(int(frame_start), int(frame_end) + 1):
-        scn.frame_set(f)
-        bpy.context.view_layer.update()
-        bones_data.append((f, _get_bones_matrix()))
-
-    # Make sure the action is bound to a slot before we add fcurves.
-    if armature.animation_data is None:
-        armature.animation_data_create()
-    if armature.animation_data.action is not action:
-        armature.animation_data.action = action
-    _ensure_action_slot(armature.animation_data, action, armature)
-
-    baked = 0
-
-    LINEAR = (
-        bpy.types.Keyframe.bl_rna.properties["interpolation"]
-        .enum_items["LINEAR"].value
+    return _bake_common.bake_control_bones(
+        armature,
+        action=action,
+        frame_start=frame_start,
+        frame_end=frame_end,
+        only_selected=only_selected,
+        matrix_override=_make_pole_matrix_override(armature, ik_data),
     )
-
-    for pb in armature.pose.bones:
-        if only_selected and not _is_selected(pb):
-            continue
-
-        keyframes: dict[tuple[str, int], list[float]] = {}
-
-        def store(prop: str, idx: int, frame: int, val: float) -> None:
-            key = (f'pose.bones["{pb.name}"].{prop}', idx)
-            keyframes.setdefault(key, []).extend((frame, val))
-
-        rot_mode = pb.rotation_mode
-        euler_prev = None
-        quat_prev = None
-
-        for f, mats in bones_data:
-            if pb.name not in mats:
-                continue
-            pb.matrix_basis = mats[pb.name].copy()
-
-            for i, v in enumerate(pb.location):
-                store("location", i, f, v)
-
-            if rot_mode == "QUATERNION":
-                if quat_prev is not None:
-                    q = pb.rotation_quaternion.copy()
-                    q.make_compatible(quat_prev)
-                    pb.rotation_quaternion = q
-                    quat_prev = q
-                else:
-                    quat_prev = pb.rotation_quaternion.copy()
-                for i, v in enumerate(pb.rotation_quaternion):
-                    store("rotation_quaternion", i, f, v)
-            elif rot_mode == "AXIS_ANGLE":
-                for i, v in enumerate(pb.rotation_axis_angle):
-                    store("rotation_axis_angle", i, f, v)
-            else:  # XYZ Euler etc.
-                if euler_prev is not None:
-                    e = pb.rotation_euler.copy()
-                    e.make_compatible(euler_prev)
-                    pb.rotation_euler = e
-                    euler_prev = e
-                else:
-                    euler_prev = pb.rotation_euler.copy()
-                for i, v in enumerate(pb.rotation_euler):
-                    store("rotation_euler", i, f, v)
-
-            for i, v in enumerate(pb.scale):
-                store("scale", i, f, v)
-
-        if not keyframes:
-            continue
-        baked += 1
-
-        for (data_path, index), pairs in keyframes.items():
-            fc = _ensure_fcurve(action, armature, data_path, index)
-            if fc is None:
-                continue
-            n = len(pairs) // 2
-            # Preserve any existing keys on this fcurve at frames OUTSIDE
-            # the bake range; remove keys INSIDE the range so foreach_set
-            # below replaces them cleanly. (Without this, frames we bake
-            # would coexist with stale keys at the same frame number,
-            # producing flicker.)
-            try:
-                bake_frames = set(int(pairs[i]) for i in range(0, len(pairs), 2))
-                kp = fc.keyframe_points
-                for i in range(len(kp) - 1, -1, -1):
-                    if int(kp[i].co[0]) in bake_frames:
-                        kp.remove(kp[i], fast=True)
-            except Exception:
-                pass
-            fc.keyframe_points.add(n)
-            # add() appends — write the new keys onto the tail.
-            existing = len(fc.keyframe_points) - n
-            for i in range(n):
-                fc.keyframe_points[existing + i].co = (pairs[i * 2], pairs[i * 2 + 1])
-                fc.keyframe_points[existing + i].interpolation = "LINEAR"
-            try:
-                fc.update()
-            except Exception:
-                pass
-            try:
-                grp = action.groups.get(pb.name) or action.groups.new(pb.name)
-                fc.group = grp
-            except Exception:
-                pass
-
-    scn.frame_set(saved_frame)
-    return baked
 
 
 # ---------------------------------------------------------------------------
@@ -480,21 +253,7 @@ def _build_bones_map(
     return m
 
 
-def _select_only(obj) -> None:
-    """Make ``obj`` the only selected + active object.
-
-    Uses direct API rather than ``bpy.ops.object.select_all(...)`` so the
-    call works from contexts without a 3D-View area (modal timers,
-    background threads). ``mode_set`` etc. don't need an area; the
-    select operator does.
-    """
-    for o in bpy.context.view_layer.objects:
-        try:
-            o.select_set(False)
-        except Exception:
-            pass
-    obj.select_set(True)
-    bpy.context.view_layer.objects.active = obj
+_select_only = _bake_common.select_only
 
 
 # ---------------------------------------------------------------------------

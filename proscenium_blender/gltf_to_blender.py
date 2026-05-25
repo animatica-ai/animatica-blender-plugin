@@ -25,7 +25,7 @@ from typing import Any, Collection
 import bpy
 from mathutils import Matrix, Quaternion, Vector
 
-from . import coords
+from . import coords, request_builder
 
 
 # MMCP world (right-handed Y-up) → Blender world (right-handed Z-up) as a 3×3
@@ -37,6 +37,35 @@ _MMCP_TO_BLENDER = Matrix((
     (0.0, 0.0, -1.0),
     (0.0, 1.0,  0.0),
 ))
+
+
+_IDENTITY_3X3 = Matrix.Identity(3)
+
+
+def _t_pose_q_matrix(armature_obj: bpy.types.Object, bone_name: str | None) -> Matrix:
+    """Q[bone]: rotation taking the **request-layout** rest direction of
+    ``bone_name`` to its **actual armature** rest direction.
+
+    For arm-chain bones (``upper_arm``/``forearm``/``hand``)
+    :func:`request_builder.armature_to_skeleton` rewrites ``rest_translation``
+    to be horizontal (T-pose); the actual armature still has the rig's
+    A-pose direction baked into ``matrix_local``. ``Q[i]`` is the rotation
+    that bridges the two so the bake formula (which uses ``matrix_local``)
+    interprets the server's rotations correctly. See the ``RestPoseAugmentor``
+    reference at ``proscenium/retarget/augment.py`` — same math.
+
+    For any bone whose request layout matches the actual rig (everything
+    outside the arm chain), returns identity.
+    """
+    if not bone_name or not request_builder.is_t_pose_arm_bone(bone_name):
+        return _IDENTITY_3X3
+    pb = armature_obj.pose.bones.get(bone_name)
+    if pb is None:
+        return _IDENTITY_3X3
+    sign  = -1.0 if (".R" in bone_name) else 1.0
+    t_dir = Vector((sign, 0.0, 0.0))                       # request rest dir
+    a_dir = Vector(pb.bone.matrix_local.to_3x3().col[1])   # actual rest dir
+    return t_dir.rotation_difference(a_dir).to_matrix()
 
 
 # ---------------------------------------------------------------------------
@@ -179,12 +208,30 @@ def bake_gltf_to_armature(
         ML     = bone.bone.matrix_local.to_3x3()
         ML_inv = ML.transposed()   # ML is orthogonal → inverse = transpose
 
+        # Rest-pose change correction (T-pose ↔ A-pose) — mirrors the
+        # augmentor formula at ``proscenium/retarget/augment.py``
+        # (``RestPoseAugmentor.create_new_rotations``):
+        #
+        #     new_rot[child] = Q[parent] · old_rot[child] · Q[child].T
+        #
+        # where ``Q[i]`` is the rotation that maps the bone's rest direction
+        # in the request layout (T-pose horizontal for arm bones) to the
+        # bone's rest direction on the actual armature (A-pose, encoded in
+        # ``matrix_local``). For bones whose rest layout matches the actual
+        # armature (the vast majority), ``Q[i] = identity`` and the
+        # correction is a no-op.
+        Q_bone   = _t_pose_q_matrix(armature_obj, joint_name)
+        parent_name = bone.parent.name if bone.parent else None
+        Q_parent = _t_pose_q_matrix(armature_obj, parent_name) if parent_name else _IDENTITY_3X3
+        Q_bone_T = Q_bone.transposed()
+
         for ts, q_mmcp in zip(timestamps, quats):
             qx, qy, qz, qw = q_mmcp
             R_mmcp          = Quaternion((qw, qx, qy, qz)).to_matrix()
             R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
             R_blender_arm   = mw_rot_t @ R_blender_world @ mw_rot
-            R_bone          = ML_inv @ R_blender_arm @ ML
+            R_corrected     = Q_parent @ R_blender_arm @ Q_bone_T
+            R_bone          = ML_inv @ R_corrected @ ML
             bone.rotation_quaternion = R_bone.to_quaternion()
             bone.keyframe_insert(
                 data_path="rotation_quaternion",
@@ -968,6 +1015,115 @@ def _desired_pose_matrix(armature_obj, ctrl_pb, spec) -> Matrix:
 _TEMP_TAG = "_proscenium_bake_"
 
 
+def _detect_control_rig_kind(armature_obj: bpy.types.Object) -> str | None:
+    """Return ``"mixamo"`` or ``"rigify"`` based on markers on the armature
+    data, or ``None`` if the rig isn't a recognized control rig."""
+    keys = armature_obj.data.keys()
+    if "mr_control_rig" in keys:
+        return "mixamo"
+    if "rig_id" in keys:
+        return "rigify"
+    return None
+
+
+def _find_associated_metarig(rig_obj: bpy.types.Object) -> bpy.types.Object | None:
+    """Find the metarig that ``rig_obj`` was generated from, if it still
+    exists in the scene. Rigify stamps ``metarig.data.rigify_target_rig``
+    with the generated rig's object when ``rigify_generate`` runs."""
+    for obj in bpy.data.objects:
+        if obj.type != 'ARMATURE' or obj is rig_obj:
+            continue
+        if getattr(obj.data, 'rigify_target_rig', None) is rig_obj:
+            return obj
+    return None
+
+
+def _bake_via_metarig_detour(
+    metarig_obj: bpy.types.Object,
+    rig_obj: bpy.types.Object,
+    *,
+    source_action: bpy.types.Action,
+    frame_start: int,
+    frame_end: int,
+) -> None:
+    """Bake using the metarig as the source instead of a rig duplicate.
+
+    The server returned animation keyed on ``DEF-*`` joints. The metarig
+    has the corresponding bare names (``DEF-spine`` ↔ ``spine``). Copy
+    fcurves over with the rename, run the standard helper-bone retarget
+    from metarig → rig, then restore the metarig's previous action.
+
+    Why bother: the metarig's chain is linear, so source pose endpoints
+    match what the server intended exactly. The rig-duplicate path has
+    to live with Rigify's bendy ``.001`` intermediaries, which introduce
+    a small per-segment offset (≈9 cm at the hand for a human rig) the
+    helper bake cannot cancel out.
+    """
+    from . import _bake_common, rigify_bake
+
+    bone_names = {pb.name for pb in metarig_obj.pose.bones}
+
+    # Save + clear the metarig's existing action so we don't compose with it.
+    saved_meta_action = None
+    if metarig_obj.animation_data and metarig_obj.animation_data.action:
+        saved_meta_action = metarig_obj.animation_data.action
+        metarig_obj.animation_data.action = None
+    if metarig_obj.animation_data is None:
+        metarig_obj.animation_data_create()
+
+    # Stash the server keys on a fresh metarig action, renaming DEF- → bare.
+    meta_action = bpy.data.actions.new(f"{source_action.name} (metarig staging)")
+    metarig_obj.animation_data.action = meta_action
+    _bake_common.ensure_action_slot(metarig_obj.animation_data, meta_action, metarig_obj)
+
+    copied = 0
+    src_fcurves = _bake_common.action_fcurves(source_action, rig_obj)
+    if src_fcurves is not None:
+        for fc in src_fcurves:
+            dp = fc.data_path
+            if not dp.startswith('pose.bones["'):
+                continue
+            bone = dp.split('"')[1]
+            if not bone.startswith("DEF-"):
+                continue
+            bare = bone[4:]
+            if bare not in bone_names:
+                continue
+            new_dp = dp.replace(f'pose.bones["{bone}"]', f'pose.bones["{bare}"]')
+            new_fc = _bake_common.ensure_fcurve(meta_action, metarig_obj, new_dp, fc.array_index)
+            if new_fc is None:
+                continue
+            new_fc.keyframe_points.add(len(fc.keyframe_points))
+            for i, kp in enumerate(fc.keyframe_points):
+                new_fc.keyframe_points[i].co = kp.co
+                new_fc.keyframe_points[i].interpolation = kp.interpolation
+            new_fc.update()
+            copied += 1
+
+    print(f"[proscenium] metarig detour: copied {copied} DEF-* fcurves to bare-name targets")
+
+    try:
+        baked = rigify_bake.apply_anim_to_rigify(
+            metarig_obj, rig_obj,
+            action=source_action,
+            frame_start=int(frame_start),
+            frame_end=int(frame_end),
+        )
+        print(f"[proscenium] baked rigify control bones (via metarig): {baked}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[proscenium] metarig-detour bake failed: {exc}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # Restore the metarig to whatever it was animating before.
+        if metarig_obj.animation_data:
+            metarig_obj.animation_data.action = saved_meta_action
+        try:
+            bpy.data.actions.remove(meta_action)
+        except Exception:
+            pass
+
+
 def _bake_to_control_rig(
     armature_obj: bpy.types.Object,
     *,
@@ -975,7 +1131,7 @@ def _bake_to_control_rig(
     frame_start: int,
     frame_end: int,
 ) -> None:
-    """Bake deform-bone keyframes onto the Mixamo control rig.
+    """Bake deform-bone keyframes onto a control rig's control bones.
 
     The deform fcurves are already on ``source_action`` (we wrote them
     earlier in ``bake_gltf_to_armature``). On a control rig those keys
@@ -985,17 +1141,34 @@ def _bake_to_control_rig(
     range, evaluate where the deform bones want to be and project that
     back onto the control rig.
 
-    Implementation: build a clean deform-only source armature out of a
-    duplicate of ``armature_obj``, then run our ported version of the
-    Mixamo addon's retarget-and-bake (``mixamo_bake``). The port writes
-    into the supplied ``source_action`` instead of creating a new one,
-    which the addon's ``mr.import_anim_to_rig`` operator does not allow.
+    Implementation: duplicate ``armature_obj`` into a source, mute the
+    deform-bone constraints on the source so the deform bones evaluate
+    from their own keyframes, then dispatch to a rig-specific baker that
+    sets up retarget constraints on the target rig's controls and bakes.
+
+    **Rigify fast path** — if the rig has an associated metarig (the one
+    ``bpy.ops.pose.rigify_generate`` produced it from, discoverable via
+    ``metarig.data.rigify_target_rig``), use the metarig as the bake
+    source instead of duplicating the rig. The metarig's chain is
+    linear (no ``DEF-*.001`` bendy intermediates), so the helper-driven
+    retarget reproduces source poses exactly. The rig-duplicate fallback
+    is for rigs whose metarig has been deleted or wasn't linked.
     """
-    if "mr_control_rig" not in armature_obj.data.keys():
-        print("[proscenium] target armature is not flagged as a Mixamo control rig")
+    kind = _detect_control_rig_kind(armature_obj)
+    if kind is None:
+        print("[proscenium] target armature is not a recognized control rig "
+              "(no mr_control_rig or rig_id marker) — leaving DEF-bone keys")
         return
 
-    from . import mixamo_bake
+    if kind == "rigify":
+        metarig = _find_associated_metarig(armature_obj)
+        if metarig is not None:
+            _bake_via_metarig_detour(
+                metarig, armature_obj,
+                source_action=source_action,
+                frame_start=frame_start, frame_end=frame_end,
+            )
+            return
 
     saved_active = bpy.context.view_layer.objects.active
     saved_mode = armature_obj.mode
@@ -1030,38 +1203,78 @@ def _bake_to_control_rig(
         src_arm.name = f"{armature_obj.name}_proscenium_src"
         src_arm["proscenium_temp_source"] = True
 
-        # 2. Strip the duplicate down to deform-only. Required so the
-        # bake's IK-pole branch (which keys off Ctrl_*Pole_* names) only
-        # fires on the *target* rig where ``ik_data`` is populated.
+        # 2. Strip non-DEF bones from the source.
+        #
+        # Both rig kinds: this removes control / MCH / ORG / tweak / widget
+        # bones from the duplicate, leaving only the deform skeleton driven
+        # by the per-frame keyframes the server returned.
+        #
+        # Rigify-specific extra: re-parent DEFs to the deform parent map the
+        # *request* used (``_build_deform_parent_map`` in request_builder).
+        # Rigify's DEFs natively parent through ``ORG-*`` intermediaries — at
+        # rest the chain still looks right, but with ORG-* deleted DEFs
+        # become orphans, and their keyframed rotations end up interpreted
+        # relative to the wrong parent (or the world). The server computed
+        # those rotations against the parent-walked / spatial-fallback
+        # deform tree, so we make the source duplicate match that exact tree.
         bpy.ops.object.mode_set(mode='EDIT')
         try:
             ebones = src_arm.data.edit_bones
+
+            if kind == "rigify":
+                deform_names = {
+                    eb.name for eb in ebones
+                    if src_arm.data.bones[eb.name].use_deform
+                }
+                from . import request_builder
+                parent_map = request_builder._build_deform_parent_map(
+                    src_arm, deform_names
+                )
+                # Re-parent first (still need parents alive), then delete non-DEFs.
+                for eb in ebones:
+                    if eb.name not in deform_names:
+                        continue
+                    new_parent_name = parent_map.get(eb.name)
+                    new_parent = ebones.get(new_parent_name) if new_parent_name else None
+                    eb.parent = new_parent
+                    eb.use_connect = False  # avoid auto-snap; rest positions are already correct
+
             to_delete = [eb for eb in ebones if not src_arm.data.bones[eb.name].use_deform]
             for eb in to_delete:
                 ebones.remove(eb)
         finally:
             bpy.ops.object.mode_set(mode='OBJECT')
 
-        # 3. Mute Copy*/IK on the remaining (deform) bones so the source
-        # evaluates from its own keyframes, not from the control bones
-        # we just deleted.
+        # 3. Mute constraints on the deform bones so they evaluate from
+        # their own keyframes, not from the constraint stack.
+        #
+        # For Mixamo, only ``COPY_*``/``IK``-type constraints matter — the
+        # stripped deform skeleton doesn't carry STRETCH_TO/etc — so we
+        # gate on ``_BONE_FOLLOWING_CONSTRAINTS``.
+        #
+        # For Rigify, DEF bones typically have both ``COPY_TRANSFORMS``
+        # (chain rotation) *and* ``STRETCH_TO`` (chain stretch) pointing
+        # at tweak bones. STRETCH_TO is also rotational — it re-aligns
+        # the bone to point at the target — so leaving it active forces
+        # DEF-thigh.L (etc) back to its rest orientation regardless of
+        # the keyframed matrix_basis. Mute *every* constraint on DEF
+        # bones to avoid having to enumerate constraint types.
         for pb in src_arm.pose.bones:
             for c in pb.constraints:
-                if c.type in _BONE_FOLLOWING_CONSTRAINTS:
+                if kind == "rigify" or c.type in _BONE_FOLLOWING_CONSTRAINTS:
                     c.mute = True
 
         # 3b. Strip the source action's fcurves for any bone that no
-        # longer exists on src_arm. Without this, when ``apply_anim_to_control_rig``
-        # later re-creates helper bones with names like ``Ctrl_Foot_IK_Left``,
-        # the leftover Ctrl_* fcurves drive matrix_basis on those new
-        # helpers — corrupting the COPY_LOCATION read that the bake
-        # depends on. (The original Mixamo addon doesn't hit this
-        # because its source is a freshly imported FBX with no Ctrl_*
-        # fcurves in its action.)
+        # longer exists on src_arm. Without this, when the bake re-creates
+        # helper bones (Mixamo) or evaluates the muted constraint stack
+        # (Rigify), leftover Ctrl_*/MCH-*/ORG-* fcurves drive matrix_basis
+        # on whatever bones still answer to those names, corrupting the
+        # source's pose. Both rigs strip non-DEF bones now, so both need
+        # the cleanup.
         if src_arm.animation_data and src_arm.animation_data.action:
             existing_bones = {pb.name for pb in src_arm.pose.bones}
-            from . import mixamo_bake as _mb
-            fcurves = _mb._action_fcurves(src_arm.animation_data.action, src_arm)
+            from . import _bake_common
+            fcurves = _bake_common.action_fcurves(src_arm.animation_data.action, src_arm)
             if fcurves is not None:
                 to_remove = []
                 for fc in fcurves:
@@ -1077,18 +1290,29 @@ def _bake_to_control_rig(
                     except Exception:
                         pass
 
-        # 4. Hand off to our bake. It adds helper bones + retarget
+        # 4. Dispatch to the rig-specific baker. Each takes the prepared
+        # source rig + the target control rig, adds its own retarget
         # constraints internally, runs the per-frame bake into
-        # ``source_action``, and tears down the retarget rig before
-        # returning.
-        baked = mixamo_bake.apply_anim_to_control_rig(
-            src_arm,
-            armature_obj,
-            action=source_action,
-            frame_start=int(frame_start),
-            frame_end=int(frame_end),
-        )
-        print(f"[proscenium] baked control bones: {baked}")
+        # ``source_action``, and tears down before returning.
+        if kind == "mixamo":
+            from . import mixamo_bake
+            baked = mixamo_bake.apply_anim_to_control_rig(
+                src_arm,
+                armature_obj,
+                action=source_action,
+                frame_start=int(frame_start),
+                frame_end=int(frame_end),
+            )
+        else:  # rigify
+            from . import rigify_bake
+            baked = rigify_bake.apply_anim_to_rigify(
+                src_arm,
+                armature_obj,
+                action=source_action,
+                frame_start=int(frame_start),
+                frame_end=int(frame_end),
+            )
+        print(f"[proscenium] baked {kind} control bones: {baked}")
     except Exception as exc:  # noqa: BLE001 — best-effort delegate
         print(f"[proscenium] control-rig bake failed: {exc}")
         import traceback
