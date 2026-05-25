@@ -479,6 +479,35 @@ def _is_tweak_half(name: str) -> bool:
     return parts[0].lower() in _TWEAK_HALF_SEGMENTS
 
 
+def emitted_deform_bones(armature_obj: bpy.types.Object) -> set[str]:
+    """Return the subset of deform bones that :func:`armature_to_skeleton`
+    actually serializes — i.e. ``detect_deform_bones`` minus the face
+    sub-tree and minus the Rigify bendy ``.001`` tweak halves.
+
+    The pose-keyframe sampler and any other code that needs to know
+    "which bones does the server see in this request" should call this
+    so it stays in sync with what we emit.
+    """
+    deform = detect_deform_bones(armature_obj)
+    if not deform:
+        return deform
+
+    face_drop = {n for n in deform if _is_face_bone(n)}
+    if face_drop:
+        all_pbs = {pb.name: pb for pb in armature_obj.pose.bones}
+        for n in list(face_drop):
+            stack = [all_pbs[n]] if n in all_pbs else []
+            while stack:
+                pb = stack.pop()
+                for child in pb.children:
+                    if child.bone.use_deform and child.name not in face_drop:
+                        face_drop.add(child.name)
+                    stack.append(child)
+    deform = deform - face_drop
+    deform = deform - {n for n in deform if _is_tweak_half(n)}
+    return deform
+
+
 # Arm-chain bones we rewrite to T-pose layout in the outgoing skeleton.
 # Rigify's default human metarig has the upper arm at ~28° below
 # horizontal — an A-pose that the bone classifier was not trained on and
@@ -658,37 +687,12 @@ def armature_to_skeleton(armature_obj: bpy.types.Object) -> dict[str, Any]:
         pb.name: mw @ pb.bone.head_local for pb in pose_bones
     }
 
-    deform = detect_deform_bones(armature_obj)
-
-    # Drop face / head-detail joints — they have no body-retarget equivalent
-    # and confuse the bone classifier's hand/foot/head slot picks. Tokens
-    # caught by :func:`_is_face_bone`; also sweep any descendants of a bone
-    # whose head token IS face (e.g. ``temple.L`` parented under ``face``)
-    # so the whole subtree disappears.
-    face_drop: set[str] = {n for n in deform if _is_face_bone(n)}
-    # Walk descendants of face-bone roots and add them too.
-    if face_drop:
-        all_pbs = {pb.name: pb for pb in armature_obj.pose.bones}
-        for n in list(face_drop):
-            stack = [all_pbs[n]] if n in all_pbs else []
-            while stack:
-                pb = stack.pop()
-                for child in pb.children:
-                    if child.bone.use_deform and child.name not in face_drop:
-                        face_drop.add(child.name)
-                    stack.append(child)
-    if face_drop:
-        deform = deform - face_drop
-
-    # Drop Rigify bendy ``.001`` mid-segments on the four major limb
-    # segments — pure skinning helpers that don't exist on the metarig
-    # and don't correspond to canonical SOMA joints. Children of a tweak
-    # half are real joints (the next segment), so we DON'T walk
-    # descendants here — only the tweak bone itself is removed and the
-    # deform parent map will re-wire its children up to the parent.
-    tweak_drop: set[str] = {n for n in deform if _is_tweak_half(n)}
-    if tweak_drop:
-        deform = deform - tweak_drop
+    # Apply the request-side filters (face strip + Rigify bendy ``.001``
+    # tweak strip). :func:`emitted_deform_bones` is the single source of
+    # truth — :func:`sample_pose_keyframes` calls it too so the
+    # pose-keyframe constraints reference the same joint set the server
+    # sees in the skeleton.
+    deform = emitted_deform_bones(armature_obj)
 
     use_deform_filter = is_control_rig(armature_obj)
     parent_map = _build_deform_parent_map(armature_obj, deform) if use_deform_filter else None

@@ -719,7 +719,11 @@ def sample_pose_keyframes(
         None,
     )
 
-    deform_bones = request_builder.detect_deform_bones(armature_obj)
+    # Use the same filtered deform set as :func:`armature_to_skeleton` —
+    # face / tweak-half bones we strip out of the request must not appear
+    # in pose_keyframe ``joint_rotations`` either, or the server-side
+    # validator rejects the constraint as referencing unknown joints.
+    deform_bones = request_builder.emitted_deform_bones(armature_obj)
     is_control_rig = request_builder.is_control_rig(armature_obj)
 
     # pose_keyframes describe a BODY POSE. If no bone has rotation keyframes,
