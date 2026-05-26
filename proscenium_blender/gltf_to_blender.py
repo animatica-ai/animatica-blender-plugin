@@ -39,33 +39,6 @@ _MMCP_TO_BLENDER = Matrix((
 ))
 
 
-_IDENTITY_3X3 = Matrix.Identity(3)
-
-
-def _t_pose_q_matrix(armature_obj: bpy.types.Object, bone_name: str | None) -> Matrix:
-    """Q[bone]: rotation taking the **request-layout** rest direction of
-    ``bone_name`` to its **actual armature** rest direction.
-
-    For arm-chain bones (``upper_arm``/``forearm``/``hand``)
-    :func:`request_builder.armature_to_skeleton` rewrites ``rest_translation``
-    to be horizontal (T-pose); the actual armature still has the rig's
-    A-pose direction baked into ``matrix_local``. ``Q[i]`` is the rotation
-    that bridges the two so the bake formula (which uses ``matrix_local``)
-    interprets the server's rotations correctly. See the ``RestPoseAugmentor``
-    reference at ``proscenium/retarget/augment.py`` — same math.
-
-    For any bone whose request layout matches the actual rig (everything
-    outside the arm chain), returns identity.
-    """
-    if not bone_name or not request_builder.is_t_pose_arm_bone(bone_name):
-        return _IDENTITY_3X3
-    pb = armature_obj.pose.bones.get(bone_name)
-    if pb is None:
-        return _IDENTITY_3X3
-    sign  = -1.0 if (".R" in bone_name) else 1.0
-    t_dir = Vector((sign, 0.0, 0.0))                       # request rest dir
-    a_dir = Vector(pb.bone.matrix_local.to_3x3().col[1])   # actual rest dir
-    return t_dir.rotation_difference(a_dir).to_matrix()
 
 
 # ---------------------------------------------------------------------------
@@ -208,30 +181,12 @@ def bake_gltf_to_armature(
         ML     = bone.bone.matrix_local.to_3x3()
         ML_inv = ML.transposed()   # ML is orthogonal → inverse = transpose
 
-        # Rest-pose change correction (T-pose ↔ A-pose) — mirrors the
-        # augmentor formula at ``proscenium/retarget/augment.py``
-        # (``RestPoseAugmentor.create_new_rotations``):
-        #
-        #     new_rot[child] = Q[parent] · old_rot[child] · Q[child].T
-        #
-        # where ``Q[i]`` is the rotation that maps the bone's rest direction
-        # in the request layout (T-pose horizontal for arm bones) to the
-        # bone's rest direction on the actual armature (A-pose, encoded in
-        # ``matrix_local``). For bones whose rest layout matches the actual
-        # armature (the vast majority), ``Q[i] = identity`` and the
-        # correction is a no-op.
-        Q_bone   = _t_pose_q_matrix(armature_obj, joint_name)
-        parent_name = bone.parent.name if bone.parent else None
-        Q_parent = _t_pose_q_matrix(armature_obj, parent_name) if parent_name else _IDENTITY_3X3
-        Q_bone_T = Q_bone.transposed()
-
         for ts, q_mmcp in zip(timestamps, quats):
             qx, qy, qz, qw = q_mmcp
             R_mmcp          = Quaternion((qw, qx, qy, qz)).to_matrix()
             R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
             R_blender_arm   = mw_rot_t @ R_blender_world @ mw_rot
-            R_corrected     = Q_parent @ R_blender_arm @ Q_bone_T
-            R_bone          = ML_inv @ R_corrected @ ML
+            R_bone          = ML_inv @ R_blender_arm @ ML
             bone.rotation_quaternion = R_bone.to_quaternion()
             bone.keyframe_insert(
                 data_path="rotation_quaternion",
@@ -281,7 +236,6 @@ def bake_gltf_to_armature(
     # foot-roll cursor in detail. Our deform-bone keyframes act as the
     # source animation; the operator builds a temporary clean source rig
     # internally and bakes onto the control rig.
-    from . import request_builder
     if request_builder.is_control_rig(armature_obj):
         timestamps = next(iter(decoded_inputs.values())) if decoded_inputs else []
         frames = [_frame_from_time(t, gltf, start_frame) for t in timestamps]
@@ -1226,7 +1180,6 @@ def _bake_to_control_rig(
                     eb.name for eb in ebones
                     if src_arm.data.bones[eb.name].use_deform
                 }
-                from . import request_builder
                 parent_map = request_builder._build_deform_parent_map(
                     src_arm, deform_names
                 )
@@ -1690,8 +1643,6 @@ def resolve_pose_bake_joint_names(
     bone expands to the deform bone(s) that drive the channels the server
     returns (those constraints are discovered via ``_build_control_specs``).
     """
-    from . import request_builder
-
     out = set(selected_pose_bone_names)
     if not request_builder.is_control_rig(armature_obj):
         return out
@@ -1833,7 +1784,6 @@ def bake_single_pose(
         written += 1
 
     if written:
-        from . import request_builder
         if request_builder.is_control_rig(armature_obj):
             _bake_to_control_rig(
                 armature_obj,

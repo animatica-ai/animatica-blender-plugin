@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any, Iterable
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 from . import constraints_ui, coords
 
@@ -524,6 +524,42 @@ def is_t_pose_arm_bone(name: str) -> bool:
     return bare.split(".", 1)[0].lower() in _T_POSE_ARM_TOKENS
 
 
+_IDENTITY_3X3 = Matrix.Identity(3)
+
+
+def t_pose_q_matrix(armature_obj: bpy.types.Object, bone_name: str | None):
+    """``Q[bone]`` — rotation taking the **request-layout** rest direction
+    of ``bone_name`` (horizontal T-pose for arm-chain bones) to the
+    **actual armature** rest direction (the metarig's A-pose, baked into
+    ``matrix_local``).
+
+    Used on *both* sides of the wire:
+
+    * **Outbound** (``constraints_ui.sample_pose_keyframes``): convert the
+      user-keyed pose, sampled in A-pose-relative basis, into a
+      T-pose-relative rotation the server expects from the lied skeleton.
+      Formula: ``R_T = Q[parent].T · R_A · Q[child]``.
+    * **Inbound** (``gltf_to_blender.bake_gltf_to_armature``): convert the
+      server's T-pose-relative rotation back to A-pose-relative so it
+      lands correctly on the actual A-pose ``matrix_local``.
+      Formula: ``R_A = Q[parent] · R_T · Q[child].T``.
+
+    Mirrors the ``RestPoseAugmentor`` reference at
+    ``proscenium/retarget/augment.py`` — same per-bone change-of-rest math.
+    Returns identity for any bone whose request layout matches the actual
+    armature (everything outside the arm chain).
+    """
+    if not bone_name or not is_t_pose_arm_bone(bone_name):
+        return _IDENTITY_3X3
+    pb = armature_obj.pose.bones.get(bone_name)
+    if pb is None:
+        return _IDENTITY_3X3
+    sign  = -1.0 if (".R" in bone_name) else 1.0
+    t_dir = Vector((sign, 0.0, 0.0))                       # request rest dir
+    a_dir = Vector(pb.bone.matrix_local.to_3x3().col[1])   # actual rest dir
+    return t_dir.rotation_difference(a_dir).to_matrix()
+
+
 def is_control_rig(armature_obj: bpy.types.Object) -> bool:
     """``True`` when the armature's deform layer is driven from a separate
     control layer via constraints — what people mean by "control rig".
@@ -717,35 +753,11 @@ def armature_to_skeleton(armature_obj: bpy.types.Object) -> dict[str, Any]:
             parent_name = parent_map[pb.name]  # may be None for the root
         else:
             parent_name = pb.parent.name if pb.parent else None
-
-        # Force T-pose layout for the arm sub-chain in the *sent* skeleton.
-        # Rigify's metarig drapes arms ~28° below horizontal (A-pose), which
-        # the bone classifier was not trained on and which biases the
-        # reverse retarget. We rewrite ``forearm`` / ``hand`` parent-local
-        # offsets to be a pure horizontal extension of the parent's bone
-        # length so the server sees flat arms. The actual armature stays
-        # in its real A-pose (the bake reads from the live rig, not the
-        # request), so this only affects what the classifier + retarget
-        # see — the motion still lands on the real rig.
-        tposed = False
-        if parent_name is not None and is_t_pose_arm_bone(pb.name):
-            bare = pb.name[4:] if pb.name.startswith("DEF-") else pb.name
-            head_token = bare.split(".", 1)[0].lower()
-            if head_token in ("forearm", "hand"):
-                parent_pb = armature_obj.pose.bones.get(parent_name)
-                if parent_pb is not None:
-                    sign = -1.0 if (".R" in bare) else 1.0
-                    length = float(parent_pb.bone.length)
-                    mx, my, mz = sign * length, 0.0, 0.0
-                    tposed = True
-
-        if not tposed:
-            if parent_name is None:
-                local = head_world_by_name[pb.name]
-            else:
-                local = head_world_by_name[pb.name] - head_world_by_name[parent_name]
-            mx, my, mz = coords.blender_pos_to_mmcp(local)
-
+        if parent_name is None:
+            local = head_world_by_name[pb.name]
+        else:
+            local = head_world_by_name[pb.name] - head_world_by_name[parent_name]
+        mx, my, mz = coords.blender_pos_to_mmcp(local)
         joints.append({
             "name":             pb.name,
             "parent":           parent_name,

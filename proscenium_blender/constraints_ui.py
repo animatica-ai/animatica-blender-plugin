@@ -790,6 +790,7 @@ def sample_pose_keyframes(
     )
 
     constraints: list[dict[str, Any]] = []
+    sampled_pbs = [pb for pb in armature_obj.pose.bones if pb.name in sample_bone_names]
     try:
         for f in sorted(interesting_frames):
             scene.frame_set(f)
@@ -799,9 +800,7 @@ def sample_pose_keyframes(
             # the previous frame.
             bpy.context.view_layer.update()
             joint_rotations: dict[str, list[float]] = {}
-            for pb in armature_obj.pose.bones:
-                if pb.name not in sample_bone_names:
-                    continue
+            for pb in sampled_pbs:
                 R_basis = _evaluated_local_basis(pb).to_3x3()
                 ML      = pb.bone.matrix_local.to_3x3()
                 R_blender_arm = ML @ R_basis @ ML.transposed()
