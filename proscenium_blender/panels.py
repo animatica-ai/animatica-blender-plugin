@@ -129,10 +129,7 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
             arm_live = properties._live_armature(settings.target_armature)
             in_preview = (
                 arm_live is not None
-                and (
-                    bool(getattr(settings, "is_previewing", False))
-                    or bool(settings.source_action_name)
-                )
+                and bool(getattr(settings, "is_previewing", False))
             )
 
             col = layout.column(align=True)

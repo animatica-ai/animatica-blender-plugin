@@ -223,6 +223,8 @@ def merge_preview_keyframes_into_source(source_action, preview_action) -> int:
         if dest_fc is None:
             continue
         for src_kp in sorted(prev_fc.keyframe_points, key=lambda kp: kp.co.x):
+            if src_kp.type == 'GENERATED':
+                continue
             _copy_keyframe_point(src_kp, dest_fc)
             merged += 1
         dest_fc.update()

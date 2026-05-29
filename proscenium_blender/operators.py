@@ -48,6 +48,47 @@ def _live_target_armature_or_clear(settings):
     return None
 
 
+def _is_motion_bake_action(action) -> bool:
+    """True for Proscenium motion-bake actions (preview or committed)."""
+    return (
+        action is not None
+        and action.name.startswith(request_builder._GENERATED_ACTION_PREFIXES)
+    )
+
+
+def _stash_source_action_name(settings, arm) -> None:
+    """Remember the user's pre-generation action for Accept / Reject.
+
+    Never stash a motion-bake preview as the source — that makes Regenerate
+    treat generated output as the action to restore and can merge dense
+    samples back onto the wrong datablock.
+    """
+    if settings.source_action_name:
+        return
+    if arm.animation_data is None or arm.animation_data.action is None:
+        return
+    act = arm.animation_data.action
+    if _is_motion_bake_action(act):
+        return
+    settings.source_action_name = act.name
+
+
+def _build_regen_request_action(
+    src: bpy.types.Action,
+    preview: bpy.types.Action,
+) -> tuple[bpy.types.Action | None, list[bpy.types.Action]]:
+    """Scratch action merging ``preview`` edits into ``src`` for request build.
+
+    Does not mutate ``src`` or ``preview``. Caller removes the returned
+    temporaries (including the scratch) when done.
+    """
+    preview_work = preview.copy()
+    constraints_ui.strip_generated_keyframe_points(preview_work)
+    scratch = src.copy()
+    constraints_ui.merge_preview_keyframes_into_source(scratch, preview_work)
+    return scratch, [preview_work]
+
+
 MOTION_ACTION_PREFIX = "Proscenium_Motion"
 POSE_ACTION_NAME     = "Proscenium_Pose"
 
@@ -430,6 +471,9 @@ class PROSCENIUM_OT_generate(Operator):
     _result: dict | None = None
     _error: Exception | None = None
     _anchor_frames: set[int] | None = None
+    _regen_scratch_actions: list | None = None
+    _regen_src = None
+    _regen_preview = None
 
     def execute(self, context):
         settings = context.scene.proscenium
@@ -451,13 +495,20 @@ class PROSCENIUM_OT_generate(Operator):
             self.report({'ERROR'}, "Connect to the server first (Connection panel → Connect)")
             return {'CANCELLED'}
 
-        # Regenerate path: fold preview-time edits back onto the source
-        # action, then assign source as the active action. Without the
-        # strip+merge step, the request would be built from the untouched
-        # pre-generation source and any keys the user added during preview
-        # would be lost (they live on the preview action, not on source).
-        if settings.source_action_name:
-            src = bpy.data.actions.get(settings.source_action_name)
+        # Regenerate path: build the request from a scratch merge of preview
+        # edits into the source action. The real merge runs only after a
+        # successful bake — merging here used to corrupt the source when the
+        # POST or bake failed, and left no preview to fall back to.
+        self._regen_scratch_actions = []
+        self._regen_src = None
+        self._regen_preview = None
+
+        src_name = settings.source_action_name
+        if src_name:
+            src = bpy.data.actions.get(src_name)
+            if src is not None and _is_motion_bake_action(src):
+                settings.source_action_name = ""
+                src = None
             if src is not None:
                 if arm.animation_data is None:
                     arm.animation_data_create()
@@ -469,11 +520,15 @@ class PROSCENIUM_OT_generate(Operator):
                 if (
                     preview is not None
                     and preview is not src
-                    and preview.name.startswith(request_builder._GENERATED_ACTION_PREFIXES)
+                    and _is_motion_bake_action(preview)
                 ):
-                    constraints_ui.strip_generated_keyframe_points(preview)
-                    constraints_ui.merge_preview_keyframes_into_source(src, preview)
-                arm.animation_data.action = src
+                    scratch, temps = _build_regen_request_action(src, preview)
+                    self._regen_scratch_actions = temps + [scratch]
+                    self._regen_src = src
+                    self._regen_preview = preview
+                    arm.animation_data.action = scratch
+                else:
+                    arm.animation_data.action = src
 
         try:
             req = request_builder.build_request(
@@ -490,8 +545,7 @@ class PROSCENIUM_OT_generate(Operator):
             return {'CANCELLED'}
 
         # Save the source action for Accept / Reject (no-op if already saved).
-        if not settings.source_action_name and arm.animation_data and arm.animation_data.action:
-            settings.source_action_name = arm.animation_data.action.name
+        _stash_source_action_name(settings, arm)
 
         # Remember which scene-frames the user actually keyed so we can tag
         # them ``'KEYFRAME'`` after the bake (while every other frame from
@@ -532,9 +586,7 @@ class PROSCENIUM_OT_generate(Operator):
         # (``Proscenium_Pose`` / legacy ``Proscenium_Poses``) is the user's
         # authored content (they chose to keep those poses as anchors), so
         # those keyframes should stay typed as ``KEYFRAME`` after the bake.
-        if src_action is not None and not src_action.name.startswith(
-            request_builder._GENERATED_ACTION_PREFIXES
-        ):
+        if src_action is not None and not _is_motion_bake_action(src_action):
             for fc in constraints_ui.iter_action_fcurves(src_action):
                 for kp in fc.keyframe_points:
                     f = int(round(kp.co.x))
@@ -629,6 +681,8 @@ class PROSCENIUM_OT_generate(Operator):
             else []
         )
 
+        self._remove_regen_scratch_actions()
+
         n_actions = 0
         skipped: list[str] = []
         try:
@@ -652,6 +706,16 @@ class PROSCENIUM_OT_generate(Operator):
             )
             n_actions = 1
             skipped = list(action.get("proscenium_skipped_joints") or [])
+
+            # Fold preview-time edits onto the real source now that the bake
+            # succeeded — deferred from execute so a failed POST/bake cannot
+            # corrupt the user's action.
+            if self._regen_src is not None and self._regen_preview is not None:
+                constraints_ui.strip_generated_keyframe_points(self._regen_preview)
+                constraints_ui.merge_preview_keyframes_into_source(
+                    self._regen_src, self._regen_preview,
+                )
+                self._clear_regen_state()
 
             # In-place mode: drop a Limit Location constraint on the root
             # so the character is pinned at bone-local xz=0 while still
@@ -701,6 +765,20 @@ class PROSCENIUM_OT_generate(Operator):
             self.report({'INFO'}, f"Generation complete{msg_suffix}")
         return {'FINISHED'}
 
+    def _remove_regen_scratch_actions(self) -> None:
+        for ac in self._regen_scratch_actions or ():
+            try:
+                if ac is not None and ac.name in bpy.data.actions:
+                    bpy.data.actions.remove(ac)
+            except Exception:
+                pass
+        self._regen_scratch_actions = []
+
+    def _clear_regen_state(self) -> None:
+        self._remove_regen_scratch_actions()
+        self._regen_src = None
+        self._regen_preview = None
+
     def _cleanup(self, context, *, preview: bool = False) -> None:
         # ``preview=True`` is set only by the success path so the Accept /
         # Reject UI can show. Every CANCELLED path leaves ``preview`` at
@@ -708,9 +786,32 @@ class PROSCENIUM_OT_generate(Operator):
         # without this, a failed worker (e.g. a quota-exceeded 429) would
         # surface the preview UI even though no motion was baked.
         s = context.scene.proscenium
+        arm = _live_target_armature_or_clear(s)
+
+        regen_preview = self._regen_preview
+
+        # Restore the armature to the live preview if a failed regen left
+        # it on a scratch action.
+        if (
+            not preview
+            and arm is not None
+            and regen_preview is not None
+            and arm.animation_data is not None
+        ):
+            arm.animation_data.action = regen_preview
+
+        self._clear_regen_state()
+
         if not preview:
-            s.source_action_name = ""
-            s.is_previewing = False
+            still_previewing = (
+                arm is not None
+                and arm.animation_data is not None
+                and arm.animation_data.action is not None
+                and _is_motion_bake_action(arm.animation_data.action)
+            )
+            if not still_previewing:
+                s.source_action_name = ""
+                s.is_previewing = False
         else:
             # Source-action name may be empty for free-form generations
             # (no prior action to fall back to); ``is_previewing`` tracks
