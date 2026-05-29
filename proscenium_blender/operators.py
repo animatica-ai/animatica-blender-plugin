@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import random
 import threading
+import time
 
 import bpy
 from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
@@ -412,6 +413,31 @@ def _clear_quota_state(settings) -> None:
     settings.quota_upgrade_url = ""
 
 
+def _tick_generation_elapsed(context, start_time: float) -> None:
+    """Advance the scene's ``generation_elapsed`` counter and nudge the
+    sidebar to repaint.
+
+    MMCP v1 has no server-side progress signal, so the panel shows elapsed
+    wall-clock seconds instead of a (necessarily fake) progress bar. Called
+    from each generating modal's TIMER branch. Writes only when the whole
+    second changes, and tags just the 3D-View UI regions, so the overhead is
+    one redraw per second rather than one per 0.1 s timer tick.
+    """
+    s = getattr(context.scene, "proscenium", None)
+    if s is None:
+        return
+    elapsed = int(time.time() - start_time)
+    if elapsed == s.generation_elapsed:
+        return
+    s.generation_elapsed = elapsed
+    screen = getattr(context, "screen", None)
+    if screen is None:
+        return
+    for area in screen.areas:
+        if area.type == 'VIEW_3D':
+            area.tag_redraw()
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Connect
 # ═══════════════════════════════════════════════════════════════════════════
@@ -475,6 +501,7 @@ class PROSCENIUM_OT_generate(Operator):
     _regen_scratch_actions: list | None = None
     _regen_src = None
     _regen_preview = None
+    _start_time: float = 0.0
 
     def execute(self, context):
         settings = context.scene.proscenium
@@ -493,7 +520,7 @@ class PROSCENIUM_OT_generate(Operator):
 
         model_caps = mmcp_client.cached_model(settings.model_id)
         if model_caps is None:
-            self.report({'ERROR'}, "Connect to the server first (Connection panel → Connect)")
+            self.report({'ERROR'}, "Connect to the server first (Proscenium panel → Connect)")
             return {'CANCELLED'}
 
         # Regenerate path: build the request from a scratch merge of preview
@@ -599,6 +626,8 @@ class PROSCENIUM_OT_generate(Operator):
         # Reset state and kick worker.
         settings.is_generating = True
         settings.cancel_requested = False
+        settings.generation_elapsed = 0
+        self._start_time = time.time()
         self._result = None
         self._error = None
         self._thread = threading.Thread(
@@ -634,6 +663,7 @@ class PROSCENIUM_OT_generate(Operator):
             return {'PASS_THROUGH'}
 
         if self._thread is not None and self._thread.is_alive():
+            _tick_generation_elapsed(context, self._start_time)
             return {'RUNNING_MODAL'}
 
         # Worker finished.
@@ -1101,6 +1131,7 @@ class PROSCENIUM_OT_generate_pose(Operator):
     _error = None
     _target_frame = 1
     _pose_joint_filter = None
+    _start_time = 0.0
     # Side channel for the in-dialog Randomize button. The child operator
     # can't reach this instance's ``self.seed`` directly, so it writes the
     # new value here and ``draw`` picks it up on the next redraw.
@@ -1232,6 +1263,8 @@ class PROSCENIUM_OT_generate_pose(Operator):
 
         s.is_generating = True
         s.cancel_requested = False
+        s.generation_elapsed = 0
+        self._start_time = time.time()
         self._result = None
         self._error = None
         self._thread = threading.Thread(
@@ -1267,6 +1300,7 @@ class PROSCENIUM_OT_generate_pose(Operator):
             return {'PASS_THROUGH'}
 
         if self._thread is not None and self._thread.is_alive():
+            _tick_generation_elapsed(context, self._start_time)
             return {'RUNNING_MODAL'}
 
         if self._error is not None:
@@ -1453,6 +1487,26 @@ class PROSCENIUM_OT_randomize_seed(Operator):
         return {'FINISHED'}
 
 
+class PROSCENIUM_OT_lock_global_seed(Operator):
+    bl_idname = "proscenium.lock_global_seed"
+    bl_label = "Lock Seed"
+    bl_description = (
+        "Copy the seed the last generation actually ran with into Seed, so the "
+        "next Generate reproduces it. Useful after generating with Seed = 0"
+    )
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        s = context.scene.proscenium
+        last = int(getattr(s, "last_used_seed", 0) or 0)
+        if last <= 0:
+            self.report({'WARNING'}, "No recorded seed yet — generate once first")
+            return {'CANCELLED'}
+        s.seed = last
+        self.report({'INFO'}, f"Locked seed {last}")
+        return {'FINISHED'}
+
+
 class PROSCENIUM_OT_randomize_pose_seed(Operator):
     bl_idname = "proscenium.randomize_pose_seed"
     bl_label = "Randomize Seed"
@@ -1482,6 +1536,7 @@ _classes = (
     PROSCENIUM_OT_open_discord_help,
     PROSCENIUM_OT_dismiss_quota,
     PROSCENIUM_OT_randomize_seed,
+    PROSCENIUM_OT_lock_global_seed,
     PROSCENIUM_OT_randomize_pose_seed,
 )
 

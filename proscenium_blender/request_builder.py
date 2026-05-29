@@ -7,6 +7,7 @@ and produces the request dict the ``mmcp_client`` POSTs to ``/generate``.
 
 from __future__ import annotations
 
+import random
 from typing import Any, Iterable
 
 import bpy
@@ -16,6 +17,20 @@ from . import constraints_ui, coords
 
 
 PROTOCOL_VERSION = "1.0"
+
+
+def _resolve_seed(value) -> int:
+    """Turn a seed setting into a concrete value.
+
+    ``0`` ("auto") becomes a fresh random seed; any positive value passes
+    through unchanged. Used for client-side seed recording so that even an
+    "auto" generation has a known, reproducible seed.
+    """
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        v = 0
+    return v if v > 0 else random.randint(1, 999999)
 
 QUALITY_PRESETS = {
     "STANDARD": 50,
@@ -123,8 +138,39 @@ def build_request(
             )
         request_skeleton = canonical                  # echo verbatim
 
+    # Client-side seed recording. Resolve one concrete clip seed (the global
+    # Seed, or a single fresh random when it's 0) and stamp the effective seed
+    # onto each enabled block's ``last_used_seed`` so the result is inspectable
+    # + reproducible. A block keeps its OWN seed only when it set one (>0) and
+    # the server supports per-segment seeds; otherwise it inherits the clip
+    # seed. (Inheriting — not rolling an independent random per block — is what
+    # makes setting the global Seed reproduce the whole clip.) The same concrete
+    # values feed the request below, so what we record is what the server runs.
+    supports_seg = bool(model_caps.get("supports_segment_seed"))
+    resolved_global = _resolve_seed(settings.seed)
+    # Record the concrete clip seed so the user can lock it in (panel) and
+    # reproduce a run that was launched with Seed = 0 ("auto").
+    try:
+        settings.last_used_seed = resolved_global
+    except (AttributeError, TypeError):
+        pass
+    for _b in prompt_blocks:
+        if not getattr(_b, "enabled", True):
+            continue
+        try:
+            block_seed = int(getattr(_b, "seed", 0) or 0)
+            _b.last_used_seed = (
+                block_seed if (supports_seg and block_seed > 0) else resolved_global
+            )
+        except (AttributeError, TypeError, ValueError):
+            pass
+
     frame_range = compute_frame_range(prompt_blocks, armature_obj, scene)
-    segments = build_segments(prompt_blocks, frame_range)
+    segments = build_segments(
+        prompt_blocks,
+        frame_range,
+        supports_segment_seed=supports_seg,
+    )
 
     # Total timeline length matches the scene range so frames in constraints
     # land where the user authored them.
@@ -157,7 +203,7 @@ def build_request(
         "protocol_version": PROTOCOL_VERSION,
         "model":            model_id,
         "skeleton":         request_skeleton,
-        "options":          build_options(settings),
+        "options":          build_options(settings, seed=resolved_global),
     }
 
     if segments:
@@ -801,7 +847,12 @@ def _topological_order(parent_map: dict[str, str | None]) -> list[str]:
     return order
 
 
-def build_segments(prompt_blocks, frame_range: tuple[int, int]) -> list[dict[str, Any]]:
+def build_segments(
+    prompt_blocks,
+    frame_range: tuple[int, int],
+    *,
+    supports_segment_seed: bool = False,
+) -> list[dict[str, Any]]:
     """Convert the addon's ``PromptBlock`` collection into MMCP segments.
 
     Strategy:
@@ -811,8 +862,19 @@ def build_segments(prompt_blocks, frame_range: tuple[int, int]) -> list[dict[str
         if the prompt is empty/whitespace).
       * Gaps before / between / after enabled blocks are filled with
         UnconditionedSegment so the model picks a sensible interpolation.
+
+    When ``supports_segment_seed`` is True (the connected model advertises
+    ``supports_segment_seed`` in ``/capabilities``), each block's own seed
+    (>0) is attached to its segment so a full-timeline Generate can give every
+    block a distinct, reproducible seed. Against servers without that
+    capability the seed is omitted — older servers reject unknown segment
+    fields (``extra="forbid"``) — and the request-level Seed drives the whole
+    clip as before. Gap-filling segments never carry a seed.
     """
-    enabled: list[tuple[int, int, str]] = []
+    # (start, end, prompt, seed). Reads the resolved ``last_used_seed`` (stamped
+    # by build_request just before this call) so the segment carries the exact
+    # concrete seed we recorded; 0 means "no per-segment seed for this block".
+    enabled: list[tuple[int, int, str, int]] = []
     for b in prompt_blocks:
         if not getattr(b, "enabled", True):
             continue
@@ -820,7 +882,7 @@ def build_segments(prompt_blocks, frame_range: tuple[int, int]) -> list[dict[str
         e = min(int(b.frame_end),   frame_range[1])
         if e < s:
             continue
-        enabled.append((s, e, (b.prompt or "").strip()))
+        enabled.append((s, e, (b.prompt or "").strip(), int(getattr(b, "last_used_seed", 0) or 0)))
 
     if not enabled:
         return []
@@ -828,32 +890,41 @@ def build_segments(prompt_blocks, frame_range: tuple[int, int]) -> list[dict[str
     enabled.sort(key=lambda t: t[0])
 
     # Resolve overlaps by bumping the next block past the previous block's end.
-    cleaned: list[tuple[int, int, str]] = []
+    cleaned: list[tuple[int, int, str, int]] = []
     prev_end = frame_range[0] - 1
-    for s, e, p in enabled:
+    for s, e, p, seed in enabled:
         s = max(s, prev_end + 1)
         if s > e:
             continue
-        cleaned.append((s, e, p))
+        cleaned.append((s, e, p, seed))
         prev_end = e
     if not cleaned:
         return []
 
+    def _with_seed(segment: dict[str, Any], seed: int) -> dict[str, Any]:
+        # Attach the per-block seed only when the server can read it and the
+        # block set a concrete value (0 == "let the server pick").
+        if supports_segment_seed and seed > 0:
+            segment["seed"] = seed
+        return segment
+
     segments: list[dict[str, Any]] = []
     cursor = frame_range[0]
-    for s, e, prompt in cleaned:
+    for s, e, prompt, seed in cleaned:
         if s > cursor:
             segments.append({"type": "unconditioned", "duration_frames": s - cursor})
         if prompt:
-            segments.append({
+            segments.append(_with_seed({
                 "type":            "text",
                 "prompt":          prompt,
                 "duration_frames": e - s + 1,
-            })
+            }, seed))
         else:
             # Empty/whitespace prompt promotes to unconditioned (TextSegment
             # would fail server-side validation on min_length=1).
-            segments.append({"type": "unconditioned", "duration_frames": e - s + 1})
+            segments.append(_with_seed(
+                {"type": "unconditioned", "duration_frames": e - s + 1}, seed,
+            ))
         cursor = e + 1
 
     if cursor <= frame_range[1]:
@@ -1145,13 +1216,21 @@ def _validate_constraint_count(constraints: list[dict[str, Any]], model_caps: di
 # Options
 # ---------------------------------------------------------------------------
 
-def build_options(settings) -> dict[str, Any]:
+def build_options(settings, *, seed: int | None = None) -> dict[str, Any]:
     steps = QUALITY_PRESETS.get(settings.quality_preset, int(settings.custom_steps))
+
+    # ``seed`` (when provided) is the concrete value resolved + recorded by the
+    # caller for client-side seed recording. Falling back to the raw setting
+    # (0 -> None = server picks) keeps older callers' behaviour unchanged.
+    if seed is not None:
+        resolved_seed: int | None = int(seed)
+    else:
+        resolved_seed = int(settings.seed) if int(settings.seed) > 0 else None
 
     opts: dict[str, Any] = {
         "diffusion_steps":   int(steps),
         "num_samples":       1,                          # multi-sample UI is future work
-        "seed":              int(settings.seed) if int(settings.seed) > 0 else None,
+        "seed":              resolved_seed,
         "post_processing":   bool(settings.post_processing),
         "transition_frames": int(settings.num_transition_frames),
     }

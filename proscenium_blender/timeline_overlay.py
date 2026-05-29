@@ -5,6 +5,8 @@ PromptBlock items. Each strip shows its prompt text and can
 be interacted with via the modal operator in timeline_operators.py.
 """
 
+import math
+
 import bpy
 import gpu
 import blf
@@ -59,6 +61,10 @@ FRAME_NUM_COLOR_DISABLED = (0.6, 0.6, 0.6, 0.3)
 
 # Inline-edit cursor
 CURSOR_COLOR = (1.0, 1.0, 1.0, 0.85)
+
+# Seed-lock badge (a pinned block keeps its seed through a full Generate)
+LOCK_BADGE_COLOR = (1.0, 0.82, 0.28, 0.97)   # gold padlock
+LOCK_BADGE_BACKDROP = (0.0, 0.0, 0.0, 0.40)  # dark backing for contrast
 
 # Inline-edit state (written by timeline_operators, read by draw callback)
 inline_edit_state = {
@@ -442,6 +448,12 @@ def draw_timeline_strips():
                 frame_end=fr.frame_end,
             )
 
+        # --- Lock badge: a seed-pinned (seed > 0) block keeps its seed
+        # through a full Generate, so flag it as locked. Drawn last so it
+        # sits on top of the label. ---
+        if int(getattr(fr, "seed", 0) or 0) > 0:
+            _draw_lock_badge(shader, x_start_draw, x_end_draw, y_bottom, y_top)
+
     # Restore GPU state
     gpu.state.blend_set("NONE")
 
@@ -549,6 +561,59 @@ def _draw_unconditioned_hash(shader, x_start, x_end, y_bottom, y_top):
         batch = batch_for_shader(shader, "LINES", {"pos": lines})
         shader.uniform_float("color", hash_color)
         batch.draw(shader)
+
+
+def _draw_lock_badge(shader, x_start, x_end, y_bottom, y_top):
+    """Draw a small gold padlock in the strip's top-left corner.
+
+    Marks a *seed-locked* (pinned) block — one whose Seed is set (> 0), so it
+    keeps its seed (and so its motion) through a full Generate instead of being
+    re-rolled. Skipped on strips too small to show it legibly.
+    """
+    strip_w = x_end - x_start
+    strip_h = y_top - y_bottom
+    if strip_w < 30 or strip_h < 20:
+        return
+
+    size = max(8.0, min(12.0, strip_h * 0.30))
+    pad = 3.0
+    body_w = size
+    body_h = size * 0.6
+    r = body_w * 0.32
+    bx = x_start + pad
+    body_top = y_top - pad - r
+    body_bottom = body_top - body_h
+    cx = bx + body_w / 2.0
+
+    # Dark backing so the badge stays legible on light-coloured strips.
+    bd = (
+        (bx - 2, body_bottom - 2), (bx + body_w + 2, body_bottom - 2),
+        (bx + body_w + 2, y_top - pad + 1), (bx - 2, y_top - pad + 1),
+    )
+    bdb = batch_for_shader(shader, "TRIS", {"pos": bd}, indices=((0, 1, 2), (0, 2, 3)))
+    shader.uniform_float("color", LOCK_BADGE_BACKDROP)
+    bdb.draw(shader)
+
+    # Padlock body.
+    verts = (
+        (bx, body_bottom), (bx + body_w, body_bottom),
+        (bx + body_w, body_top), (bx, body_top),
+    )
+    body = batch_for_shader(shader, "TRIS", {"pos": verts}, indices=((0, 1, 2), (0, 2, 3)))
+    shader.uniform_float("color", LOCK_BADGE_COLOR)
+    body.draw(shader)
+
+    # Shackle: a semicircular arch sitting on top of the body.
+    segs = 8
+    arch = [
+        (cx - r * math.cos(math.pi * i / segs), body_top + r * math.sin(math.pi * i / segs))
+        for i in range(segs + 1)
+    ]
+    sb = batch_for_shader(shader, "LINE_STRIP", {"pos": arch})
+    gpu.state.line_width_set(2.0)
+    shader.uniform_float("color", LOCK_BADGE_COLOR)
+    sb.draw(shader)
+    gpu.state.line_width_set(1.0)
 
 
 def _draw_strip_text(text, x_start, x_end, y_bottom, y_top, disabled=False,

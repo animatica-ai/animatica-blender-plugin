@@ -6,7 +6,7 @@
 
 1. [Install](installation.md) and [sign in](configuration.md)
 2. In the 3D View, open the **N** panel → **Proscenium** tab
-3. **Connection** → **Connect** → pick a model
+3. In the **Proscenium** panel, click **Connect**, then pick a model
 
 ## Choose your character
 
@@ -33,6 +33,25 @@ Use any combination that fits your shot:
 
 The more direction you give, the closer the result tends to match your intent.
 
+### Prompt blocks on the timeline
+
+Prompt blocks live on Blender's **Timeline** as colored strips in the
+**Proscenium** lane:
+
+- **Double-click** an empty part of the lane to add a block
+- **Double-click** a block to type its prompt (or right-click → **Edit Prompt**)
+- **Drag** a block to move it; **drag its edges** to resize it
+- **Drag** the top edge of the lane to make the strips taller
+- **Right-click** a block to enable/disable, regenerate, or delete it
+- **Delete** / **Backspace** removes the block under the cursor
+- The **+ / −** buttons in the Timeline header add/remove blocks too
+
+A block with **no prompt** is *unconditioned* (shown hatched) — the model
+fills that span on its own. A *disabled* block is skipped entirely.
+
+> Non-Latin text (e.g. CJK) can't be typed through the on-strip editor — use
+> right-click → **Edit Prompt** for those.
+
 ## Generate a full clip
 
 1. Set your frame range on the timeline
@@ -52,8 +71,7 @@ entire action the way **Generate Motion** does.
 
 ## Sidebar panels (quick reference)
 
-- **Connection** — connect to the service and pick a model
-- **Main** — target armature, generate motion, accept / reject
+- **Proscenium** (main) — connect, pick a model, target armature, generate, accept / reject
 - **Constraints** — root paths and pinned effectors
 - **Settings** — generation options for the current shot
 

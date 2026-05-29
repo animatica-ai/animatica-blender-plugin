@@ -72,7 +72,7 @@ class PROSCENIUM_OT_import_canonical_skeleton(bpy.types.Operator):
         model_id = settings.model_id
 
         if not model_id:
-            self.report({'ERROR'}, "Pick a model first (Connection panel → Connect → Model)")
+            self.report({'ERROR'}, "Pick a model first (Proscenium panel → Connect, then choose a Model)")
             return {'CANCELLED'}
 
         model = mmcp_client.cached_model(model_id)

@@ -34,6 +34,7 @@ def _serialize_blocks(blocks) -> str:
             "enabled": b.enabled,
             "color": list(b.color),
             "seed": int(getattr(b, "seed", 0)),
+            "last_used_seed": int(getattr(b, "last_used_seed", 0)),
         }
         for b in blocks
     ])
@@ -77,6 +78,9 @@ def load_blocks_from_armature(arm_obj, settings):
             # ``seed`` was added with per-block regenerate; older scenes serialised
             # without it default to 0 (= "server picks a random seed").
             b.seed = int(item.get("seed", 0))
+            # ``last_used_seed`` records the concrete seed of the last generation
+            # (added with client-side seed recording); older scenes default to 0.
+            b.last_used_seed = int(item.get("last_used_seed", 0))
         settings.active_block_index = int(arm_obj.get(_ACTIVE_KEY, 0))
         return
 
@@ -335,10 +339,21 @@ class PromptBlock(PropertyGroup):
     seed: IntProperty(
         name="Seed",
         description=(
-            "Per-block seed used by Regenerate Range. 0 = let the server "
-            "pick a random seed. Full-timeline Generate ignores this field "
-            "and uses the global Seed setting instead — per-block seeds only "
-            "kick in on regenerate"
+            "Per-block seed override. 0 = inherit the global Seed, so setting "
+            "the global Seed reproduces the whole clip. Set a positive value to "
+            "give this block its own seed — when the connected model advertises "
+            "per-segment seeds, full-timeline Generate honours it so this block "
+            "re-rolls independently of the others"
+        ),
+        default=0, min=0, max=999999,
+    )
+    last_used_seed: IntProperty(
+        name="Last Used Seed",
+        description=(
+            "The concrete seed this block was last generated with (0 = not "
+            "generated yet). When Seed is 0, the addon rolls a real seed at "
+            "generation time and records it here so the result is reproducible "
+            "— right-click the strip and choose 'Reuse seed' to lock it in"
         ),
         default=0, min=0, max=999999,
     )
@@ -526,7 +541,24 @@ class ProsceniumSettings(PropertyGroup):
     )
 
     # -- Generation settings --
-    seed: IntProperty(name="Seed", default=42, min=0, max=999999)
+    seed: IntProperty(
+        name="Seed",
+        description=(
+            "Clip seed used for every block that doesn't pin its own. The same "
+            "seed with the same inputs reproduces the same motion. 0 = roll a "
+            "fresh random seed each run (recorded below so you can lock it in)"
+        ),
+        default=42, min=0, max=999999,
+    )
+    last_used_seed: IntProperty(
+        name="Last Used Seed",
+        description=(
+            "The concrete clip seed the last generation actually ran with "
+            "(0 = none yet). Set when Seed is 0 and a fresh seed was rolled; "
+            "click the lock to copy it into Seed and reproduce the run"
+        ),
+        default=0, min=0, max=999999,
+    )
 
     quality_preset: EnumProperty(
         name="Quality",
@@ -542,12 +574,32 @@ class ProsceniumSettings(PropertyGroup):
         name="Steps", default=50, min=1, max=200,
     )
 
-    cfg_enabled: BoolProperty(name="CFG Enabled", default=True)
+    cfg_enabled: BoolProperty(
+        name="Guidance (CFG)",
+        description=(
+            "Enable classifier-free guidance. When on, generation is pushed "
+            "to follow your prompt and constraints more closely; turn it off "
+            "for the model's looser, unguided output"
+        ),
+        default=True,
+    )
     cfg_text: FloatProperty(
-        name="Text Weight", default=2.0, min=0.0, max=5.0, step=10,
+        name="Text Weight",
+        description=(
+            "How strongly the motion follows the text prompt. Higher is more "
+            "literal to the words but can look stiff; lower is more natural "
+            "but looser. Typical range 1–3"
+        ),
+        default=2.0, min=0.0, max=5.0, step=10,
     )
     cfg_constraint: FloatProperty(
-        name="Constraint Weight", default=2.0, min=0.0, max=5.0, step=10,
+        name="Constraint Weight",
+        description=(
+            "How strongly the motion honors your constraints — root paths, "
+            "effector pins, and pose keyframes. Higher sticks tighter to the "
+            "poses and paths you authored. Typical range 1–3"
+        ),
+        default=2.0, min=0.0, max=5.0, step=10,
     )
 
     post_processing: BoolProperty(
@@ -589,11 +641,14 @@ class ProsceniumSettings(PropertyGroup):
         default=True,
         update=_preview_path_snap_update,
     )
-    root_margin: FloatProperty(
-        name="Root Margin", default=0.04, min=0.0, max=0.5,
-    )
     num_transition_frames: IntProperty(
-        name="Transition Frames", default=5, min=0, max=30,
+        name="Transition Frames",
+        description=(
+            "Frames blended between adjacent prompt blocks so segments flow "
+            "smoothly into one another instead of snapping at the boundary. "
+            "0 = hard cut between blocks"
+        ),
+        default=5, min=0, max=30,
     )
 
     default_prompt: StringProperty(
@@ -616,6 +671,15 @@ class ProsceniumSettings(PropertyGroup):
     is_generating: BoolProperty(name="Generating", default=False)
     generation_progress: FloatProperty(
         name="Progress", default=0.0, min=0.0, max=1.0, subtype='FACTOR',
+    )
+    # Seconds elapsed since the in-flight generation started. There is no
+    # server-side progress signal in MMCP v1, so the panel shows this as a
+    # live "Working… Ns" counter instead of a progress bar that would sit
+    # frozen at 0%. Updated from the generate / pose / regenerate modals.
+    generation_elapsed: IntProperty(
+        name="Elapsed Seconds",
+        default=0,
+        options={"SKIP_SAVE"},
     )
     cancel_requested: BoolProperty(
         name="Cancel Requested",

@@ -21,6 +21,93 @@ class ProsceniumPanelBase:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Shared draw helpers
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _addon_prefs(context):
+    """Return the addon's preferences, or ``None`` if unavailable."""
+    try:
+        return context.preferences.addons[__package__].preferences
+    except (KeyError, AttributeError):
+        return None
+
+
+def _draw_signin_hint(layout, context) -> bool:
+    """Surface a sign-in prompt when pointed at Animatica Cloud without a
+    session token. Returns ``True`` if it drew anything.
+
+    On Cloud, ``/capabilities`` is reachable without auth, so a user can
+    Connect and pick a model yet still hit a 401 at Generate. Sign-in
+    otherwise lives only in addon preferences; nudging here avoids that dead
+    end.
+    """
+    prefs = _addon_prefs(context)
+    if prefs is None:
+        return False
+    if getattr(prefs, "self_hosted", False):
+        return False
+    if getattr(prefs, "access_token", ""):
+        return False
+    box = layout.box()
+    box.label(text="Sign in to Animatica to generate", icon='USER')
+    box.operator("proscenium.signin", icon='IMPORT', text="Sign in")
+    return True
+
+
+def _draw_duration_hint(layout, context, settings) -> None:
+    """Warn when the would-be clip exceeds the model's duration limits.
+
+    The capabilities payload carries both a recommended and a hard maximum
+    duration; comparing the authored frame range (converted to seconds at the
+    model's fps) up front saves the user a full cold-start round-trip just to
+    be told the clip is too long. Draws nothing while the clip is within
+    limits. Read-only — safe to call from ``draw``.
+    """
+    arm = properties._live_armature(settings.target_armature)
+    if arm is None:
+        return
+    model = mmcp_client.cached_model(settings.model_id)
+    if not model:
+        return
+    try:
+        fps = float(model.get("fps"))
+    except (TypeError, ValueError):
+        return
+    if fps <= 0:
+        return
+
+    from . import request_builder
+    try:
+        gen_start, gen_end = request_builder.compute_frame_range(
+            settings.prompt_blocks, arm, context.scene,
+        )
+    except Exception:                                    # noqa: BLE001 — never break draw
+        return
+    total_frames = gen_end - gen_start + 1
+    if total_frames <= 0:
+        return
+
+    seconds = total_frames / fps
+    rec = model.get("recommended_max_duration_seconds")
+    hard = (model.get("limits") or {}).get("max_duration_seconds")
+
+    if hard is not None and seconds > float(hard):
+        row = layout.row()
+        row.alert = True
+        row.label(
+            text=f"Clip {seconds:.1f}s exceeds model max {float(hard):g}s",
+            icon='ERROR',
+        )
+    elif rec is not None and seconds > float(rec):
+        row = layout.row()
+        row.alert = True
+        row.label(
+            text=f"Clip {seconds:.1f}s over recommended {float(rec):g}s",
+            icon='ERROR',
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Main panel
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -65,6 +152,9 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
                 row.operator("proscenium.open_upgrade", icon='URL', text="Upgrade")
             row.operator("proscenium.dismiss_quota", icon='X', text="Dismiss")
 
+        # Cloud sign-in nudge — auth lives in prefs, so surface it here too.
+        _draw_signin_hint(layout, context)
+
         # Soft prompt to connect first. Server URL + auth live in addon prefs.
         if mmcp_client.cached_capabilities() is None:
             box = layout.box()
@@ -108,6 +198,17 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
         row.prop(settings, "seed")
         row.operator("proscenium.randomize_seed", text="", icon='FILE_REFRESH')
 
+        # Offer to lock the concrete seed the last run used — only meaningful
+        # when Seed was left on auto (0) and the recorded value differs.
+        last_seed = int(getattr(settings, "last_used_seed", 0) or 0)
+        if last_seed > 0 and last_seed != int(settings.seed):
+            row = layout.row(align=True)
+            row.label(text=f"Last run used seed {last_seed}")
+            row.operator("proscenium.lock_global_seed", text="Lock", icon='LOCKED')
+
+        # Warn only if the clip exceeds the connected model's duration limits.
+        _draw_duration_hint(layout, context, settings)
+
         layout.separator()
 
         # Generate buttons — state-aware
@@ -120,19 +221,35 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
             box.label(text="Early access — heads up", icon='SORTTIME')
             box.label(text="First generation can take 60s+")
             box.label(text="while the model warms up.")
+            # No server-side progress signal in MMCP v1, so show a live
+            # elapsed-time counter rather than a bar frozen at 0%.
             col = layout.column(align=True)
-            col.prop(settings, "generation_progress", text="Generating...", slider=True)
+            elapsed = int(getattr(settings, "generation_elapsed", 0))
+            col.label(text=f"Working… {elapsed}s", icon='SORTTIME')
             col.operator("proscenium.cancel", icon='X', text="Cancel")
         else:
             # Use the dedicated preview flag — ``source_action_name`` is
             # empty for free-form generations (no prior action to restore
-            # to), so gating on it would hide the Push to NLA / Reject
+            # to), so gating on it would hide the Accept / Reject
             # buttons after a successful free-form bake.
             arm_live = properties._live_armature(settings.target_armature)
             in_preview = (
                 arm_live is not None
                 and bool(getattr(settings, "is_previewing", False))
             )
+
+            # First-run nudge: prompts live on the Timeline, which isn't
+            # obvious. Shown until the user authors prompt text, so it
+            # disappears on its own once they're going.
+            if arm_live is not None and not in_preview:
+                has_prompt = any(
+                    (b.prompt or "").strip() for b in settings.prompt_blocks
+                )
+                if not has_prompt:
+                    box = layout.box()
+                    box.label(text="Add a prompt to generate", icon='INFO')
+                    box.label(text="Double-click the Timeline to add a block,")
+                    box.label(text="then double-click it to type a prompt.")
 
             col = layout.column(align=True)
             col.enabled = arm_live is not None
@@ -167,8 +284,20 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
                 box.prop(settings, "inplace", icon='LOCKED' if settings.inplace else 'UNLOCKED')
                 row = box.row(align=True)
                 row.scale_y = 1.3
-                row.operator("proscenium.accept", icon='CHECKMARK')
+                row.operator("proscenium.accept", icon='CHECKMARK', text="Accept")
                 row.operator("proscenium.reject", icon='X')
+
+                # Re-roll just the active block (keeping its neighbours) —
+                # otherwise only reachable by right-clicking a timeline strip.
+                # With a single block this is equivalent to Regenerate Motion,
+                # so only surface it when there are blocks to keep.
+                if len(settings.prompt_blocks) >= 2:
+                    op = box.operator(
+                        "proscenium.regenerate_block",
+                        icon='FILE_REFRESH',
+                        text="Regenerate Active Block",
+                    )
+                    op.block_index = -1
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -280,7 +409,6 @@ class PROSCENIUM_PT_settings(ProsceniumPanelBase, Panel):
 
         layout.separator()
         layout.prop(settings, "num_transition_frames")
-        layout.prop(settings, "root_margin")
 
         # Motion cleanup — tightens keyframe pins and fixes foot skating.
         # Requires the server to have `motion_correction` installed.

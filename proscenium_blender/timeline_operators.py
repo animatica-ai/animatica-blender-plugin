@@ -13,6 +13,7 @@ Provides:
 - register_keymaps() / unregister_keymaps()
 """
 
+import random
 import threading
 import time
 
@@ -601,6 +602,25 @@ class PROSCENIUM_OT_timeline_strip_context_menu(bpy.types.Operator):
         if self._hit_index is not None and 0 <= self._hit_index < len(props.prompt_blocks):
             fr = props.prompt_blocks[self._hit_index]
             layout.label(text=f"Strip: {fr.prompt or '(no prompt)'}")
+            # Seed inspection + pin/unpin. A pinned block (seed > 0) keeps its
+            # seed through a full Generate; an unpinned block inherits the
+            # global Seed but still records the concrete seed it last ran with.
+            if int(getattr(fr, "seed", 0)) > 0:
+                layout.label(text=f"Seed pinned: {fr.seed}")
+                op = layout.operator(
+                    "proscenium.clear_block_seed",
+                    text="Clear seed (follow global)",
+                    icon="X",
+                )
+                op.index = self._hit_index
+            elif int(getattr(fr, "last_used_seed", 0)) > 0:
+                layout.label(text=f"Generated with seed: {fr.last_used_seed}")
+                op = layout.operator(
+                    "proscenium.reuse_block_seed",
+                    text="Reuse seed (pin it)",
+                    icon="LOCKED",
+                )
+                op.index = self._hit_index
             layout.separator()
 
             # Edit prompt
@@ -696,6 +716,72 @@ class PROSCENIUM_OT_timeline_strip_toggle_enabled(bpy.types.Operator):
             for area in context.screen.areas:
                 if area.type == "DOPESHEET_EDITOR":
                     area.tag_redraw()
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# Reuse recorded seed (lock last_used_seed into seed)
+# ---------------------------------------------------------------------------
+
+class PROSCENIUM_OT_reuse_block_seed(bpy.types.Operator):
+    """Lock a block's last-generated seed into its Seed field.
+
+    Copies ``last_used_seed`` into ``seed`` so the next generation reproduces
+    this block's motion instead of rolling a fresh random seed.
+    """
+
+    bl_idname = "proscenium.reuse_block_seed"
+    bl_label = "Reuse Seed"
+    bl_options = {"REGISTER", "UNDO"}
+
+    index: IntProperty(name="Strip Index", default=0)
+
+    @classmethod
+    def poll(cls, context):
+        return _timeline_poll(context)
+
+    def execute(self, context):
+        props = context.scene.proscenium
+        if not (0 <= self.index < len(props.prompt_blocks)):
+            return {"CANCELLED"}
+        block = props.prompt_blocks[self.index]
+        if int(getattr(block, "last_used_seed", 0)) <= 0:
+            self.report({"WARNING"}, "This block has no recorded seed yet — generate it first")
+            return {"CANCELLED"}
+        block.seed = int(block.last_used_seed)
+        from .properties import save_blocks_to_armature
+        save_blocks_to_armature(props.target_armature, props)
+        self.report({"INFO"}, f"Locked seed {block.seed} onto this block")
+        for area in context.screen.areas:
+            if area.type == "DOPESHEET_EDITOR":
+                area.tag_redraw()
+        return {"FINISHED"}
+
+
+class PROSCENIUM_OT_clear_block_seed(bpy.types.Operator):
+    """Clear a block's pinned seed so it follows the global Seed again."""
+
+    bl_idname = "proscenium.clear_block_seed"
+    bl_label = "Clear Seed"
+    bl_options = {"REGISTER", "UNDO"}
+
+    index: IntProperty(name="Strip Index", default=0)
+
+    @classmethod
+    def poll(cls, context):
+        return _timeline_poll(context)
+
+    def execute(self, context):
+        props = context.scene.proscenium
+        if not (0 <= self.index < len(props.prompt_blocks)):
+            return {"CANCELLED"}
+        props.prompt_blocks[self.index].seed = 0
+        from .properties import save_blocks_to_armature
+        save_blocks_to_armature(props.target_armature, props)
+        self.report({"INFO"}, "Block now follows the global Seed")
+        for area in context.screen.areas:
+            if area.type == "DOPESHEET_EDITOR":
+                area.tag_redraw()
         return {"FINISHED"}
 
 
@@ -1106,6 +1192,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
     _target_range = None
     _request_start_frame = None
     _anchor_frames = None
+    _start_time = 0.0
 
     @classmethod
     def poll(cls, context):
@@ -1150,9 +1237,11 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
                 label = label[:47] + "…"
             layout.label(text=f"Regenerate: {label}", icon='FILE_REFRESH')
             layout.label(text=f"Frames {block.frame_start}–{block.frame_end}")
+            if int(getattr(block, "last_used_seed", 0)) > 0:
+                layout.label(text=f"Last generated with seed: {block.last_used_seed}")
         layout.separator()
         layout.prop(self, "seed")
-        layout.label(text="0 = server picks a random seed", icon='INFO')
+        layout.label(text="0 = roll a fresh seed and pin it to this block", icon='INFO')
 
     def execute(self, context):
         from . import constraints_ui, gltf_to_blender, mmcp_client, request_builder
@@ -1204,7 +1293,14 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
         # regens pre-fill with it (matches the way pose-generate stashes
         # its last prompt onto the scene props).
         block = s.prompt_blocks[idx]
-        block.seed = int(self.seed)
+        # Resolve 0 ("auto") to a concrete seed and PIN it onto the block
+        # (block.seed = used_seed). Pinning is what makes a regenerated block
+        # survive a later full Generate: the full path keeps blocks whose seed
+        # is > 0 and only re-rolls / inherits the global for blocks left at 0.
+        # Set the block's Seed back to 0 to let it follow the global Seed again.
+        used_seed = int(self.seed) if int(self.seed) > 0 else random.randint(1, 999999)
+        block.seed = used_seed
+        block.last_used_seed = used_seed
         from . import properties
         properties.save_blocks_to_armature(arm, s)
 
@@ -1220,7 +1316,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
                 constraint_objects=constraints_ui.walk_scene_constraints(context.scene),
                 preview_action=preview_action,
                 source_action=source_action,
-                seed_override=int(self.seed),
+                seed_override=used_seed,
             )
         except request_builder.BuildError as exc:
             self.report({'ERROR'}, str(exc))
@@ -1246,6 +1342,8 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
 
         s.is_generating = True
         s.cancel_requested = False
+        s.generation_elapsed = 0
+        self._start_time = time.time()
         self._thread = threading.Thread(
             target=self._worker,
             args=(mmcp_client.get_mmcp_url(), req),
@@ -1272,6 +1370,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
             _clear_quota_state,
             _live_target_armature_or_clear,
             _stash_quota_state,
+            _tick_generation_elapsed,
         )
 
         s = context.scene.proscenium
@@ -1285,6 +1384,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
             return {'PASS_THROUGH'}
 
         if self._thread is not None and self._thread.is_alive():
+            _tick_generation_elapsed(context, self._start_time)
             return {'RUNNING_MODAL'}
 
         if self._error is not None:
@@ -1439,6 +1539,8 @@ _classes = (
     PROSCENIUM_OT_timeline_strip_delete,
     PROSCENIUM_OT_timeline_strip_context_menu,
     PROSCENIUM_OT_timeline_strip_toggle_enabled,
+    PROSCENIUM_OT_reuse_block_seed,
+    PROSCENIUM_OT_clear_block_seed,
     PROSCENIUM_OT_timeline_strip_inline_edit,
     PROSCENIUM_OT_edit_strip_prompt,
     PROSCENIUM_OT_add_prompt_block,
