@@ -104,7 +104,9 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
             )
 
         # Seed (frequently tweaked when regenerating — kept next to Generate)
-        layout.prop(settings, "seed")
+        row = layout.row(align=True)
+        row.prop(settings, "seed")
+        row.operator("proscenium.randomize_seed", text="", icon='FILE_REFRESH')
 
         layout.separator()
 

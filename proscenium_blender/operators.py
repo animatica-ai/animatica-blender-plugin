@@ -16,6 +16,7 @@ the server is).
 
 from __future__ import annotations
 
+import random
 import threading
 
 import bpy
@@ -1100,6 +1101,10 @@ class PROSCENIUM_OT_generate_pose(Operator):
     _error = None
     _target_frame = 1
     _pose_joint_filter = None
+    # Side channel for the in-dialog Randomize button. The child operator
+    # can't reach this instance's ``self.seed`` directly, so it writes the
+    # new value here and ``draw`` picks it up on the next redraw.
+    _pending_seed = None
 
     @classmethod
     def poll(cls, context):
@@ -1120,12 +1125,22 @@ class PROSCENIUM_OT_generate_pose(Operator):
         if last:
             self.prompt = last
         self.seed = int(s.seed)
+        type(self)._pending_seed = None
         return context.window_manager.invoke_props_dialog(self)
 
     def draw(self, context):
+        # Pick up any seed the in-dialog Randomize button stashed since the
+        # last redraw. Cleared after consumption so a stale value can't leak
+        # into a future dialog open.
+        cls = type(self)
+        if cls._pending_seed is not None:
+            self.seed = cls._pending_seed
+            cls._pending_seed = None
         layout = self.layout
         layout.prop(self, "prompt")
-        layout.prop(self, "seed")
+        row = layout.row(align=True)
+        row.prop(self, "seed")
+        row.operator("proscenium.randomize_pose_seed", text="", icon='FILE_REFRESH')
         layout.prop(self, "preserve_height")
         layout.prop(self, "pose_apply_scope")
         layout.label(text=f"Insert keyframe at frame {context.scene.frame_current}")
@@ -1425,6 +1440,31 @@ class PROSCENIUM_OT_dismiss_quota(Operator):
         return {'FINISHED'}
 
 
+class PROSCENIUM_OT_randomize_seed(Operator):
+    bl_idname = "proscenium.randomize_seed"
+    bl_label = "Randomize Seed"
+    bl_description = "Pick a new random seed for the next generation"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        # Avoid 0 — that's the "let the server pick" sentinel, which would
+        # defeat the point of choosing a specific seed to reproduce later.
+        context.scene.proscenium.seed = random.randint(1, 999999)
+        return {'FINISHED'}
+
+
+class PROSCENIUM_OT_randomize_pose_seed(Operator):
+    bl_idname = "proscenium.randomize_pose_seed"
+    bl_label = "Randomize Seed"
+    bl_description = "Pick a new random seed for this pose"
+
+    def execute(self, context):
+        # Stash on the class — the running generate-pose dialog reads this
+        # in its next draw and copies it into its own operator-instance seed.
+        PROSCENIUM_OT_generate_pose._pending_seed = random.randint(1, 999999)
+        return {'FINISHED'}
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Registration
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1441,6 +1481,8 @@ _classes = (
     PROSCENIUM_OT_open_upgrade,
     PROSCENIUM_OT_open_discord_help,
     PROSCENIUM_OT_dismiss_quota,
+    PROSCENIUM_OT_randomize_seed,
+    PROSCENIUM_OT_randomize_pose_seed,
 )
 
 
