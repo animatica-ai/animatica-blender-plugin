@@ -4,6 +4,62 @@ All notable changes to the Proscenium for Blender addon are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-05-31
+
+### Added
+
+- **Rigify control-rig support.** Generated deform-bone motion now bakes
+  onto Rigify control armatures — FK / IK chains and the hip / chest /
+  neck / head master controls — not just Mixamo-style rigs. A new
+  `rigify_bake.py` uses a helper-bone retargeting strategy: each control
+  gets a helper at its own rest reference, parented to the source DEF
+  bone, and Blender's depsgraph evaluates the constraint stack during the
+  bake, so Rigify's rest-orientation offsets and MCH / ORG / tweak chain
+  composition resolve correctly by construction. Rig-agnostic baking
+  helpers (matrix overrides, action-slot management, fcurve handling) are
+  now shared between the Mixamo and Rigify paths via the new
+  `_bake_common.py`.
+- **Per-block regeneration (re-roll one block).** New
+  `proscenium.regenerate_block` operator regenerates a single timeline
+  prompt block in place while preserving the surrounding motion —
+  keyframes outside the block's frame range are kept and the fresh GLTF is
+  spliced into the range (`splice_gltf_into_action`,
+  `sample_pose_at_frame`), so neighboring blocks stay continuous.
+- **Seed controls.** Randomize the generation seed from the main panel
+  (`proscenium.randomize_seed`) or the Generate Pose dialog
+  (`proscenium.randomize_pose_seed`), and lock the current seed
+  (`proscenium.lock_global_seed`). Per block, pin the last-used seed into a
+  block (`proscenium.reuse_block_seed`) or clear it
+  (`proscenium.clear_block_seed`); seed-pinned blocks now show a visual
+  indicator in the timeline overlay.
+- **Documentation pages.** New `docs/` set — installation, usage,
+  configuration, developing, and limitations — covering model connection
+  in the Proscenium panel, timeline prompt-block management (add / edit /
+  resize), and local developer setup.
+
+### Changed
+
+- **T-pose → A-pose handled in the request builder.** Bone rotations are
+  corrected via `t_pose_q_matrix` in `request_builder.py` during GLTF
+  baking, and the redundant T-pose correction in `gltf_to_blender.py` is
+  removed — one place owns the transform and the bake is streamlined.
+- **Consistent deform-bone selection.** Pose-keyframe sampling now draws
+  from a shared `emitted_deform_bones` set (excluding face and Rigify
+  tweak bones) so the joints referenced in pose keyframes match
+  server-side validation; `sample_pose_keyframes` iterates the
+  pre-filtered list.
+- **Updated UI terminology** in canonical-skeleton operator error
+  messages to match the current panel wording.
+
+### Fixed
+
+- **Regenerate no longer corrupts the source action.** The Generate-again
+  / regenerate path rebuilds its request from scratch merges, and
+  `merge_preview_keyframes_into_source` now skips generated keyframes
+  (identified via `_is_motion_bake_action`), so motion-bake samples are
+  never merged back onto your authored source action. Temporary scratch
+  actions are tracked and cleared to keep memory tidy.
+
 ## [0.3.2] — 2026-05-14
 
 ### Added
@@ -171,6 +227,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial public release.
 
+[0.4.0]: https://github.com/animatica-ai/proscenium-blender/releases/tag/v0.4.0
 [0.3.2]: https://github.com/animatica-ai/proscenium-blender/releases/tag/v0.3.2
 [0.3.1]: https://github.com/animatica-ai/proscenium-blender/releases/tag/v0.3.1
 [0.3.0]: https://github.com/animatica-ai/proscenium-blender/releases/tag/v0.3.0
