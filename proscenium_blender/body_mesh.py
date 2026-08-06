@@ -318,6 +318,18 @@ SOMA_BODY_JOINTS = (
 )
 
 
+def model_family_has_soma_body(model_id: str) -> bool:
+    """``True`` iff the model's canonical skeleton is SOMA-family, i.e. the
+    bundled SOMA77 body mesh actually fits its rest proportions.
+
+    Name-overlap alone (``looks_like_kimodo_skeleton``) is not enough: other
+    models can use the same standard joint names on a differently-proportioned
+    skeleton (e.g. ARDY's 27-joint "Core"), and skinning SOMA77 onto those
+    produces a visibly wrong body. Gate by model id instead.
+    """
+    return "soma" in (model_id or "").lower()
+
+
 def looks_like_kimodo_skeleton(arm_obj: bpy.types.Object, threshold: int = 12) -> bool:
     """Heuristic: does this armature look like one Kimodo's canonical
     body mesh would skin to? We match by bone-name overlap rather than

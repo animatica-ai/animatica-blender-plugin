@@ -96,7 +96,13 @@ class PROSCENIUM_OT_import_canonical_skeleton(bpy.types.Operator):
         settings.target_armature = arm_obj
 
         body_loaded = False
-        if (
+        body_skipped_non_soma = False
+        if self.with_body and not body_mesh.model_family_has_soma_body(model_id):
+            # Non-SOMA canonical (e.g. ARDY Core): joint names overlap enough
+            # to fool the name heuristic below, but the mesh would skin onto
+            # wrong proportions. Skip silently-but-informatively.
+            body_skipped_non_soma = True
+        elif (
             self.with_body
             and body_mesh.asset_available()
             and body_mesh.looks_like_kimodo_skeleton(arm_obj)
@@ -113,6 +119,8 @@ class PROSCENIUM_OT_import_canonical_skeleton(bpy.types.Operator):
                 self.report({'WARNING'}, f"Imported armature but body mesh failed: {exc}")
 
         msg = f"Imported {model_id} ({len(joints)} joints)"
+        if body_skipped_non_soma:
+            msg += " — body mesh unavailable for this skeleton"
         if body_loaded:
             msg += " with body mesh"
             try:
