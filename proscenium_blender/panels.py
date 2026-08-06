@@ -193,6 +193,18 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
                 text=f"Re-import {settings.model_id or 'model'} skeleton",
             )
 
+            # The armature was imported for a different model's canonical
+            # skeleton — generation still works (the server retargets), but
+            # the user should know they're not on the selected model's
+            # native rig. Read-only check; draw() must not mutate state.
+            source_model = settings.target_armature.get("proscenium_canonical_model", "")
+            if source_model and settings.model_id and source_model != settings.model_id:
+                box = layout.box()
+                box.label(
+                    text=f"Armature is {source_model}'s skeleton", icon='INFO')
+                box.label(
+                    text=f"{settings.model_id} will retarget onto it — or re-import above")
+
         # Seed (frequently tweaked when regenerating — kept next to Generate)
         row = layout.row(align=True)
         row.prop(settings, "seed")
