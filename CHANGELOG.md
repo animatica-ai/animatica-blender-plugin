@@ -4,6 +4,26 @@ All notable changes to the Proscenium for Blender addon are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Armature ↔ model mismatch hint.** When the target armature was imported
+  from a different model's canonical skeleton than the currently selected
+  model (e.g. a SOMA rig with `ardy-core-rp` selected), the main panel now
+  says so and points at re-import — generation still works via server-side
+  retargeting, this is purely informational.
+
+### Fixed
+
+- **Body mesh no longer attaches to non-SOMA canonical skeletons.** The
+  SOMA77 reference body is now gated by model family
+  (`body_mesh.model_family_has_soma_body`), not just joint-name overlap —
+  skeletons like ARDY "Core" reuse the same standard joint names on
+  different proportions, which fooled the name heuristic and skinned the
+  body onto a wrong rest shape. Importing a non-SOMA canonical now reports
+  "body mesh unavailable for this skeleton" instead.
+
 ## [0.4.0] — 2026-05-31
 
 ### Added
