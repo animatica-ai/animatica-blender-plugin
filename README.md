@@ -1,4 +1,4 @@
-# Proscenium for Blender
+# Animatica Blender Plugin
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 
