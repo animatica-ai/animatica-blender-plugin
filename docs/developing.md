@@ -5,8 +5,8 @@ For people working on the addon source or running a custom MMCP server.
 ## Build from source
 
 ```bash
-git clone https://github.com/animatica-ai/proscenium-blender
-cd proscenium-blender
+git clone https://github.com/animatica-ai/animatica-blender-plugin
+cd animatica-blender-plugin
 make zip          # → dist/proscenium-blender-X.Y.Z.zip
 make install      # symlink into Blender addons (reload addon after edits)
 make uninstall
@@ -65,7 +65,7 @@ Releases: tag `vX.Y.Z` must match `bl_info["version"]` in `proscenium_blender/__
 ## Contributing
 
 Issues and pull requests:  
-[github.com/animatica-ai/proscenium-blender](https://github.com/animatica-ai/proscenium-blender)
+[github.com/animatica-ai/animatica-blender-plugin](https://github.com/animatica-ai/animatica-blender-plugin)
 
 License: [GPL-3.0-or-later](../LICENSE)
 

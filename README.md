@@ -23,7 +23,7 @@ machine instead; see [configuration](docs/configuration.md).
 ## Install
 
 1. Download the latest **proscenium-blender-….zip** from
-   [GitHub Releases](https://github.com/animatica-ai/proscenium-blender/releases)
+   [GitHub Releases](https://github.com/animatica-ai/animatica-blender-plugin/releases)
 2. In Blender: **Edit → Preferences → Add-ons → Install…** → choose the zip
 3. Enable **Proscenium — AI Motion Generation**
 

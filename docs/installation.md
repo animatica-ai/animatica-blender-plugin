@@ -8,7 +8,7 @@
 ## Install the addon
 
 1. Download the latest **proscenium-blender-….zip** from
-   [GitHub Releases](https://github.com/animatica-ai/proscenium-blender/releases)
+   [GitHub Releases](https://github.com/animatica-ai/animatica-blender-plugin/releases)
 2. Open Blender → **Edit → Preferences → Add-ons**
 3. Click **Install…** and choose the zip file
 4. Search for **Proscenium** and enable **Proscenium — AI Motion Generation**
