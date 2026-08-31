@@ -55,6 +55,8 @@ does.
 
 The addon is an MMCP client (no ML in Blender). Generation runs on the server.
 
+This addon ships its own minimal MMCP HTTP client (`mmcp_client.py`) rather than depending on the `animatica_core` / `motionmcp-client-sdk` package used by the MotionBuilder / 3ds Max / Maya line — convergence between the DCC integrations happens through the shared MMCP specification, not shared code.
+
 - [MMCP protocol](https://animatica.ai/mmcp)
 - [MMCP implementations](https://animatica.ai/mmcp/docs/get-started/implementations)
 - Reference self-hosted server: [motionmcp-kimodo](https://github.com/animatica-ai/motionmcp-kimodo)
