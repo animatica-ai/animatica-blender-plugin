@@ -1002,7 +1002,14 @@ def _duplicate_seam_waypoints(
             "frames":       [b - 1],
             "positions_xz": [list(src["positions_xz"][0])],
         })
-    constraints.extend(copies)
+    # Same order as the other hosts' builder, which copies BEFORE it injects
+    # the start anchor: the copies go in front of a trailing frame-0 anchor.
+    # Order is part of the wire (the server resolves same-frame collisions
+    # last-wins), and identical requests must hash identically across hosts.
+    insert_at = len(constraints)
+    if constraints and _pins_frame_zero(constraints[-1]):
+        insert_at -= 1
+    constraints[insert_at:insert_at] = copies
 
 
 def _collect_constraints(
