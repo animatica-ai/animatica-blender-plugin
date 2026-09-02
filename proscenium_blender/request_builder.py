@@ -198,6 +198,9 @@ def build_request(
     valid_joint_names = {j["name"] for j in request_skeleton.get("joints", [])}
     _validate_constraint_joints(constraints, valid_joint_names)
     _validate_constraint_count(constraints, model_caps)
+    # After the budget check on purpose: a seam copy restates a waypoint the
+    # user authored once; it must not count as a second one.
+    _duplicate_seam_waypoints(constraints, segments)
 
     request: dict[str, Any] = {
         "protocol_version": PROTOCOL_VERSION,
@@ -943,6 +946,63 @@ _GENERATED_ACTION_PREFIXES: tuple[str, ...] = (
 # Kept for back-compat in case anything imports it; ``str.startswith`` accepts
 # either a string or a tuple, so the change is transparent at call sites.
 _GENERATED_ACTION_PREFIX = _GENERATED_ACTION_PREFIXES
+
+
+def _duplicate_seam_waypoints(
+    constraints: list[dict[str, Any]],
+    segments: list[dict[str, Any]],
+) -> None:
+    """Copy each boundary ``root_path`` waypoint onto the preceding index.
+
+    The rule the other hosts' shared builder applies, mirrored here so a
+    waypoint on a prompt seam means the same thing on every host (Matt's
+    ruling, 2026-09-02: a waypoint on the shared boundary frame binds BOTH
+    prompts — the character is there finishing the first move and starting
+    the second). The server crops constraints per segment with a half-open
+    ``>= start & < end`` rule against the running frame cumsum, so a
+    waypoint authored on a boundary ``b`` belongs to the following segment
+    only; copying its XZ to ``b - 1`` puts one waypoint in each segment.
+
+    Boundaries are the running cumsum of ``duration_frames`` excluding 0
+    and the final total. A copy is emitted for boundary ``b`` only when
+    ``b - 1 > 0`` (an index-0 copy would suppress the start anchor), a
+    single-waypoint ``root_path`` sits at ``b``, and no ``root_path`` of any
+    origin already sits at ``b - 1``. Copies carry the position only; the
+    server resolves headings for them. Mutates *constraints* in place.
+    """
+    if len(segments) < 2:
+        return
+    boundaries: list[int] = []
+    cum = 0
+    for s in segments[:-1]:
+        cum += int(s.get("duration_frames") or 0)
+        boundaries.append(cum)
+
+    def _frames(c: dict[str, Any]) -> list[int]:
+        return [int(f) for f in (c.get("frames") or [])]
+
+    copies: list[dict[str, Any]] = []
+    for b in boundaries:
+        if b - 1 <= 0:
+            continue
+        if any(c.get("type") == "root_path" and (b - 1) in _frames(c)
+               for c in (constraints + copies)):
+            continue
+        src = next(
+            (c for c in constraints
+             if c.get("type") == "root_path"
+             and len(c.get("positions_xz") or []) == 1
+             and b in _frames(c)),
+            None,
+        )
+        if src is None:
+            continue
+        copies.append({
+            "type":         "root_path",
+            "frames":       [b - 1],
+            "positions_xz": [list(src["positions_xz"][0])],
+        })
+    constraints.extend(copies)
 
 
 def _collect_constraints(
