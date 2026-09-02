@@ -289,12 +289,20 @@ class PROSCENIUM_OT_add_root_path(Operator):
         # root-location keys at all.
         keyframe_points = _root_keyframe_points(scene)
         if keyframe_points:
-            control_points = keyframe_points
+            point_frames = [f for f, _p in keyframe_points]
+            control_points = [p for _f, p in keyframe_points]
         else:
             control_points = _densify_points(
                 _default_root_points(),
                 min_count=max(4, constants.ROOT_PATH_CONTROL_POINTS),
             )
+            # No authored timing to inherit: spread the points evenly over
+            # the scene range, so the curve is still a timed set of
+            # waypoints the user can retime on the object's properties.
+            s, e = int(scene.frame_start), int(scene.frame_end)
+            n = len(control_points)
+            point_frames = [int(round(s + (e - s) * i / max(1, n - 1)))
+                            for i in range(n)]
 
         # 2D curve: Blender stores only the XY plane (floor). That matches
         # MMCP's root_path primitive, which is a smooth_root xz trajectory —
@@ -315,6 +323,7 @@ class PROSCENIUM_OT_add_root_path(Operator):
         obj[constants.PROP_IS_ROOT_PATH]    = True
         obj[constants.PROP_MATCH_DIRECTION] = self.match_direction
         obj[constants.PROP_SAMPLE_DENSITY]  = self.sample_density
+        obj[constants.PROP_POINT_FRAMES]    = point_frames
         scene.collection.objects.link(obj)
 
         _select_only(context, obj)
@@ -347,11 +356,12 @@ def _densify_points(points: list[Vector], *, min_count: int) -> list[Vector]:
     return pts
 
 
-def _root_keyframe_points(scene: bpy.types.Scene) -> list[Vector]:
-    """World xz of the root bone at each root-location keyframe, projected
-    onto the ground plane (z=0). Returns an empty list if the target armature
-    has no root location keys in the scene range — the operator then falls
-    back to a default line.
+def _root_keyframe_points(scene: bpy.types.Scene) -> list[tuple[int, Vector]]:
+    """``(frame, world xz)`` of the root bone at each root-location keyframe,
+    projected onto the ground plane (z=0), in frame order. Returns an empty
+    list if the target armature has no root location keys in the scene
+    range — the operator then falls back to a default line. The frames ride
+    along so the curve keeps the authored TIMING, not only the shape.
     """
     settings = scene.proscenium
     arm = settings.target_armature
@@ -381,7 +391,7 @@ def _root_keyframe_points(scene: bpy.types.Scene) -> list[Vector]:
 
     saved = scene.frame_current
     try:
-        points: list[Vector] = []
+        points: list[tuple[int, Vector]] = []
         for f in sorted(times):
             scene.frame_set(f)
             # Force depsgraph re-evaluation — ``scene.frame_set`` alone
@@ -389,7 +399,7 @@ def _root_keyframe_points(scene: bpy.types.Scene) -> list[Vector]:
             # so the pose-bone matrix would otherwise read stale values.
             bpy.context.view_layer.update()
             world = (arm.matrix_world @ root_pb.matrix).translation
-            points.append(Vector((world.x, world.y, 0.0)))
+            points.append((f, Vector((world.x, world.y, 0.0))))
         return points
     finally:
         scene.frame_set(saved)
@@ -567,16 +577,82 @@ def sample_root_path(
     curve_obj: bpy.types.Object,
     *,
     total_frames: int,
-) -> dict[str, Any] | None:
-    """Sample a Bezier curve into a `root_path` constraint dict.
+    frame_range: tuple[int, int] | None = None,
+) -> list[dict[str, Any]]:
+    """Turn a root-path curve into ``root_path`` constraint dicts.
 
-    The curve is treated as a static spatial trajectory; the character walks
-    along it over the request's timeline. We sample at evenly-spaced frame
-    indices in the request frame range. Returns ``None`` if the curve has no
-    spline data (corrupt) or fewer than 2 points.
+    Two authoring models, told apart by :data:`constants.PROP_POINT_FRAMES`:
+
+    * **Timed waypoints** — the curve carries one scene frame per control
+      point (the operator stamps them from the root keyframes it seeded the
+      curve from). Each point becomes its OWN constraint at its frame,
+      translated onto the request timeline (``frame - frame_range[0]``) and
+      dropped when outside it — exactly the shape the other hosts author
+      (one ``{"frames": [f], "positions_xz": [[x, z]]}`` per waypoint). A
+      point's heading, when direction matching is on, is the curve tangent
+      at that point.
+    * **Static trajectory** (no frames, legacy curves) — the character walks
+      the whole curve over the whole request timeline, sampled every
+      :data:`constants.PROP_SAMPLE_DENSITY` frames into one constraint.
+      This is what made a two-prompt request stretch a single curve across
+      both prompts and pin frame 0 to the curve's start (measured on the
+      A/B c3 checkpoint, 2026-09-02).
+
+    Returns ``[]`` if the curve has no spline data or fewer than 2 points.
     """
     if total_frames < 1:
-        return None
+        return []
+    spline = curve_obj.data.splines[0] if curve_obj.data.splines else None
+    point_frames = curve_obj.get(constants.PROP_POINT_FRAMES)
+    if (point_frames is not None and spline is not None
+            and len(point_frames) == len(spline.bezier_points) >= 1):
+        return _root_path_at_point_frames(
+            curve_obj, spline, [int(f) for f in point_frames],
+            total_frames=total_frames,
+            start_frame=int(frame_range[0]) if frame_range else 0)
+    sampled = _sample_root_path_evenly(curve_obj, total_frames=total_frames)
+    return [sampled] if sampled is not None else []
+
+
+def _root_path_at_point_frames(
+    curve_obj: bpy.types.Object,
+    spline,
+    frames: list[int],
+    *,
+    total_frames: int,
+    start_frame: int,
+) -> list[dict[str, Any]]:
+    mw = curve_obj.matrix_world
+    match = bool(curve_obj.get(constants.PROP_MATCH_DIRECTION))
+    polyline = _root_path_world_polyline(curve_obj) if match else None
+    out: list[dict[str, Any]] = []
+    for i, (pt, frame) in enumerate(zip(spline.bezier_points, frames)):
+        request_frame = int(frame) - start_frame
+        if not (0 <= request_frame < total_frames):
+            continue
+        x_mmcp, _, z_mmcp = coords.blender_pos_to_mmcp(mw @ pt.co)
+        constraint: dict[str, Any] = {
+            "type": "root_path",
+            "frames": [request_frame],
+            "positions_xz": [[x_mmcp, z_mmcp]],
+        }
+        if polyline:
+            # _bezier_to_polyline lays 12 samples per span with shared
+            # endpoints, so control point i sits at polyline index i * 12.
+            idx = min(len(polyline) - 1, i * 12)
+            tx, _, tz = coords.blender_pos_to_mmcp(_tangent_at(polyline, idx))
+            constraint["heading_radians"] = [_mmcp_heading_from_xz_tangent(tx, tz)]
+        out.append(constraint)
+    return out
+
+
+def _sample_root_path_evenly(
+    curve_obj: bpy.types.Object,
+    *,
+    total_frames: int,
+) -> dict[str, Any] | None:
+    """The static-trajectory model: evenly-spaced samples along the whole
+    curve over the whole request timeline, as one constraint."""
     polyline = _root_path_world_polyline(curve_obj)
     if polyline is None:
         return None

@@ -34,3 +34,9 @@ PROP_IS_ROOT_PATH    = "proscenium_is_root_path"
 PROP_TARGET_JOINT    = "proscenium_target_joint"
 PROP_MATCH_DIRECTION = "proscenium_match_direction"
 PROP_SAMPLE_DENSITY  = "proscenium_sample_density"
+# One scene frame per Bezier control point of a root path (same order as
+# the points). When present and complete, the curve is a TIMED set of
+# waypoints — one root_path constraint per point at its frame, like the
+# other hosts author it — instead of a static trajectory sampled evenly
+# over the whole request timeline.
+PROP_POINT_FRAMES    = "proscenium_point_frames"

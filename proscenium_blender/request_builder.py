@@ -955,9 +955,8 @@ def _collect_constraints(
     out: list[dict[str, Any]] = []
 
     for curve in constraint_objects.get("root_paths", []):
-        c = constraints_ui.sample_root_path(curve, total_frames=total_frames)
-        if c is not None:
-            out.append(c)
+        out.extend(constraints_ui.sample_root_path(
+            curve, total_frames=total_frames, frame_range=frame_range))
 
     for empty in constraint_objects.get("effector_targets", []):
         c = constraints_ui.sample_effector_target(
