@@ -9,6 +9,24 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **The Animatic character is what "Import rig" loads.** The rigged, textured
+  hero body ships at `assets/animatic_character.blend` and is appended whole —
+  armature, skinned mesh and material — instead of a bare skeleton being built
+  from joint data. The SOMA30 rig and the model's canonical skeleton remain
+  selectable on the import operator.
+
+### Fixed
+
+- **Namespaced rigs are driven instead of silently skipped.** MMCP joint names
+  are bare (`Hips`); rigs exported from Maya / MotionBuilder carry the source
+  scene's namespace on every bone (`animatica:Hips`), so the bake's exact-name
+  lookup matched nothing and every channel was dropped without an error. The
+  bake now resolves through a whole-rig namespace when one is present
+  (`gltf_to_blender.resolve_joint_bone`), and the pose-bake selection filter
+  strips it on the way back out. Unprefixed rigs are unaffected.
+
 ### Changed
 
 - **Renamed from Proscenium to Animatica.** The rename reaches every

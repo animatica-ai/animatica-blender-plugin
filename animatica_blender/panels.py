@@ -183,14 +183,14 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
             box.operator(
                 "animatica.import_canonical_skeleton",
                 icon='ARMATURE_DATA',
-                text="Import Animatica rig",
+                text="Import Animatic character",
             )
         else:
             row = layout.row()
             row.operator(
                 "animatica.import_canonical_skeleton",
                 icon='ARMATURE_DATA',
-                text="Re-import Animatica rig",
+                text="Re-import Animatic character",
             )
 
         # Seed (frequently tweaked when regenerating — kept next to Generate)

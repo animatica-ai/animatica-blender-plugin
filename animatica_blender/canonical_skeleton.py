@@ -1,8 +1,15 @@
-"""Build a Blender Armature from an MMCP skeleton.
+"""Get a rig into the scene to animate on.
 
-Two sources, same builder:
+Three sources. The first is appended whole; the other two are built by the
+builder at the bottom of this module from a list of MMCP joints:
 
-* **The Animatica rig (default)** — the 30-joint SOMA skeleton bundled at
+* **The Animatic character (default)** — the rigged, textured hero body
+  bundled at ``assets/animatic_character.blend``, appended as-is with its
+  skinned mesh and material. This is what users animate on: a character
+  rather than a stick figure, and a 77-bone superset of SOMA30, so every
+  joint the server generates lands on it and the extra bones (finger
+  segments, end bones, eyes, jaw) simply stay unanimated.
+* **The Animatica rig** — the 30-joint SOMA skeleton bundled at
   ``assets/soma30_rig.json``. One rig for every backbone: users animate on
   it whatever model they pick, and the server retargets between it and its
   own skeleton. Keeping it local also means the rig does not change under
@@ -53,9 +60,71 @@ LEAF_TAIL_LENGTH = 0.05   # metres, +Y in MMCP frame (= +Z in Blender)
 DEFAULT_RIG_PATH = Path(__file__).parent / "assets" / "soma30_rig.json"
 DEFAULT_RIG_NAME = "SOMA30"
 
+# The Animatic character: a rigged, textured hero body shipped as a partial
+# .blend that we append. Unlike the JSON rigs there is nothing to build — the
+# armature, the skinned mesh and the material come out of the file as-is.
+#
+# Its bones carry the ``animatica:`` namespace from the Maya/MotionBuilder
+# pipeline it comes out of, and its object transform is the FBX import's
+# (0.01 scale, +90 degrees about X). Both are kept as they are so the asset
+# still round-trips to that pipeline; the bake meets it halfway instead,
+# resolving bare MMCP joint names through the namespace
+# (``gltf_to_blender.resolve_joint_bone``). Renaming the bones here would
+# also mean renaming all 77 vertex groups to keep the skinning attached.
+CHARACTER_PATH = Path(__file__).parent / "assets" / "animatic_character.blend"
+CHARACTER_NAME = "Animatic"
+# Object names inside the asset. The mesh is parented to the armature and its
+# armature modifier points at it, so appending both together is enough.
+_CHARACTER_OBJECTS = ("Animatic", "Animatic_body")
+
 
 def default_rig_available() -> bool:
     return DEFAULT_RIG_PATH.exists()
+
+
+def character_available() -> bool:
+    return CHARACTER_PATH.exists()
+
+
+def load_character(context) -> tuple[bpy.types.Object, bpy.types.Object | None]:
+    """Append the Animatic character. Returns ``(armature, body_mesh)``.
+
+    Raises ``ValueError`` if the asset is missing or does not contain the
+    expected objects — the caller falls back to building a rig.
+    """
+    if not CHARACTER_PATH.exists():
+        raise ValueError(f"bundled character {CHARACTER_PATH.name} is missing")
+
+    try:
+        with bpy.data.libraries.load(str(CHARACTER_PATH), link=False) as (src, dst):
+            missing = [n for n in _CHARACTER_OBJECTS if n not in src.objects]
+            if missing:
+                raise ValueError(
+                    f"{CHARACTER_PATH.name} has no object(s) {missing!r}"
+                )
+            dst.objects = list(_CHARACTER_OBJECTS)
+        appended = list(dst.objects)
+    except ValueError:
+        raise
+    except Exception as exc:                                         # noqa: BLE001
+        raise ValueError(f"cannot append {CHARACTER_PATH.name}: {exc}") from exc
+
+    arm_obj = next((o for o in appended if o and o.type == 'ARMATURE'), None)
+    if arm_obj is None:
+        raise ValueError(f"{CHARACTER_PATH.name} contains no armature")
+    mesh_obj = next((o for o in appended if o and o.type == 'MESH'), None)
+
+    coll = context.collection or context.scene.collection
+    for obj in appended:
+        if obj is None:
+            continue
+        # Written with fake_user so the datablocks survive the partial-blend
+        # write; the appended copies are real scene objects and don't need it.
+        obj.use_fake_user = False
+        if obj.name not in coll.objects:
+            coll.objects.link(obj)
+
+    return arm_obj, mesh_obj
 
 
 def load_default_rig() -> tuple[str, list[dict[str, Any]]]:
@@ -93,12 +162,14 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
         name="Rig",
         description="Which skeleton to build",
         items=[
+            ('CHARACTER', "Animatic character",
+             "The rigged, textured Animatic body bundled with the addon. Animate on this"),
             ('DEFAULT', "Animatica rig (SOMA30)",
-             "The rig bundled with the addon. Works with every model; the server retargets"),
+             "The bare 30-joint rig bundled with the addon. Works with every model; the server retargets"),
             ('CANONICAL', "Model's canonical",
              "The skeleton the selected model generates on. No retargeting, but it differs per model"),
         ],
-        default='DEFAULT',
+        default='CHARACTER',
     )
 
     with_body: BoolProperty(
@@ -115,8 +186,32 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
     def execute(self, context):
         settings = context.scene.animatica
 
+        # The character is not built from joints — it is appended whole, so it
+        # short-circuits the builder (and the separate body-mesh import, since
+        # it brings its own skinned mesh).
+        if self.source == 'CHARACTER':
+            try:
+                arm_obj, mesh_obj = load_character(context)
+            except ValueError as exc:
+                self.report({'WARNING'}, f"{exc}; falling back to the SOMA30 rig")
+            else:
+                settings.target_armature = arm_obj
+                try:
+                    context.view_layer.objects.active = arm_obj
+                    bpy.ops.object.mode_set(mode='POSE')
+                except Exception:                                    # noqa: BLE001
+                    # No 3D View context (headless / script) — import still fine.
+                    pass
+                self.report(
+                    {'INFO'},
+                    f"Imported the {CHARACTER_NAME} character "
+                    f"({len(arm_obj.data.bones)} bones"
+                    + (" with body mesh)" if mesh_obj is not None else ")"),
+                )
+                return {'FINISHED'}
+
         rig_name, joints = None, None
-        if self.source == 'DEFAULT':
+        if self.source in {'DEFAULT', 'CHARACTER'}:
             try:
                 rig_name, joints = load_default_rig()
             except ValueError as exc:
