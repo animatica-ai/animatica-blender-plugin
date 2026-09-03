@@ -65,12 +65,18 @@ DEFAULT_RIG_NAME = "SOMA30"
 # armature, the skinned mesh and the material come out of the file as-is.
 #
 # Its bones carry the ``animatica:`` namespace from the Maya/MotionBuilder
-# pipeline it comes out of, and its object transform is the FBX import's
-# (0.01 scale, +90 degrees about X). Both are kept as they are so the asset
-# still round-trips to that pipeline; the bake meets it halfway instead,
-# resolving bare MMCP joint names through the namespace
-# (``gltf_to_blender.resolve_joint_bone``). Renaming the bones here would
-# also mean renaming all 77 vertex groups to keep the skinning attached.
+# pipeline it comes out of. That is kept, so the asset still round-trips to
+# that pipeline; the bake meets it halfway instead, resolving bare MMCP joint
+# names through the namespace (``gltf_to_blender.resolve_joint_bone``).
+# Renaming the bones here would also mean renaming all 77 vertex groups to
+# keep the skinning attached.
+#
+# Everything else about the Maya export IS normalised, because Blender's FBX
+# importer does not do it for you and the raw result is not an armature anyone
+# can work with. See ``docs/rebuilding-the-character.md`` for the procedure:
+# bones aimed at their children, and the importer's unit/axis transform baked
+# into the armature and mesh data so the object sits at identity and bone
+# lengths and root motion are in metres.
 CHARACTER_PATH = Path(__file__).parent / "assets" / "animatic_character.blend"
 CHARACTER_NAME = "Animatic"
 # Object names inside the asset. The mesh is parented to the armature and its
