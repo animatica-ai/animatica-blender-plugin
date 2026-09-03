@@ -1,15 +1,20 @@
-"""Build a Blender Armature from an MMCP canonical skeleton.
+"""Build a Blender Armature from an MMCP skeleton.
 
-The MMCP server publishes ``canonical_skeleton`` in
-``/capabilities.models[].canonical_skeleton``. Each joint has a name, a
-parent name, a local-space ``rest_translation`` (meters, MMCP frame) and a
-``rest_rotation`` quaternion (typically identity for Kimodo skeletons).
+Two sources, same builder:
 
-This module turns that JSON into a real Blender armature so the user has
-something to animate. Round-trip safe: the names and parent links match
-exactly what the server expects to receive back, so generation works without
-a retargeting layer (the MMCP v1 server publishes
-``supports_retargeting: false``).
+* **The Animatica rig (default)** — the 30-joint SOMA skeleton bundled at
+  ``assets/soma30_rig.json``. One rig for every backbone: users animate on
+  it whatever model they pick, and the server retargets between it and its
+  own skeleton. Keeping it local also means the rig does not change under
+  the user when a backbone is redeployed.
+* **The server's canonical** — ``/capabilities.models[].canonical_skeleton``,
+  the skeleton the chosen model actually generates on. Fewer moving parts
+  (no retarget hop), but it differs per backbone: ARDY publishes a 27-joint
+  Core rig, Kimodo a 30-joint SOMA one.
+
+Either way each joint has a name, a parent name, a local-space
+``rest_translation`` (metres, MMCP frame) and a ``rest_rotation``
+quaternion (identity for both rigs above).
 
 Bone construction strategy:
   * head = accumulated rest_translation from root to this joint
@@ -30,16 +35,43 @@ All positions are converted MMCP → Blender at import time via ``coords``.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import bpy
-from bpy.props import BoolProperty
+from bpy.props import BoolProperty, EnumProperty
 from mathutils import Vector
 
 from . import body_mesh, coords, mmcp_client
 
 
 LEAF_TAIL_LENGTH = 0.05   # metres, +Y in MMCP frame (= +Z in Blender)
+
+# The rig we ship. Generated from the SOMA30 skeleton in MMCP wire form; see
+# the file's own ``_comment``.
+DEFAULT_RIG_PATH = Path(__file__).parent / "assets" / "soma30_rig.json"
+DEFAULT_RIG_NAME = "SOMA30"
+
+
+def default_rig_available() -> bool:
+    return DEFAULT_RIG_PATH.exists()
+
+
+def load_default_rig() -> tuple[str, list[dict[str, Any]]]:
+    """``(rig_name, joints)`` for the bundled Animatica rig.
+
+    Raises ``ValueError`` if the asset is missing or malformed — the caller
+    falls back to the server's canonical.
+    """
+    try:
+        doc = json.loads(DEFAULT_RIG_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:                                         # noqa: BLE001
+        raise ValueError(f"cannot read bundled rig {DEFAULT_RIG_PATH.name}: {exc}") from exc
+    joints = doc.get("joints") or []
+    if not joints:
+        raise ValueError(f"bundled rig {DEFAULT_RIG_PATH.name} has no joints")
+    return doc.get("name") or DEFAULT_RIG_NAME, joints
 
 
 # ---------------------------------------------------------------------------
@@ -48,13 +80,26 @@ LEAF_TAIL_LENGTH = 0.05   # metres, +Y in MMCP frame (= +Z in Blender)
 
 class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
     bl_idname = "animatica.import_canonical_skeleton"
-    bl_label = "Import Canonical Skeleton"
+    bl_label = "Import Rig"
     bl_description = (
-        "Build a Blender armature from the selected MMCP model's "
-        "canonical_skeleton. The new armature becomes the target for "
-        "generation — its joint names match the server's expectations exactly"
+        "Build a Blender armature to animate on. Defaults to the Animatica "
+        "rig (SOMA30) bundled with the addon — the same rig for every model, "
+        "retargeted server-side. Switch the source to use the selected "
+        "model's own canonical skeleton instead"
     )
     bl_options = {'REGISTER', 'UNDO'}
+
+    source: EnumProperty(
+        name="Rig",
+        description="Which skeleton to build",
+        items=[
+            ('DEFAULT', "Animatica rig (SOMA30)",
+             "The rig bundled with the addon. Works with every model; the server retargets"),
+            ('CANONICAL', "Model's canonical",
+             "The skeleton the selected model generates on. No retargeting, but it differs per model"),
+        ],
+        default='DEFAULT',
+    )
 
     with_body: BoolProperty(
         name="Include body mesh",
@@ -69,37 +114,44 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
 
     def execute(self, context):
         settings = context.scene.animatica
-        model_id = settings.model_id
 
-        if not model_id:
-            self.report({'ERROR'}, "Pick a model first (Animatica panel → Connect, then choose a Model)")
-            return {'CANCELLED'}
+        rig_name, joints = None, None
+        if self.source == 'DEFAULT':
+            try:
+                rig_name, joints = load_default_rig()
+            except ValueError as exc:
+                self.report({'WARNING'}, f"{exc}; falling back to the model's canonical")
 
-        # Re-fetch /capabilities before building. The process-wide cache is
-        # only refreshed by Connect, so after a server redeploy that changes
-        # the published canonical (e.g. ARDY moving from Core27 to SOMA30)
-        # an import would silently rebuild the stale rig. Fall back to the
-        # cache when the server cannot be reached right now.
-        url = mmcp_client.get_mmcp_url()
+        if joints is None:
+            model_id = settings.model_id
+            if not model_id:
+                self.report({'ERROR'}, "Pick a model first (Animatica panel → Connect, then choose a Model)")
+                return {'CANCELLED'}
+
+            # Re-fetch /capabilities before building. The process-wide cache
+            # is only refreshed by Connect, so after a backbone redeploy that
+            # changes the published canonical an import would silently
+            # rebuild the stale rig. Fall back to the cache when the server
+            # cannot be reached right now.
+            url = mmcp_client.get_mmcp_url()
+            try:
+                caps = mmcp_client.MmcpClient(url, timeout=30).capabilities(refresh=True)
+                mmcp_client.store_capabilities(caps)
+            except Exception as exc:                                 # noqa: BLE001
+                self.report({'WARNING'}, f"Could not refresh capabilities from {url} ({exc}); using cached")
+
+            model = mmcp_client.cached_model(model_id)
+            if model is None:
+                self.report({'ERROR'}, f"Model {model_id!r} not in the cached capabilities; reconnect first")
+                return {'CANCELLED'}
+            joints = (model.get("canonical_skeleton") or {}).get("joints") or []
+            if not joints:
+                self.report({'ERROR'}, f"Model {model_id!r} has no canonical_skeleton.joints")
+                return {'CANCELLED'}
+            rig_name = model_id
+
         try:
-            caps = mmcp_client.MmcpClient(url, timeout=30).capabilities(refresh=True)
-            mmcp_client.store_capabilities(caps)
-        except Exception as exc:                                     # noqa: BLE001
-            self.report({'WARNING'}, f"Could not refresh capabilities from {url} ({exc}); using cached")
-
-        model = mmcp_client.cached_model(model_id)
-        if model is None:
-            self.report({'ERROR'}, f"Model {model_id!r} not in the cached capabilities; reconnect first")
-            return {'CANCELLED'}
-
-        skel = model.get("canonical_skeleton") or {}
-        joints = skel.get("joints") or []
-        if not joints:
-            self.report({'ERROR'}, f"Model {model_id!r} has no canonical_skeleton.joints")
-            return {'CANCELLED'}
-
-        try:
-            arm_obj, floor_lift = build_armature_from_canonical(model_id, joints, context)
+            arm_obj, floor_lift = build_armature_from_canonical(rig_name, joints, context)
         except ValueError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
@@ -124,7 +176,7 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
                 # Mesh is a nice-to-have; never fail the armature import on it.
                 self.report({'WARNING'}, f"Imported armature but body mesh failed: {exc}")
 
-        msg = f"Imported {model_id} ({len(joints)} joints)"
+        msg = f"Imported {rig_name} ({len(joints)} joints)"
         if body_loaded:
             msg += " with body mesh"
             try:

@@ -179,18 +179,18 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
         # available post-connect; prompt-style only when nothing's set.
         if settings.target_armature is None:
             box = layout.box()
-            box.label(text="No armature — import the canonical one", icon='INFO')
+            box.label(text="No armature — import a rig to animate on", icon='INFO')
             box.operator(
                 "animatica.import_canonical_skeleton",
                 icon='ARMATURE_DATA',
-                text=f"Import {settings.model_id or 'model'} skeleton",
+                text="Import Animatica rig",
             )
         else:
             row = layout.row()
             row.operator(
                 "animatica.import_canonical_skeleton",
                 icon='ARMATURE_DATA',
-                text=f"Re-import {settings.model_id or 'model'} skeleton",
+                text="Re-import Animatica rig",
             )
 
         # Seed (frequently tweaked when regenerating — kept next to Generate)
