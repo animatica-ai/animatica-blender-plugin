@@ -5,7 +5,7 @@
 Integracja **ARDY (NVIDIA) jako drugiego modelu obok Kimodo jest ukończona
 i przetestowana E2E** — Fazy 1 i 2 planu, łącznie z multi-segmentem, pose,
 pełnym postprocessingiem i E2E w Blenderze. Wszystkie testy automatyczne
-zielone (13/13 przypadków błędów/limitów/seedów + adherencja ścieżki 4 cm
+zielone (14/14 przypadków błędów/limitów/seedów + adherencja ścieżki 4 cm
 na obu modelach + regresja kimodo bitowo identyczna). **Jedyna rzecz
 nietestowalna bez Ciebie: prompty tekstowe** — enkoder LLM2Vec wymaga
 tokena HF z dostępem do gated `meta-llama/Meta-Llama-3-8B-Instruct`
@@ -30,6 +30,7 @@ tokena HF z dostępem do gated `meta-llama/Meta-Llama-3-8B-Instruct`
 | Nieznany staw w constraincie → `unknown_joint` 400 | PASS | PASS |
 | Ten sam seed 2× → **bitowo identyczny** wynik | PASS | PASS |
 | Inny seed → inny wynik | PASS | PASS |
+| Pusty request → czysty 422 (sanityzacja envelope'u SDK) | PASS² | PASS² |
 | **Adherencja root_path (ścieżka L, 3 piny)** | **max 4,0 cm** | **max 4,0 cm** |
 | Przemieszczenie końcowe (oczekiwane ~2,12 m) | 2,05 m | 2,10 m |
 | Multi-segment 2×80 klatek (8 s) | 200 / 4,3 s | n/d (natywnie) |
@@ -40,6 +41,12 @@ tokena HF z dostępem do gated `meta-llama/Meta-Llama-3-8B-Instruct`
 zawierał obiekt `ValueError` z pydantic i nie serializował się do JSON —
 każdy błąd schematu wychodził jako gołe 500. Serwer ma teraz sanityzujący
 handler (kandydat na fix w motionmcp-sdk).
+
+² Sprostowanie z 2026-08-10: ta asercja była dopisana **za** `sys.exit()`
+w skrypcie testowym, więc mimo obecności w kodzie nigdy się nie
+wykonywała — stąd błędne „13/13" w pierwotnej wersji raportu. Po
+naprawie skryptu przechodzi: **7/7 na model, 14/14 razem**. Sam fix
+sanityzacji był poprawny, brakowało tylko jego weryfikacji.
 
 **VRAM:** oba modele załadowane = **3,9 / 24,5 GB** (dummy enkodery).
 Czasy generacji na RTX 3090: kimodo ~3 s, ardy ~2–4 s.
