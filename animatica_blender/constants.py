@@ -1,4 +1,4 @@
-"""Shared constants for the Proscenium addon (MMCP client side).
+"""Shared constants for the Animatica addon (MMCP client side).
 
 Most lookup tables that the legacy addon needed (auto-detection, retarget
 hints, slot mappings) are gone — the MMCP server publishes the canonical
@@ -30,7 +30,7 @@ EFFECTOR_COLORS = {
 
 # Custom-property keys stamped on Blender objects to mark them as MMCP
 # constraints. Picked up by the constraints scene-walker.
-PROP_IS_ROOT_PATH    = "proscenium_is_root_path"
-PROP_TARGET_JOINT    = "proscenium_target_joint"
-PROP_MATCH_DIRECTION = "proscenium_match_direction"
-PROP_SAMPLE_DENSITY  = "proscenium_sample_density"
+PROP_IS_ROOT_PATH    = "animatica_is_root_path"
+PROP_TARGET_JOINT    = "animatica_target_joint"
+PROP_MATCH_DIRECTION = "animatica_match_direction"
+PROP_SAMPLE_DENSITY  = "animatica_sample_density"

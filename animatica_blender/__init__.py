@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
-Proscenium for Blender — AI Motion Generation Addon
+Animatica for Blender — AI Motion Generation Addon
 ====================================================
 
 Select an armature with a few keyframes, click Generate, and the server
@@ -11,11 +11,11 @@ optimisation runs on the backend server.
 """
 
 bl_info = {
-    "name": "Proscenium — AI Motion Generation",
+    "name": "Animatica — AI Motion Generation",
     "author": "Animatica",
     "version": (0, 4, 0),
     "blender": (5, 0, 0),
-    "location": "View3D > Sidebar > Proscenium",
+    "location": "View3D > Sidebar > Animatica",
     "description": "AI motion generation — select armature, set keyframes, generate",
     "category": "Animation",
 }
@@ -24,6 +24,7 @@ import bpy
 from bpy.app.handlers import persistent
 
 from . import properties
+from . import migrate
 from . import operators
 from . import canonical_skeleton
 from . import constraints_ui
@@ -38,12 +39,12 @@ from . import timeline_operators
 # ---------------------------------------------------------------------------
 
 @persistent
-def _proscenium_save_pre(dummy):
+def _animatica_save_pre(dummy):
     """Before saving the .blend, persist the current prompt_blocks onto the
     target armature's custom properties so they survive file reloads and
     per-armature switching."""
     for scene in bpy.data.scenes:
-        settings = getattr(scene, "proscenium", None)
+        settings = getattr(scene, "animatica", None)
         if settings is None:
             continue
         arm = settings.target_armature
@@ -56,12 +57,17 @@ def _proscenium_save_pre(dummy):
 
 
 @persistent
-def _proscenium_load_post(dummy):
+def _animatica_load_post(dummy):
     """After loading a .blend, hydrate settings.prompt_blocks from the
     target armature's custom properties (or wipe state if the saved target
     no longer points at a live armature)."""
+    # Files saved before the Proscenium -> Animatica rename store everything
+    # under the old keys. Migrate first: the hydration below reads the new
+    # ones, so it would find nothing on an unmigrated file.
+    migrate.run()
+
     for scene in bpy.data.scenes:
-        settings = getattr(scene, "proscenium", None)
+        settings = getattr(scene, "animatica", None)
         if settings is None:
             continue
         arm = properties._live_armature(settings.target_armature)
@@ -94,7 +100,7 @@ def _reset_runtime_flags() -> None:
         bpy.app.timers.register(_reset_runtime_flags, first_interval=0.0)
         return
     for scene in scenes:
-        s = getattr(scene, "proscenium", None)
+        s = getattr(scene, "animatica", None)
         if s is None:
             continue
         try:
@@ -120,7 +126,7 @@ def _purge_stale_handlers(handler_list, fn_name: str) -> None:
 def register():
     properties.register()
     operators.register()
-    bpy.utils.register_class(canonical_skeleton.PROSCENIUM_OT_import_canonical_skeleton)
+    bpy.utils.register_class(canonical_skeleton.ANIMATICA_OT_import_canonical_skeleton)
     constraints_ui.register()
     panels.register()
     path_follow.register()
@@ -130,21 +136,21 @@ def register():
     _reset_runtime_flags()
 
     # Install persistent handlers, purging any stale copies from prior loads.
-    _purge_stale_handlers(bpy.app.handlers.save_pre, "_proscenium_save_pre")
-    bpy.app.handlers.save_pre.append(_proscenium_save_pre)
-    _purge_stale_handlers(bpy.app.handlers.load_post, "_proscenium_load_post")
-    bpy.app.handlers.load_post.append(_proscenium_load_post)
+    _purge_stale_handlers(bpy.app.handlers.save_pre, "_animatica_save_pre")
+    bpy.app.handlers.save_pre.append(_animatica_save_pre)
+    _purge_stale_handlers(bpy.app.handlers.load_post, "_animatica_load_post")
+    bpy.app.handlers.load_post.append(_animatica_load_post)
 
 
 def unregister():
-    _purge_stale_handlers(bpy.app.handlers.save_pre, "_proscenium_save_pre")
-    _purge_stale_handlers(bpy.app.handlers.load_post, "_proscenium_load_post")
+    _purge_stale_handlers(bpy.app.handlers.save_pre, "_animatica_save_pre")
+    _purge_stale_handlers(bpy.app.handlers.load_post, "_animatica_load_post")
 
     timeline_overlay.unregister_draw_handler()
     timeline_operators.unregister()
     path_follow.unregister()
     panels.unregister()
     constraints_ui.unregister()
-    bpy.utils.unregister_class(canonical_skeleton.PROSCENIUM_OT_import_canonical_skeleton)
+    bpy.utils.unregister_class(canonical_skeleton.ANIMATICA_OT_import_canonical_skeleton)
     operators.unregister()
     properties.unregister()

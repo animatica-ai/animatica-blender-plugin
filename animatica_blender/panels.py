@@ -1,11 +1,11 @@
-"""Blender UI panels for the Proscenium addon.
+"""Blender UI panels for the Animatica addon.
 
-Sidebar panels in View3D > Sidebar > Proscenium:
+Sidebar panels in View3D > Sidebar > Animatica:
   - Main: connect, model picker, armature, seed, generate buttons, preview
   - Constraints: root path / effector / pose-keyframe controls
   - Settings: quality / CFG / post-processing
 
-Server URL + auth live in Edit > Preferences > Add-ons > Proscenium.
+Server URL + auth live in Edit > Preferences > Add-ons > Animatica.
 """
 
 import bpy
@@ -14,10 +14,10 @@ from bpy.types import Panel
 from . import constraints_ui, mmcp_client, properties
 
 
-class ProsceniumPanelBase:
+class AnimaticaPanelBase:
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Proscenium"
+    bl_category = "Animatica"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -50,7 +50,7 @@ def _draw_signin_hint(layout, context) -> bool:
         return False
     box = layout.box()
     box.label(text="Sign in to Animatica to generate", icon='USER')
-    box.operator("proscenium.signin", icon='IMPORT', text="Sign in")
+    box.operator("animatica.signin", icon='IMPORT', text="Sign in")
     return True
 
 
@@ -111,16 +111,16 @@ def _draw_duration_hint(layout, context, settings) -> None:
 # Main panel
 # ═══════════════════════════════════════════════════════════════════════════
 
-class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
-    bl_label = "Proscenium"
-    bl_idname = "PROSCENIUM_PT_main"
+class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
+    bl_label = "Animatica"
+    bl_idname = "ANIMATICA_PT_main"
 
     def draw(self, context):
         layout = self.layout
-        settings = context.scene.proscenium
+        settings = context.scene.animatica
 
         layout.operator(
-            "proscenium.open_discord_help",
+            "animatica.open_discord_help",
             icon='URL',
             text="Need help?",
         )
@@ -149,8 +149,8 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
                 box.label(text=line)
             row = box.row(align=True)
             if settings.quota_upgrade_url:
-                row.operator("proscenium.open_upgrade", icon='URL', text="Upgrade")
-            row.operator("proscenium.dismiss_quota", icon='X', text="Dismiss")
+                row.operator("animatica.open_upgrade", icon='URL', text="Upgrade")
+            row.operator("animatica.dismiss_quota", icon='X', text="Dismiss")
 
         # Cloud sign-in nudge — auth lives in prefs, so surface it here too.
         _draw_signin_hint(layout, context)
@@ -165,7 +165,7 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
                     box.label(text=line)
             else:
                 box.label(text="Connect to a server first", icon='INFO')
-            box.operator("proscenium.connect", icon='URL', text="Connect")
+            box.operator("animatica.connect", icon='URL', text="Connect")
             return
 
         # Connected — show model picker.
@@ -181,14 +181,14 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
             box = layout.box()
             box.label(text="No armature — import the canonical one", icon='INFO')
             box.operator(
-                "proscenium.import_canonical_skeleton",
+                "animatica.import_canonical_skeleton",
                 icon='ARMATURE_DATA',
                 text=f"Import {settings.model_id or 'model'} skeleton",
             )
         else:
             row = layout.row()
             row.operator(
-                "proscenium.import_canonical_skeleton",
+                "animatica.import_canonical_skeleton",
                 icon='ARMATURE_DATA',
                 text=f"Re-import {settings.model_id or 'model'} skeleton",
             )
@@ -196,7 +196,7 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
         # Seed (frequently tweaked when regenerating — kept next to Generate)
         row = layout.row(align=True)
         row.prop(settings, "seed")
-        row.operator("proscenium.randomize_seed", text="", icon='FILE_REFRESH')
+        row.operator("animatica.randomize_seed", text="", icon='FILE_REFRESH')
 
         # Offer to lock the concrete seed the last run used — only meaningful
         # when Seed was left on auto (0) and the recorded value differs.
@@ -204,7 +204,7 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
         if last_seed > 0 and last_seed != int(settings.seed):
             row = layout.row(align=True)
             row.label(text=f"Last run used seed {last_seed}")
-            row.operator("proscenium.lock_global_seed", text="Lock", icon='LOCKED')
+            row.operator("animatica.lock_global_seed", text="Lock", icon='LOCKED')
 
         # Warn only if the clip exceeds the connected model's duration limits.
         _draw_duration_hint(layout, context, settings)
@@ -226,7 +226,7 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
             col = layout.column(align=True)
             elapsed = int(getattr(settings, "generation_elapsed", 0))
             col.label(text=f"Working… {elapsed}s", icon='SORTTIME')
-            col.operator("proscenium.cancel", icon='X', text="Cancel")
+            col.operator("animatica.cancel", icon='X', text="Cancel")
         else:
             # Use the dedicated preview flag — ``source_action_name`` is
             # empty for free-form generations (no prior action to restore
@@ -257,7 +257,7 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
             gen_text = "Regenerate Motion" if in_preview else "Generate Motion"
             row = col.row()
             row.scale_y = 1.5
-            row.operator("proscenium.generate", icon='PLAY', text=gen_text)
+            row.operator("animatica.generate", icon='PLAY', text=gen_text)
 
             # Pose-segment generation is a cloud-only capability — only
             # surface the button when the connected model advertises it.
@@ -270,7 +270,7 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
                 )
                 row = col.row()
                 row.scale_y = 1.2
-                row.operator("proscenium.generate_pose", icon='ARMATURE_DATA', text=pose_text)
+                row.operator("animatica.generate_pose", icon='ARMATURE_DATA', text=pose_text)
 
             if in_preview:
                 layout.separator()
@@ -284,8 +284,8 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
                 box.prop(settings, "inplace", icon='LOCKED' if settings.inplace else 'UNLOCKED')
                 row = box.row(align=True)
                 row.scale_y = 1.3
-                row.operator("proscenium.accept", icon='CHECKMARK', text="Accept")
-                row.operator("proscenium.reject", icon='X')
+                row.operator("animatica.accept", icon='CHECKMARK', text="Accept")
+                row.operator("animatica.reject", icon='X')
 
                 # Re-roll just the active block (keeping its neighbours) —
                 # otherwise only reachable by right-clicking a timeline strip.
@@ -293,7 +293,7 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
                 # so only surface it when there are blocks to keep.
                 if len(settings.prompt_blocks) >= 2:
                     op = box.operator(
-                        "proscenium.regenerate_block",
+                        "animatica.regenerate_block",
                         icon='FILE_REFRESH',
                         text="Regenerate Active Block",
                     )
@@ -304,20 +304,20 @@ class PROSCENIUM_PT_main(ProsceniumPanelBase, Panel):
 # Constraints panel
 # ═══════════════════════════════════════════════════════════════════════════
 
-class PROSCENIUM_PT_constraints(ProsceniumPanelBase, Panel):
+class ANIMATICA_PT_constraints(AnimaticaPanelBase, Panel):
     bl_label = "Constraints"
-    bl_idname = "PROSCENIUM_PT_constraints"
+    bl_idname = "ANIMATICA_PT_constraints"
     bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
         layout = self.layout
         scene = context.scene
-        settings = scene.proscenium
+        settings = scene.animatica
 
         # Add row
         row = layout.row(align=True)
-        row.operator("proscenium.add_root_path",       icon='OUTLINER_OB_CURVE',  text="Root path")
-        row.operator("proscenium.add_effector_target", icon='EMPTY_SINGLE_ARROW', text="Effector pin")
+        row.operator("animatica.add_root_path",       icon='OUTLINER_OB_CURVE',  text="Root path")
+        row.operator("animatica.add_effector_target", icon='EMPTY_SINGLE_ARROW', text="Effector pin")
 
         found = constraints_ui.walk_scene_constraints(scene)
         root_paths = found["root_paths"]
@@ -333,12 +333,12 @@ class PROSCENIUM_PT_constraints(ProsceniumPanelBase, Panel):
         for obj in root_paths:
             row = layout.row(align=True)
             label = obj.name
-            if obj.get("proscenium_match_direction"):
+            if obj.get("animatica_match_direction"):
                 label += "  ↗"
             row.label(text=label, icon='OUTLINER_OB_CURVE')
-            op = row.operator("proscenium.focus_constraint_object", text="", icon='RESTRICT_SELECT_OFF')
+            op = row.operator("animatica.focus_constraint_object", text="", icon='RESTRICT_SELECT_OFF')
             op.name = obj.name
-            op = row.operator("proscenium.remove_constraint_object", text="", icon='X')
+            op = row.operator("animatica.remove_constraint_object", text="", icon='X')
             op.name = obj.name
 
         # Effector pins
@@ -348,12 +348,12 @@ class PROSCENIUM_PT_constraints(ProsceniumPanelBase, Panel):
             layout.label(text="    (none — add an empty to pin a joint)", icon='INFO')
         for obj in effectors:
             row = layout.row(align=True)
-            joint = obj.get("proscenium_target_joint", "?")
+            joint = obj.get("animatica_target_joint", "?")
             keys  = _count_location_keyframes(obj)
             row.label(text=f"{joint} → {obj.name} ({keys} keys)", icon='EMPTY_SINGLE_ARROW')
-            op = row.operator("proscenium.focus_constraint_object", text="", icon='RESTRICT_SELECT_OFF')
+            op = row.operator("animatica.focus_constraint_object", text="", icon='RESTRICT_SELECT_OFF')
             op.name = obj.name
-            op = row.operator("proscenium.remove_constraint_object", text="", icon='X')
+            op = row.operator("animatica.remove_constraint_object", text="", icon='X')
             op.name = obj.name
 
         # Pose keyframes derived from the source action.
@@ -385,14 +385,14 @@ def _count_location_keyframes(obj: bpy.types.Object) -> int:
 # Settings panel (collapsed by default)
 # ═══════════════════════════════════════════════════════════════════════════
 
-class PROSCENIUM_PT_settings(ProsceniumPanelBase, Panel):
+class ANIMATICA_PT_settings(AnimaticaPanelBase, Panel):
     bl_label = "Settings"
-    bl_idname = "PROSCENIUM_PT_settings"
+    bl_idname = "ANIMATICA_PT_settings"
     bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
         layout = self.layout
-        settings = context.scene.proscenium
+        settings = context.scene.animatica
 
         # Quality
         layout.prop(settings, "quality_preset")
@@ -422,9 +422,9 @@ class PROSCENIUM_PT_settings(ProsceniumPanelBase, Panel):
 # ═══════════════════════════════════════════════════════════════════════════
 
 _classes = (
-    PROSCENIUM_PT_main,
-    PROSCENIUM_PT_constraints,
-    PROSCENIUM_PT_settings,
+    ANIMATICA_PT_main,
+    ANIMATICA_PT_constraints,
+    ANIMATICA_PT_settings,
 )
 
 

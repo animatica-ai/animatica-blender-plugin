@@ -1,8 +1,35 @@
 # Changelog
 
-All notable changes to the Proscenium for Blender addon are documented here.
+All notable changes to the Animatica for Blender addon are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Entries for 0.4.0 and earlier describe the addon under its former name,
+Proscenium, and keep the identifiers those releases actually shipped.
+
+## [Unreleased]
+
+### Changed
+
+- **Renamed from Proscenium to Animatica.** The rename reaches every
+  identifier, not just the labels: the Python package is now
+  `animatica_blender`, operators are `bpy.ops.animatica.*`, scene settings
+  live on `bpy.context.scene.animatica`, panel classes are `ANIMATICA_PT_*`,
+  and the sidebar tab reads **Animatica**.
+
+  **Breaking for external scripts.** Anything calling `bpy.ops.proscenium.*`
+  or reading `scene.proscenium` must be updated; the old names are gone
+  rather than aliased.
+
+  **Existing .blend files keep working.** Blender treats the renamed package
+  as a new addon, so it needs enabling once and its preferences (server,
+  sign-in) re-entered. Scene data is carried forward by a new `migrate.py`,
+  which runs on file load and rewrites the `proscenium_*` custom properties
+  and the old scene-settings block to their new keys. Motion-bake actions
+  and NLA tracks are deliberately *not* renamed — the prefix filters accept
+  the old `Proscenium_` spellings alongside the new ones, so the datablocks
+  users can see in the outliner are left alone and action references by name
+  stay valid.
 
 ## [0.4.0] — 2026-05-31
 

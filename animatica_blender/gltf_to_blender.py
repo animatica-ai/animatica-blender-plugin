@@ -71,7 +71,7 @@ def bake_gltf_to_armature(
     armature_obj: bpy.types.Object,
     *,
     sample_index: int = 0,
-    action_name: str = "Proscenium_Motion",
+    action_name: str = "Animatica_Motion",
     start_frame: int = 1,
     anchor_frames: set[int] | None = None,
 ) -> bpy.types.Action:
@@ -228,7 +228,7 @@ def bake_gltf_to_armature(
 
     if skipped:
         # Caller can decide whether to surface this as a report.
-        new_action["proscenium_skipped_joints"] = sorted(set(skipped))
+        new_action["animatica_skipped_joints"] = sorted(set(skipped))
 
     # If the rig is a Mixamo control rig, hand off to the Mixamo addon's
     # battle-tested "Apply Animation to Control Rig" operator — it knows
@@ -530,7 +530,7 @@ def bake_gltf_to_actions_per_block(
     Returns the new actions in input order. The armature's active action is
     cleared so the caller can NLA-push the strips and let the timeline
     drive playback. Joints that don't exist on the rig are silently
-    skipped (recorded on the first action's ``proscenium_skipped_joints``
+    skipped (recorded on the first action's ``animatica_skipped_joints``
     custom prop for the operator to surface).
 
     Control-rig handling is intentionally NOT applied here — this slice
@@ -750,7 +750,7 @@ def bake_gltf_to_actions_per_block(
         actions.append(action)
 
     if skipped and actions:
-        actions[0]["proscenium_skipped_joints"] = sorted(set(skipped))
+        actions[0]["animatica_skipped_joints"] = sorted(set(skipped))
 
     # We never touched ``animation_data.action`` (we wrote fcurves directly
     # via the layered-Action API), so there's nothing to clear here. The
@@ -966,7 +966,7 @@ def _desired_pose_matrix(armature_obj, ctrl_pb, spec) -> Matrix:
     return ctrl_pb.matrix.copy()
 
 
-_TEMP_TAG = "_proscenium_bake_"
+_TEMP_TAG = "_animatica_bake_"
 
 
 def _detect_control_rig_kind(armature_obj: bpy.types.Object) -> str | None:
@@ -1054,7 +1054,7 @@ def _bake_via_metarig_detour(
             new_fc.update()
             copied += 1
 
-    print(f"[proscenium] metarig detour: copied {copied} DEF-* fcurves to bare-name targets")
+    print(f"[animatica] metarig detour: copied {copied} DEF-* fcurves to bare-name targets")
 
     try:
         baked = rigify_bake.apply_anim_to_rigify(
@@ -1063,9 +1063,9 @@ def _bake_via_metarig_detour(
             frame_start=int(frame_start),
             frame_end=int(frame_end),
         )
-        print(f"[proscenium] baked rigify control bones (via metarig): {baked}")
+        print(f"[animatica] baked rigify control bones (via metarig): {baked}")
     except Exception as exc:  # noqa: BLE001
-        print(f"[proscenium] metarig-detour bake failed: {exc}")
+        print(f"[animatica] metarig-detour bake failed: {exc}")
         import traceback
         traceback.print_exc()
     finally:
@@ -1110,7 +1110,7 @@ def _bake_to_control_rig(
     """
     kind = _detect_control_rig_kind(armature_obj)
     if kind is None:
-        print("[proscenium] target armature is not a recognized control rig "
+        print("[animatica] target armature is not a recognized control rig "
               "(no mr_control_rig or rig_id marker) — leaving DEF-bone keys")
         return
 
@@ -1154,8 +1154,8 @@ def _bake_to_control_rig(
         bpy.context.view_layer.objects.active = armature_obj
         bpy.ops.object.duplicate(linked=False)
         src_arm = bpy.context.view_layer.objects.active
-        src_arm.name = f"{armature_obj.name}_proscenium_src"
-        src_arm["proscenium_temp_source"] = True
+        src_arm.name = f"{armature_obj.name}_animatica_src"
+        src_arm["animatica_temp_source"] = True
 
         # 2. Strip non-DEF bones from the source.
         #
@@ -1265,9 +1265,9 @@ def _bake_to_control_rig(
                 frame_start=int(frame_start),
                 frame_end=int(frame_end),
             )
-        print(f"[proscenium] baked {kind} control bones: {baked}")
+        print(f"[animatica] baked {kind} control bones: {baked}")
     except Exception as exc:  # noqa: BLE001 — best-effort delegate
-        print(f"[proscenium] control-rig bake failed: {exc}")
+        print(f"[animatica] control-rig bake failed: {exc}")
         import traceback
         traceback.print_exc()
     finally:
@@ -1275,7 +1275,7 @@ def _bake_to_control_rig(
         # tagged with ``mix_to_del`` for parity with the addon).
         for o in list(bpy.data.objects):
             try:
-                if o.get("mix_to_del") or o.get("proscenium_temp_source"):
+                if o.get("mix_to_del") or o.get("animatica_temp_source"):
                     bpy.data.objects.remove(o, do_unlink=True)
             except Exception:
                 pass
@@ -1707,7 +1707,7 @@ def bake_single_pose(
     if armature_obj.animation_data is None:
         armature_obj.animation_data_create()
     if armature_obj.animation_data.action is None:
-        armature_obj.animation_data.action = bpy.data.actions.new("Proscenium_Pose")
+        armature_obj.animation_data.action = bpy.data.actions.new("Animatica_Pose")
 
     pose = armature_obj.pose
     for pb in pose.bones:

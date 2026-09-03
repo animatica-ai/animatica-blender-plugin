@@ -1,6 +1,6 @@
 # Tips & limits
 
-Things that are useful to know up front — not bugs, just how Proscenium works today.
+Things that are useful to know up front — not bugs, just how Animatica works today.
 
 ## Your character vs. the reference skeleton
 

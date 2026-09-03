@@ -214,8 +214,8 @@ def _build_pairs(
 # Helper bone construction + constraint setup
 # ---------------------------------------------------------------------------
 
-_HELPER_PREFIX = "_proscenium_rigify_helper__"
-_CONSTRAINT_TAG = "_proscenium_rigify_retarget"
+_HELPER_PREFIX = "_animatica_rigify_helper__"
+_CONSTRAINT_TAG = "_animatica_rigify_retarget"
 
 
 def _add_helpers_on_source(
@@ -469,8 +469,8 @@ def apply_anim_to_rigify(
     # creates so its cleanup loop can sweep it up). When the caller passes
     # a user-owned source — e.g. a Rigify metarig that should persist —
     # don't touch the marker. Detection: a temp-duplicate source carries
-    # ``proscenium_temp_source`` from the ``_bake_to_control_rig`` setup.
-    if src_arm.get("proscenium_temp_source"):
+    # ``animatica_temp_source`` from the ``_bake_to_control_rig`` setup.
+    if src_arm.get("animatica_temp_source"):
         src_arm["mix_to_del"] = True
 
     # Enable pole-vector IK on every limb. Default Rigify rigs ship with
@@ -492,7 +492,7 @@ def apply_anim_to_rigify(
     rotation_pairs, translation_pairs = _build_pairs(tar_arm, src_arm)
 
     if not rotation_pairs and not translation_pairs:
-        print("[proscenium] rigify_bake: no matching control bones found — "
+        print("[animatica] rigify_bake: no matching control bones found — "
               "is this a standard Rigify human metarig?")
         return 0
 

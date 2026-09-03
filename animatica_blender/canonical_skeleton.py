@@ -46,8 +46,8 @@ LEAF_TAIL_LENGTH = 0.05   # metres, +Y in MMCP frame (= +Z in Blender)
 # Operator
 # ---------------------------------------------------------------------------
 
-class PROSCENIUM_OT_import_canonical_skeleton(bpy.types.Operator):
-    bl_idname = "proscenium.import_canonical_skeleton"
+class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
+    bl_idname = "animatica.import_canonical_skeleton"
     bl_label = "Import Canonical Skeleton"
     bl_description = (
         "Build a Blender armature from the selected MMCP model's "
@@ -68,11 +68,11 @@ class PROSCENIUM_OT_import_canonical_skeleton(bpy.types.Operator):
     )
 
     def execute(self, context):
-        settings = context.scene.proscenium
+        settings = context.scene.animatica
         model_id = settings.model_id
 
         if not model_id:
-            self.report({'ERROR'}, "Pick a model first (Proscenium panel → Connect, then choose a Model)")
+            self.report({'ERROR'}, "Pick a model first (Animatica panel → Connect, then choose a Model)")
             return {'CANCELLED'}
 
         model = mmcp_client.cached_model(model_id)
@@ -241,6 +241,6 @@ def build_armature_from_canonical(
 
     # Stash the model id on the armature so the rest of the addon can verify
     # the rig matches the server's canonical skeleton without name-matching.
-    arm_obj["proscenium_canonical_model"] = model_id
+    arm_obj["animatica_canonical_model"] = model_id
 
     return arm_obj, floor_lift

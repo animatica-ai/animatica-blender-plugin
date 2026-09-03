@@ -1,4 +1,4 @@
-"""Blender property definitions for Proscenium addon state."""
+"""Blender property definitions for Animatica addon state."""
 
 import json
 
@@ -21,8 +21,8 @@ from bpy.types import AddonPreferences, PropertyGroup
 # Per-armature prompt-block persistence
 # ---------------------------------------------------------------------------
 
-_BLOCKS_KEY = "proscenium_prompt_blocks"
-_ACTIVE_KEY = "proscenium_active_block_index"
+_BLOCKS_KEY = "animatica_prompt_blocks"
+_ACTIVE_KEY = "animatica_active_block_index"
 
 
 def _serialize_blocks(blocks) -> str:
@@ -158,7 +158,7 @@ def _live_armature(obj):
     return obj if _is_live_armature(obj) else None
 
 
-def _redraw_proscenium_editors() -> None:
+def _redraw_animatica_editors() -> None:
     """Tag every editor so the picker and timeline reflect the new state.
 
     Tagging only ``VIEW_3D`` / ``DOPESHEET_EDITOR`` is enough in theory, but
@@ -194,7 +194,7 @@ def schedule_target_reset(scene_name: str) -> None:
             sc = bpy.data.scenes.get(scene_name)
             if sc is None:
                 return None
-            settings = getattr(sc, "proscenium", None)
+            settings = getattr(sc, "animatica", None)
             if settings is None:
                 return None
             if _scene_needs_target_reset(settings):
@@ -233,7 +233,7 @@ def reset_target_armature_state(settings) -> None:
         settings.active_block_index = 0
     finally:
         _in_target_reset = False
-    _redraw_proscenium_editors()
+    _redraw_animatica_editors()
 
 
 def _target_armature_update(self, context):
@@ -249,7 +249,7 @@ def _target_armature_update(self, context):
     if _in_target_reset:
         return
 
-    settings = context.scene.proscenium
+    settings = context.scene.animatica
     new_arm = _live_armature(settings.target_armature)
     old_arm = _live_armature(settings.previous_target_armature)
 
@@ -273,7 +273,7 @@ def _target_armature_update(self, context):
 
     load_blocks_from_armature(new_arm, settings)
     settings.previous_target_armature = new_arm
-    _redraw_proscenium_editors()
+    _redraw_animatica_editors()
 
 
 def _inplace_update(self, context):
@@ -365,10 +365,10 @@ class PromptBlock(PropertyGroup):
 CLOUD_API_URL = "https://api.animatica.ai"
 
 
-class ProsceniumAddonPreferences(AddonPreferences):
-    """Addon-level preferences — edit in ``Edit > Preferences > Add-ons > Proscenium``."""
+class AnimaticaAddonPreferences(AddonPreferences):
+    """Addon-level preferences — edit in ``Edit > Preferences > Add-ons > Animatica``."""
 
-    bl_idname = __package__  # "proscenium_blender"
+    bl_idname = __package__  # "animatica_blender"
 
     self_hosted: BoolProperty(
         name="Self-hosted",
@@ -442,12 +442,12 @@ class ProsceniumAddonPreferences(AddonPreferences):
                     box.label(text=line)
             else:
                 box.label(text="Not connected", icon='UNLINKED')
-            box.operator("proscenium.connect", icon='URL', text="Connect")
+            box.operator("animatica.connect", icon='URL', text="Connect")
         else:
             n_models = len(caps.get("models", []))
             row = box.row()
             row.label(text=f"Connected — {n_models} model(s)", icon='LINKED')
-            row.operator("proscenium.connect", icon='FILE_REFRESH', text="Reconnect")
+            row.operator("animatica.connect", icon='FILE_REFRESH', text="Reconnect")
 
             proto = caps.get("protocol_version", "?")
             box.label(text=f"MMCP {proto} · {caps.get('coordinate_system', '?')} · {caps.get('units', '?')}")
@@ -491,11 +491,11 @@ class ProsceniumAddonPreferences(AddonPreferences):
             if self.tier:
                 row.label(text=f"({self.tier})")
             row = box.row()
-            row.operator("proscenium.signout", icon='X', text="Sign out")
+            row.operator("animatica.signout", icon='X', text="Sign out")
         else:
             box = layout.box()
             box.label(text="Animatica Cloud — sign in", icon='USER')
-            box.operator("proscenium.signin", icon='IMPORT', text="Sign in")
+            box.operator("animatica.signin", icon='IMPORT', text="Sign in")
 
 
 def _model_id_items(self, context):
@@ -504,7 +504,7 @@ def _model_id_items(self, context):
     return mmcp_client.cached_model_items()
 
 
-class ProsceniumSettings(PropertyGroup):
+class AnimaticaSettings(PropertyGroup):
     """Scene-level addon state."""
 
     # -- MMCP server connection --
@@ -703,7 +703,7 @@ class ProsceniumSettings(PropertyGroup):
     )
 
     # -- Preview state: name of the user's source action while a
-    #    Proscenium_Motion (or legacy Proscenium_Generated) action is
+    #    Animatica_Motion (or legacy Animatica_Generated) action is
     #    being previewed.  Empty when free-form generation runs (no
     #    source to fall back to) — the ``is_previewing`` flag tracks
     #    preview state independently for that case.
@@ -716,7 +716,7 @@ class ProsceniumSettings(PropertyGroup):
         name="Previewing",
         default=False,
         description=(
-            "Set true while a Proscenium-generated motion is being "
+            "Set true while a Animatica-generated motion is being "
             "reviewed (Push to NLA / Reject visible). Independent of "
             "source_action_name so free-form generations — where "
             "there's no prior action to restore — also surface the "
@@ -773,7 +773,7 @@ def _validate_target_armature_on_depsgraph(_scene, _depsgraph) -> None:
     is idempotent so the cost when nothing changed is a few attribute
     reads per scene."""
     for scene in bpy.data.scenes:
-        s = getattr(scene, "proscenium", None)
+        s = getattr(scene, "animatica", None)
         if s is None:
             continue
         if _scene_needs_target_reset(s):
@@ -785,9 +785,9 @@ def _validate_target_armature_on_depsgraph(_scene, _depsgraph) -> None:
 # ---------------------------------------------------------------------------
 
 _classes = (
-    ProsceniumAddonPreferences,
+    AnimaticaAddonPreferences,
     PromptBlock,
-    ProsceniumSettings,
+    AnimaticaSettings,
 )
 
 _DEPSGRAPH_HANDLER_NAME = "_validate_target_armature_on_depsgraph"
@@ -796,7 +796,7 @@ _DEPSGRAPH_HANDLER_NAME = "_validate_target_armature_on_depsgraph"
 def register():
     for cls in _classes:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.proscenium = PointerProperty(type=ProsceniumSettings)
+    bpy.types.Scene.animatica = PointerProperty(type=AnimaticaSettings)
     _purge_stale_depsgraph_handlers(
         bpy.app.handlers.depsgraph_update_post, _DEPSGRAPH_HANDLER_NAME,
     )
@@ -809,6 +809,6 @@ def unregister():
     _purge_stale_depsgraph_handlers(
         bpy.app.handlers.depsgraph_update_post, _DEPSGRAPH_HANDLER_NAME,
     )
-    del bpy.types.Scene.proscenium
+    del bpy.types.Scene.animatica
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)

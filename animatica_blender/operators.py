@@ -1,12 +1,12 @@
-"""Blender operators for the Proscenium addon (MMCP client side).
+"""Blender operators for the Animatica addon (MMCP client side).
 
 Operators:
-    proscenium.connect           — fetch /capabilities, populate model picker
-    proscenium.generate          — build request, POST /generate, bake response
-    proscenium.generate_pose     — single-frame variant (defined in step 8)
-    proscenium.accept            — keep the generated motion, release source
-    proscenium.reject            — strip generated samples from the preview action
-    proscenium.cancel            — request cancellation of an in-flight gen
+    animatica.connect           — fetch /capabilities, populate model picker
+    animatica.generate          — build request, POST /generate, bake response
+    animatica.generate_pose     — single-frame variant (defined in step 8)
+    animatica.accept            — keep the generated motion, release source
+    animatica.reject            — strip generated samples from the preview action
+    animatica.cancel            — request cancellation of an in-flight gen
 
 The generate operator is modal: a worker thread does the blocking POST while
 a 0.1 s event-timer keeps the UI responsive. There is no SSE in MMCP v1, so
@@ -51,7 +51,7 @@ def _live_target_armature_or_clear(settings):
 
 
 def _is_motion_bake_action(action) -> bool:
-    """True for Proscenium motion-bake actions (preview or committed)."""
+    """True for Animatica motion-bake actions (preview or committed)."""
     return (
         action is not None
         and action.name.startswith(request_builder._GENERATED_ACTION_PREFIXES)
@@ -91,16 +91,21 @@ def _build_regen_request_action(
     return scratch, [preview_work]
 
 
-MOTION_ACTION_PREFIX = "Proscenium_Motion"
-POSE_ACTION_NAME     = "Proscenium_Pose"
+MOTION_ACTION_PREFIX = "Animatica_Motion"
+POSE_ACTION_NAME     = "Animatica_Pose"
 
 # Kept for back-compat with action references in older scenes — older bakes
-# wrote to ``Proscenium_Generated``; the prefix filter (``Proscenium_``) in
-# request_builder catches both old and new naming.
+# wrote to ``Proscenium_Generated``, and pre-rename bakes to
+# ``Proscenium_Motion``; the prefix tuple in request_builder catches every
+# generation of the naming.
 GENERATED_ACTION_NAME = MOTION_ACTION_PREFIX
 
 
-_NLA_TRACK_PREFIX = "Proscenium: "
+_NLA_TRACK_PREFIX = "Animatica: "
+# Tracks written before the Proscenium -> Animatica rename carry the old
+# prefix. Match on the tuple so Reject and re-bake still find them in files
+# saved by earlier versions; new tracks are always written with the new one.
+_NLA_TRACK_PREFIXES = (_NLA_TRACK_PREFIX, "Proscenium: ")
 
 
 def _action_name_for_prompt(prompt: str) -> str:
@@ -174,7 +179,7 @@ def _block_ranges_for_split(prompt_blocks, gen_start: int, gen_end: int):
 
 def _push_actions_to_nla(armature_obj, actions) -> None:
     """Place every per-block action on a SINGLE shared NLA track named
-    ``Proscenium: Motion``, in start-frame order.
+    ``Animatica: Motion``, in start-frame order.
 
     Strips share one track (instead of one track per strip) so playback is
     sequential: one block ends, the next plays. Putting each strip on its
@@ -183,7 +188,7 @@ def _push_actions_to_nla(armature_obj, actions) -> None:
     Half-gap expansion in ``_block_ranges_for_split`` guarantees the strips
     don't overlap on the shared track.
 
-    Wipes any prior ``Proscenium: ``-prefixed tracks first so a regenerate
+    Wipes any prior ``Animatica: ``-prefixed tracks first so a regenerate
     doesn't pile up duplicates.
     """
     if armature_obj.animation_data is None:
@@ -191,7 +196,7 @@ def _push_actions_to_nla(armature_obj, actions) -> None:
     nla = armature_obj.animation_data.nla_tracks
 
     for track in list(nla):
-        if track.name.startswith(_NLA_TRACK_PREFIX):
+        if track.name.startswith(_NLA_TRACK_PREFIXES):
             nla.remove(track)
 
     if not actions:
@@ -226,13 +231,13 @@ def _push_actions_to_nla(armature_obj, actions) -> None:
         strip.blend_out = 0.0
 
 
-def _clear_proscenium_nla_tracks(armature_obj) -> None:
+def _clear_animatica_nla_tracks(armature_obj) -> None:
     """Remove every NLA track the addon owns. Called from Reject."""
     if armature_obj is None or armature_obj.animation_data is None:
         return
     nla = armature_obj.animation_data.nla_tracks
     for track in list(nla):
-        if track.name.startswith(_NLA_TRACK_PREFIX):
+        if track.name.startswith(_NLA_TRACK_PREFIXES):
             nla.remove(track)
 
 
@@ -249,7 +254,7 @@ def _root_location_data_path(armature_obj) -> str | None:
     return f'pose.bones["{root_bone.name}"].location'
 
 
-def _proscenium_motion_actions() -> list:
+def _animatica_motion_actions() -> list:
     """Every motion-bake action the addon owns (current and legacy names)."""
     return [
         a for a in bpy.data.actions
@@ -257,7 +262,7 @@ def _proscenium_motion_actions() -> list:
     ]
 
 
-_INPLACE_CONSTRAINT_NAME = "Proscenium_InPlace"
+_INPLACE_CONSTRAINT_NAME = "Animatica_InPlace"
 
 
 def _apply_inplace_constraint(armature_obj, enabled: bool) -> None:
@@ -423,7 +428,7 @@ def _tick_generation_elapsed(context, start_time: float) -> None:
     second changes, and tags just the 3D-View UI regions, so the overhead is
     one redraw per second rather than one per 0.1 s timer tick.
     """
-    s = getattr(context.scene, "proscenium", None)
+    s = getattr(context.scene, "animatica", None)
     if s is None:
         return
     elapsed = int(time.time() - start_time)
@@ -442,8 +447,8 @@ def _tick_generation_elapsed(context, start_time: float) -> None:
 # Connect
 # ═══════════════════════════════════════════════════════════════════════════
 
-class PROSCENIUM_OT_connect(Operator):
-    bl_idname = "proscenium.connect"
+class ANIMATICA_OT_connect(Operator):
+    bl_idname = "animatica.connect"
     bl_label = "Connect"
     bl_description = (
         "Fetch GET /capabilities from the configured MMCP server. "
@@ -467,7 +472,7 @@ class PROSCENIUM_OT_connect(Operator):
         mmcp_client.store_capabilities(caps)
         models = [m.get("id") for m in caps.get("models", [])]
 
-        settings = context.scene.proscenium
+        settings = context.scene.animatica
         if settings.model_id not in models and models:
             try:
                 settings.model_id = models[0]
@@ -485,8 +490,8 @@ class PROSCENIUM_OT_connect(Operator):
 # Generate
 # ═══════════════════════════════════════════════════════════════════════════
 
-class PROSCENIUM_OT_generate(Operator):
-    bl_idname = "proscenium.generate"
+class ANIMATICA_OT_generate(Operator):
+    bl_idname = "animatica.generate"
     bl_label = "Generate Motion"
     bl_description = (
         "Build an MMCP request from the current scene (segments + constraints), "
@@ -504,7 +509,7 @@ class PROSCENIUM_OT_generate(Operator):
     _start_time: float = 0.0
 
     def execute(self, context):
-        settings = context.scene.proscenium
+        settings = context.scene.animatica
 
         if settings.is_generating:
             self.report({'WARNING'}, "Already generating — wait or click Cancel")
@@ -520,7 +525,7 @@ class PROSCENIUM_OT_generate(Operator):
 
         model_caps = mmcp_client.cached_model(settings.model_id)
         if model_caps is None:
-            self.report({'ERROR'}, "Connect to the server first (Proscenium panel → Connect)")
+            self.report({'ERROR'}, "Connect to the server first (Animatica panel → Connect)")
             return {'CANCELLED'}
 
         # Regenerate path: build the request from a scratch merge of preview
@@ -611,7 +616,7 @@ class PROSCENIUM_OT_generate(Operator):
             else None
         )
         # Only motion-bake output is excluded — pose-generator output
-        # (``Proscenium_Pose`` / legacy ``Proscenium_Poses``) is the user's
+        # (``Animatica_Pose`` / legacy ``Animatica_Poses``) is the user's
         # authored content (they chose to keep those poses as anchors), so
         # those keyframes should stay typed as ``KEYFRAME`` after the bake.
         if src_action is not None and not _is_motion_bake_action(src_action):
@@ -652,7 +657,7 @@ class PROSCENIUM_OT_generate(Operator):
 
     # ----- modal -----------------------------------------------------------
     def modal(self, context, event):
-        settings = context.scene.proscenium
+        settings = context.scene.animatica
 
         if event.type == 'ESC' or settings.cancel_requested:
             self._cleanup(context)
@@ -669,7 +674,7 @@ class PROSCENIUM_OT_generate(Operator):
         # Worker finished.
         if self._error is not None:
             self._cleanup(context)
-            _stash_quota_state(context.scene.proscenium, self._error)
+            _stash_quota_state(context.scene.animatica, self._error)
             self.report({'ERROR'}, f"Generation failed: {self._error}")
             return {'CANCELLED'}
 
@@ -679,7 +684,7 @@ class PROSCENIUM_OT_generate(Operator):
             return {'CANCELLED'}
 
         # Successful run — clear any stale quota banner.
-        _clear_quota_state(context.scene.proscenium)
+        _clear_quota_state(context.scene.animatica)
 
         arm = _live_target_armature_or_clear(settings)
         if arm is None:
@@ -736,7 +741,7 @@ class PROSCENIUM_OT_generate(Operator):
                 anchor_frames=getattr(self, "_anchor_frames", None),
             )
             n_actions = 1
-            skipped = list(action.get("proscenium_skipped_joints") or [])
+            skipped = list(action.get("animatica_skipped_joints") or [])
 
             # Fold preview-time edits onto the real source now that the bake
             # succeeded — deferred from execute so a failed POST/bake cannot
@@ -769,15 +774,15 @@ class PROSCENIUM_OT_generate(Operator):
                 # encode into a string custom prop instead — survives save/
                 # reload, decodes cheaply on Accept.
                 import json as _json
-                arm["proscenium_pending_block_ranges"] = _json.dumps([
+                arm["animatica_pending_block_ranges"] = _json.dumps([
                     [int(fs), int(fe), str(name)] for fs, fe, name in block_ranges
                 ])
             else:
                 # Single-block / control-rig path: drop any stale stash
                 # from a prior multi-block preview that the user is
                 # overwriting in place.
-                if "proscenium_pending_block_ranges" in arm:
-                    del arm["proscenium_pending_block_ranges"]
+                if "animatica_pending_block_ranges" in arm:
+                    del arm["animatica_pending_block_ranges"]
         except Exception as exc:                         # noqa: BLE001 — surfaced to UI
             self._cleanup(context)
             self.report({'ERROR'}, f"Bake failed: {exc}")
@@ -816,7 +821,7 @@ class PROSCENIUM_OT_generate(Operator):
         # its default ``False`` and we drop the source reference here —
         # without this, a failed worker (e.g. a quota-exceeded 429) would
         # surface the preview UI even though no motion was baked.
-        s = context.scene.proscenium
+        s = context.scene.animatica
         arm = _live_target_armature_or_clear(s)
 
         regen_preview = self._regen_preview
@@ -862,8 +867,8 @@ class PROSCENIUM_OT_generate(Operator):
 # Cancel
 # ═══════════════════════════════════════════════════════════════════════════
 
-class PROSCENIUM_OT_cancel_generation(Operator):
-    bl_idname = "proscenium.cancel"
+class ANIMATICA_OT_cancel_generation(Operator):
+    bl_idname = "animatica.cancel"
     bl_label = "Cancel"
     bl_description = (
         "Stop waiting on the in-flight generation. The HTTP request continues "
@@ -871,7 +876,7 @@ class PROSCENIUM_OT_cancel_generation(Operator):
     )
 
     def execute(self, context):
-        s = context.scene.proscenium
+        s = context.scene.animatica
         if not s.is_generating:
             return {'CANCELLED'}
         s.cancel_requested = True
@@ -882,25 +887,25 @@ class PROSCENIUM_OT_cancel_generation(Operator):
 # Preview: Accept / Reject
 # ═══════════════════════════════════════════════════════════════════════════
 
-class PROSCENIUM_OT_accept(Operator):
-    bl_idname = "proscenium.accept"
+class ANIMATICA_OT_accept(Operator):
+    bl_idname = "animatica.accept"
     bl_label = "Push to NLA"
     bl_description = (
         "Commit the generated motion to the NLA stack. The preview action "
         "(single-block) or its per-block split (multi-block) is placed on a "
-        "single shared NLA track named 'Proscenium: Motion'. The active "
+        "single shared NLA track named 'Animatica: Motion'. The active "
         "action is cleared so NLA drives playback, and the source-action "
         "reference is released"
     )
 
     def execute(self, context):
-        s = context.scene.proscenium
+        s = context.scene.animatica
         arm = _live_target_armature_or_clear(s)
         n_pushed = 0
 
         if arm is not None:
             import json as _json
-            pending_raw = arm.get("proscenium_pending_block_ranges")
+            pending_raw = arm.get("animatica_pending_block_ranges")
             try:
                 pending = _json.loads(pending_raw) if pending_raw else []
             except (TypeError, ValueError):
@@ -958,8 +963,8 @@ class PROSCENIUM_OT_accept(Operator):
             # (either we baked the in-place state or the toggle was off).
             _apply_inplace_constraint(arm, enabled=False)
 
-            if "proscenium_pending_block_ranges" in arm:
-                del arm["proscenium_pending_block_ranges"]
+            if "animatica_pending_block_ranges" in arm:
+                del arm["animatica_pending_block_ranges"]
 
         s.source_action_name = ""
         s.is_previewing = False
@@ -967,15 +972,15 @@ class PROSCENIUM_OT_accept(Operator):
             label = "strip" if n_pushed == 1 else "strips"
             self.report(
                 {'INFO'},
-                f"Pushed {n_pushed} {label} to NLA track 'Proscenium: Motion'",
+                f"Pushed {n_pushed} {label} to NLA track 'Animatica: Motion'",
             )
         else:
             self.report({'INFO'}, "Generated motion pushed to NLA")
         return {'FINISHED'}
 
 
-class PROSCENIUM_OT_reject(Operator):
-    bl_idname = "proscenium.reject"
+class ANIMATICA_OT_reject(Operator):
+    bl_idname = "animatica.reject"
     bl_label = "Reject"
     bl_description = (
         "Drop the generated motion samples while keeping authored keyframes "
@@ -985,7 +990,7 @@ class PROSCENIUM_OT_reject(Operator):
     )
 
     def execute(self, context):
-        s   = context.scene.proscenium
+        s   = context.scene.animatica
         arm = _live_target_armature_or_clear(s)
         if arm is None:
             self.report(
@@ -1015,14 +1020,14 @@ class PROSCENIUM_OT_reject(Operator):
         # Defensive: if the user manually assembled per-block actions onto
         # NLA, strip our tracks before reassigning so they don't keep
         # playing on top of the restored / cleaned action.
-        _clear_proscenium_nla_tracks(arm)
+        _clear_animatica_nla_tracks(arm)
 
         # Drop any in-place constraint left over from preview state.
         _apply_inplace_constraint(arm, enabled=False)
 
         # Pending-block-ranges stash is only meaningful for Accept.
-        if "proscenium_pending_block_ranges" in arm:
-            del arm["proscenium_pending_block_ranges"]
+        if "animatica_pending_block_ranges" in arm:
+            del arm["animatica_pending_block_ranges"]
 
         n_rm = 0
         if is_motion_preview:
@@ -1073,8 +1078,8 @@ class PROSCENIUM_OT_reject(Operator):
 # Pose generator (single keyframe at current frame, additive)
 # ═══════════════════════════════════════════════════════════════════════════
 
-class PROSCENIUM_OT_generate_pose(Operator):
-    bl_idname = "proscenium.generate_pose"
+class ANIMATICA_OT_generate_pose(Operator):
+    bl_idname = "animatica.generate_pose"
     bl_label = "Generate Pose at Current Frame"
     bl_description = (
         "Generate a single pose from text and insert it as a keyframe at the "
@@ -1141,7 +1146,7 @@ class PROSCENIUM_OT_generate_pose(Operator):
     def poll(cls, context):
         # Hide the operator entirely when the connected model doesn't claim
         # 'pose' segment support — text-to-pose is a cloud-only capability.
-        s = context.scene.proscenium
+        s = context.scene.animatica
         model_caps = mmcp_client.cached_model(s.model_id) if s.model_id else None
         if model_caps is None:
             return False
@@ -1149,7 +1154,7 @@ class PROSCENIUM_OT_generate_pose(Operator):
 
     # ----- UI --------------------------------------------------------------
     def invoke(self, context, event):
-        s = context.scene.proscenium
+        s = context.scene.animatica
         # Pre-fill from the most recent pose prompt the user submitted in
         # this scene; falls back to the property's default on first use.
         last = getattr(s, "last_pose_prompt", "")
@@ -1171,14 +1176,14 @@ class PROSCENIUM_OT_generate_pose(Operator):
         layout.prop(self, "prompt")
         row = layout.row(align=True)
         row.prop(self, "seed")
-        row.operator("proscenium.randomize_pose_seed", text="", icon='FILE_REFRESH')
+        row.operator("animatica.randomize_pose_seed", text="", icon='FILE_REFRESH')
         layout.prop(self, "preserve_height")
         layout.prop(self, "pose_apply_scope")
         layout.label(text=f"Insert keyframe at frame {context.scene.frame_current}")
 
     # ----- entry -----------------------------------------------------------
     def execute(self, context):
-        s = context.scene.proscenium
+        s = context.scene.animatica
         if s.is_generating:
             self.report({'WARNING'}, "Already generating — wait or click Cancel")
             return {'CANCELLED'}
@@ -1289,7 +1294,7 @@ class PROSCENIUM_OT_generate_pose(Operator):
 
     # ----- modal -----------------------------------------------------------
     def modal(self, context, event):
-        s = context.scene.proscenium
+        s = context.scene.animatica
 
         if event.type == 'ESC' or s.cancel_requested:
             self._cleanup(context)
@@ -1305,7 +1310,7 @@ class PROSCENIUM_OT_generate_pose(Operator):
 
         if self._error is not None:
             self._cleanup(context)
-            _stash_quota_state(context.scene.proscenium, self._error)
+            _stash_quota_state(context.scene.animatica, self._error)
             self.report({'ERROR'}, f"Pose generation failed: {self._error}")
             return {'CANCELLED'}
 
@@ -1315,7 +1320,7 @@ class PROSCENIUM_OT_generate_pose(Operator):
             return {'CANCELLED'}
 
         # Successful run — clear any stale quota banner.
-        _clear_quota_state(context.scene.proscenium)
+        _clear_quota_state(context.scene.animatica)
 
         arm = _live_target_armature_or_clear(s)
         if arm is None:
@@ -1372,7 +1377,7 @@ class PROSCENIUM_OT_generate_pose(Operator):
             except Exception:
                 pass
             self._timer = None
-        s = context.scene.proscenium
+        s = context.scene.animatica
         s.is_generating = False
         s.cancel_requested = False
 
@@ -1385,8 +1390,8 @@ class PROSCENIUM_OT_generate_pose(Operator):
 # /generate consumes the Bearer token; self-hosted servers ignore it.
 # These operators only matter when the user is pointing at the cloud.
 
-class PROSCENIUM_OT_signin(Operator):
-    bl_idname = "proscenium.signin"
+class ANIMATICA_OT_signin(Operator):
+    bl_idname = "animatica.signin"
     bl_label = "Sign in to Animatica"
     bl_description = (
         "Exchange email + password for an Animatica session token. Only "
@@ -1422,8 +1427,8 @@ class PROSCENIUM_OT_signin(Operator):
         return {'FINISHED'}
 
 
-class PROSCENIUM_OT_signout(Operator):
-    bl_idname = "proscenium.signout"
+class ANIMATICA_OT_signout(Operator):
+    bl_idname = "animatica.signout"
     bl_label = "Sign out"
     bl_description = "Forget the cached Animatica session tokens"
 
@@ -1437,13 +1442,13 @@ class PROSCENIUM_OT_signout(Operator):
 # Quota / upgrade
 # ═══════════════════════════════════════════════════════════════════════════
 
-class PROSCENIUM_OT_open_upgrade(Operator):
-    bl_idname = "proscenium.open_upgrade"
+class ANIMATICA_OT_open_upgrade(Operator):
+    bl_idname = "animatica.open_upgrade"
     bl_label = "Upgrade"
     bl_description = "Open the upgrade URL in your browser"
 
     def execute(self, context):
-        url = (context.scene.proscenium.quota_upgrade_url or "").strip()
+        url = (context.scene.animatica.quota_upgrade_url or "").strip()
         if not url:
             self.report({'ERROR'}, "No upgrade URL available")
             return {'CANCELLED'}
@@ -1454,8 +1459,8 @@ class PROSCENIUM_OT_open_upgrade(Operator):
 DISCORD_HELP_URL = "https://discord.com/invite/A8CrURBewz"
 
 
-class PROSCENIUM_OT_open_discord_help(Operator):
-    bl_idname = "proscenium.open_discord_help"
+class ANIMATICA_OT_open_discord_help(Operator):
+    bl_idname = "animatica.open_discord_help"
     bl_label = "Need help?"
     bl_description = "Open the Animatica Discord — questions, feedback, and help from the team"
 
@@ -1464,18 +1469,18 @@ class PROSCENIUM_OT_open_discord_help(Operator):
         return {'FINISHED'}
 
 
-class PROSCENIUM_OT_dismiss_quota(Operator):
-    bl_idname = "proscenium.dismiss_quota"
+class ANIMATICA_OT_dismiss_quota(Operator):
+    bl_idname = "animatica.dismiss_quota"
     bl_label = "Dismiss"
     bl_description = "Hide the quota-exceeded banner"
 
     def execute(self, context):
-        _clear_quota_state(context.scene.proscenium)
+        _clear_quota_state(context.scene.animatica)
         return {'FINISHED'}
 
 
-class PROSCENIUM_OT_randomize_seed(Operator):
-    bl_idname = "proscenium.randomize_seed"
+class ANIMATICA_OT_randomize_seed(Operator):
+    bl_idname = "animatica.randomize_seed"
     bl_label = "Randomize Seed"
     bl_description = "Pick a new random seed for the next generation"
     bl_options = {'REGISTER', 'UNDO'}
@@ -1483,12 +1488,12 @@ class PROSCENIUM_OT_randomize_seed(Operator):
     def execute(self, context):
         # Avoid 0 — that's the "let the server pick" sentinel, which would
         # defeat the point of choosing a specific seed to reproduce later.
-        context.scene.proscenium.seed = random.randint(1, 999999)
+        context.scene.animatica.seed = random.randint(1, 999999)
         return {'FINISHED'}
 
 
-class PROSCENIUM_OT_lock_global_seed(Operator):
-    bl_idname = "proscenium.lock_global_seed"
+class ANIMATICA_OT_lock_global_seed(Operator):
+    bl_idname = "animatica.lock_global_seed"
     bl_label = "Lock Seed"
     bl_description = (
         "Copy the seed the last generation actually ran with into Seed, so the "
@@ -1497,7 +1502,7 @@ class PROSCENIUM_OT_lock_global_seed(Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        s = context.scene.proscenium
+        s = context.scene.animatica
         last = int(getattr(s, "last_used_seed", 0) or 0)
         if last <= 0:
             self.report({'WARNING'}, "No recorded seed yet — generate once first")
@@ -1507,15 +1512,15 @@ class PROSCENIUM_OT_lock_global_seed(Operator):
         return {'FINISHED'}
 
 
-class PROSCENIUM_OT_randomize_pose_seed(Operator):
-    bl_idname = "proscenium.randomize_pose_seed"
+class ANIMATICA_OT_randomize_pose_seed(Operator):
+    bl_idname = "animatica.randomize_pose_seed"
     bl_label = "Randomize Seed"
     bl_description = "Pick a new random seed for this pose"
 
     def execute(self, context):
         # Stash on the class — the running generate-pose dialog reads this
         # in its next draw and copies it into its own operator-instance seed.
-        PROSCENIUM_OT_generate_pose._pending_seed = random.randint(1, 999999)
+        ANIMATICA_OT_generate_pose._pending_seed = random.randint(1, 999999)
         return {'FINISHED'}
 
 
@@ -1524,20 +1529,20 @@ class PROSCENIUM_OT_randomize_pose_seed(Operator):
 # ═══════════════════════════════════════════════════════════════════════════
 
 _classes = (
-    PROSCENIUM_OT_connect,
-    PROSCENIUM_OT_generate,
-    PROSCENIUM_OT_generate_pose,
-    PROSCENIUM_OT_accept,
-    PROSCENIUM_OT_reject,
-    PROSCENIUM_OT_cancel_generation,
-    PROSCENIUM_OT_signin,
-    PROSCENIUM_OT_signout,
-    PROSCENIUM_OT_open_upgrade,
-    PROSCENIUM_OT_open_discord_help,
-    PROSCENIUM_OT_dismiss_quota,
-    PROSCENIUM_OT_randomize_seed,
-    PROSCENIUM_OT_lock_global_seed,
-    PROSCENIUM_OT_randomize_pose_seed,
+    ANIMATICA_OT_connect,
+    ANIMATICA_OT_generate,
+    ANIMATICA_OT_generate_pose,
+    ANIMATICA_OT_accept,
+    ANIMATICA_OT_reject,
+    ANIMATICA_OT_cancel_generation,
+    ANIMATICA_OT_signin,
+    ANIMATICA_OT_signout,
+    ANIMATICA_OT_open_upgrade,
+    ANIMATICA_OT_open_discord_help,
+    ANIMATICA_OT_dismiss_quota,
+    ANIMATICA_OT_randomize_seed,
+    ANIMATICA_OT_lock_global_seed,
+    ANIMATICA_OT_randomize_pose_seed,
 )
 
 
