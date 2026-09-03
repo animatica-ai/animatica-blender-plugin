@@ -124,7 +124,28 @@ def load_character(context) -> tuple[bpy.types.Object, bpy.types.Object | None]:
         if obj.name not in coll.objects:
             coll.objects.link(obj)
 
+    clear_pose(arm_obj)
     return arm_obj, mesh_obj
+
+
+def clear_pose(arm_obj: bpy.types.Object) -> None:
+    """Put ``arm_obj`` back on its rest pose — for this character, the T-pose.
+
+    Pose-bone transforms are saved in a .blend independently of any action, so
+    clearing an armature's ``animation_data`` does not unpose it: whatever
+    frame the rig was evaluated on when the asset was authored gets baked in
+    and the character imports mid-stride. The shipped asset is written on rest
+    for exactly that reason; this makes the guarantee hold whatever the asset
+    happens to contain, and costs one pass over 77 bones.
+    """
+    if arm_obj.pose is None:
+        return
+    for pb in arm_obj.pose.bones:
+        pb.location = (0.0, 0.0, 0.0)
+        pb.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+        pb.rotation_axis_angle = (0.0, 0.0, 1.0, 0.0)
+        pb.rotation_euler = (0.0, 0.0, 0.0)
+        pb.scale = (1.0, 1.0, 1.0)
 
 
 def load_default_rig() -> tuple[str, list[dict[str, Any]]]:
