@@ -75,6 +75,18 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
             self.report({'ERROR'}, "Pick a model first (Animatica panel → Connect, then choose a Model)")
             return {'CANCELLED'}
 
+        # Re-fetch /capabilities before building. The process-wide cache is
+        # only refreshed by Connect, so after a server redeploy that changes
+        # the published canonical (e.g. ARDY moving from Core27 to SOMA30)
+        # an import would silently rebuild the stale rig. Fall back to the
+        # cache when the server cannot be reached right now.
+        url = mmcp_client.get_mmcp_url()
+        try:
+            caps = mmcp_client.MmcpClient(url, timeout=30).capabilities(refresh=True)
+            mmcp_client.store_capabilities(caps)
+        except Exception as exc:                                     # noqa: BLE001
+            self.report({'WARNING'}, f"Could not refresh capabilities from {url} ({exc}); using cached")
+
         model = mmcp_client.cached_model(model_id)
         if model is None:
             self.report({'ERROR'}, f"Model {model_id!r} not in the cached capabilities; reconnect first")
