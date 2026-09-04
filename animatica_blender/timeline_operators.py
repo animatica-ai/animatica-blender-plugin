@@ -1244,7 +1244,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         layout.label(text="0 = roll a fresh seed and pin it to this block", icon='INFO')
 
     def execute(self, context):
-        from . import constraints_ui, gltf_to_blender, mmcp_client, request_builder, rig_probe
+        from . import client_shim, constraints_ui, gltf_to_blender, request_builder, rig_probe
         from .operators import _live_target_armature_or_clear
 
         s = context.scene.animatica
@@ -1267,7 +1267,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             self.report({'ERROR'}, "Set a target armature first")
             return {'CANCELLED'}
 
-        model_caps = mmcp_client.cached_model(s.model_id)
+        model_caps = client_shim.cached_model(s.model_id)
         if model_caps is None:
             self.report({'ERROR'}, "Connect to the server first")
             return {'CANCELLED'}
@@ -1344,9 +1344,11 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         s.cancel_requested = False
         s.generation_elapsed = 0
         self._start_time = time.time()
+        # URL and token are read HERE, on the main thread: the worker must
+        # not touch bpy.context.preferences.
         self._thread = threading.Thread(
             target=self._worker,
-            args=(mmcp_client.get_mmcp_url(), req),
+            args=(client_shim.get_mmcp_url(), client_shim.get_access_token(), req),
             daemon=True,
         )
         self._thread.start()
@@ -1356,16 +1358,17 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         wm.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
-    def _worker(self, server_url, req):
-        from . import mmcp_client
+    def _worker(self, server_url, access_token, req):
+        from . import client_shim
         try:
-            client = mmcp_client.MmcpClient(server_url)
-            self._result = client.generate(req)
+            self._result = client_shim.generate(
+                req, access_token=access_token, server_url=server_url,
+            )
         except Exception as exc:                          # noqa: BLE001 — surfaced to UI
             self._error = exc
 
     def modal(self, context, event):
-        from . import gltf_to_blender
+        from . import client_shim, gltf_to_blender
         from .operators import (
             _clear_quota_state,
             _live_target_armature_or_clear,
@@ -1390,7 +1393,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         if self._error is not None:
             self._cleanup(context)
             _stash_quota_state(s, self._error)
-            self.report({'ERROR'}, f"Regenerate failed: {self._error}")
+            self.report({'ERROR'}, f"Regenerate failed: {client_shim.describe_error(self._error)}")
             return {'CANCELLED'}
 
         if self._result is None:

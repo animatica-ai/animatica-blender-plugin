@@ -361,7 +361,7 @@ class PromptBlock(PropertyGroup):
 
 # Animatica Cloud's MMCP endpoint. Surfaced as a non-editable label in the
 # prefs UI; users opt in to a self-hosted override via the `self_hosted`
-# checkbox. Resolved at request time by mmcp_client.get_server_url().
+# checkbox. Resolved at request time by client_shim.get_server_url().
 CLOUD_API_URL = "https://api.animatica.ai"
 
 
@@ -413,7 +413,7 @@ class AnimaticaAddonPreferences(AddonPreferences):
     )
 
     def draw(self, context):
-        from . import mmcp_client
+        from . import client_shim
 
         layout = self.layout
 
@@ -432,10 +432,10 @@ class AnimaticaAddonPreferences(AddonPreferences):
 
         # --- Connection status + connect/reconnect ----------------------------
         layout.separator()
-        caps = mmcp_client.cached_capabilities()
+        caps = client_shim.cached_capabilities()
         box = layout.box()
         if caps is None:
-            err = mmcp_client.last_connection_error()
+            err = client_shim.last_connection_error()
             if err:
                 box.label(text="Connection failed", icon='ERROR')
                 for line in err.split("\n")[:3]:
@@ -500,8 +500,8 @@ class AnimaticaAddonPreferences(AddonPreferences):
 
 def _model_id_items(self, context):
     """Dynamic EnumProperty items, populated by the Connect operator."""
-    from . import mmcp_client
-    return mmcp_client.cached_model_items()
+    from . import client_shim
+    return client_shim.cached_model_items()
 
 
 class AnimaticaSettings(PropertyGroup):

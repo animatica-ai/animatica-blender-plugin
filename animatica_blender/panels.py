@@ -11,7 +11,7 @@ Server URL + auth live in Edit > Preferences > Add-ons > Animatica.
 import bpy
 from bpy.types import Panel
 
-from . import constraints_ui, mmcp_client, properties
+from . import client_shim, constraints_ui, properties
 
 
 class AnimaticaPanelBase:
@@ -66,7 +66,7 @@ def _draw_duration_hint(layout, context, settings) -> None:
     arm = properties._live_armature(settings.target_armature)
     if arm is None:
         return
-    model = mmcp_client.cached_model(settings.model_id)
+    model = client_shim.cached_model(settings.model_id)
     if not model:
         return
     try:
@@ -156,9 +156,9 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
         _draw_signin_hint(layout, context)
 
         # Soft prompt to connect first. Server URL + auth live in addon prefs.
-        if mmcp_client.cached_capabilities() is None:
+        if client_shim.cached_capabilities() is None:
             box = layout.box()
-            err = mmcp_client.last_connection_error()
+            err = client_shim.last_connection_error()
             if err:
                 box.label(text="Connection failed", icon='ERROR')
                 for line in err.split("\n")[:3]:
@@ -261,7 +261,7 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
 
             # Pose-segment generation is a cloud-only capability — only
             # surface the button when the connected model advertises it.
-            model = mmcp_client.cached_model(settings.model_id)
+            model = client_shim.cached_model(settings.model_id)
             if model and "pose" in (model.get("supported_segments") or []):
                 pose_text = (
                     f"Regenerate Pose @ Frame {context.scene.frame_current}"
