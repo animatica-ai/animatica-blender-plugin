@@ -13,7 +13,7 @@ Two different problems, handled two different ways:
   they are rewritten here, once, on file load.
 
 * Things matched by **name prefix** — motion-bake actions, NLA tracks — are
-  not touched. ``request_builder._GENERATED_ACTION_PREFIXES`` and
+  not touched. ``rig_probe._GENERATED_ACTION_PREFIXES`` and
   ``operators._NLA_TRACK_PREFIXES`` carry the old spellings alongside the new
   ones, so old datablocks keep resolving without rewriting anything the user
   can see in the outliner. Renaming them would also invalidate

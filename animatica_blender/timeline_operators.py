@@ -1244,7 +1244,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         layout.label(text="0 = roll a fresh seed and pin it to this block", icon='INFO')
 
     def execute(self, context):
-        from . import constraints_ui, gltf_to_blender, mmcp_client, request_builder
+        from . import constraints_ui, gltf_to_blender, mmcp_client, request_builder, rig_probe
         from .operators import _live_target_armature_or_clear
 
         s = context.scene.animatica
@@ -1278,7 +1278,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             else None
         )
         if preview_action is None or not preview_action.name.startswith(
-            request_builder._GENERATED_ACTION_PREFIXES
+            rig_probe._GENERATED_ACTION_PREFIXES
         ):
             self.report({'ERROR'}, "Active action isn't a Animatica preview — generate first")
             return {'CANCELLED'}

@@ -76,9 +76,9 @@ def _draw_duration_hint(layout, context, settings) -> None:
     if fps <= 0:
         return
 
-    from . import request_builder
+    from . import rig_probe
     try:
-        gen_start, gen_end = request_builder.compute_frame_range(
+        gen_start, gen_end = rig_probe.compute_frame_range(
             settings.prompt_blocks, arm, context.scene,
         )
     except Exception:                                    # noqa: BLE001 — never break draw

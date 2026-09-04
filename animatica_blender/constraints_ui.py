@@ -712,9 +712,9 @@ def sample_pose_keyframes(
     if armature_obj is None or source_action is None:
         return []
 
-    # Lazy-import to avoid request_builder ↔ constraints_ui circular at
+    # Lazy-import to avoid rig_probe ↔ constraints_ui circular at
     # module load — both modules are pulled into __init__'s register flow.
-    from . import request_builder
+    from . import rig_probe
 
     root_pb = next(
         (pb for pb in armature_obj.pose.bones if pb.parent is None),
@@ -725,8 +725,8 @@ def sample_pose_keyframes(
     # face / tweak-half bones we strip out of the request must not appear
     # in pose_keyframe ``joint_rotations`` either, or the server-side
     # validator rejects the constraint as referencing unknown joints.
-    deform_bones = request_builder.emitted_deform_bones(armature_obj)
-    is_control_rig = request_builder.is_control_rig(armature_obj)
+    deform_bones = rig_probe.emitted_deform_bones(armature_obj)
+    is_control_rig = rig_probe.is_control_rig(armature_obj)
 
     # pose_keyframes describe a BODY POSE. If no bone has rotation keyframes,
     # there's no pose to pin — just root motion — and the root_path
@@ -892,10 +892,10 @@ def sample_pose_at_frame(
     if armature_obj is None or source_action is None:
         return None
 
-    from . import request_builder  # noqa: PLC0415 — module-load circular
+    from . import rig_probe  # noqa: PLC0415 — module-load circular
 
-    deform_bones = request_builder.detect_deform_bones(armature_obj)
-    is_control_rig = request_builder.is_control_rig(armature_obj)
+    deform_bones = rig_probe.detect_deform_bones(armature_obj)
+    is_control_rig = rig_probe.is_control_rig(armature_obj)
 
     sample_bone_names = (
         deform_bones

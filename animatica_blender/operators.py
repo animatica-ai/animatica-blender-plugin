@@ -31,6 +31,7 @@ from . import (
     mmcp_client,
     properties,
     request_builder,
+    rig_probe,
 )
 
 
@@ -54,7 +55,7 @@ def _is_motion_bake_action(action) -> bool:
     """True for Animatica motion-bake actions (preview or committed)."""
     return (
         action is not None
-        and action.name.startswith(request_builder._GENERATED_ACTION_PREFIXES)
+        and action.name.startswith(rig_probe._GENERATED_ACTION_PREFIXES)
     )
 
 
@@ -96,7 +97,7 @@ POSE_ACTION_NAME     = "Animatica_Pose"
 
 # Kept for back-compat with action references in older scenes — older bakes
 # wrote to ``Proscenium_Generated``, and pre-rename bakes to
-# ``Proscenium_Motion``; the prefix tuple in request_builder catches every
+# ``Proscenium_Motion``; the prefix tuple in rig_probe catches every
 # generation of the naming.
 GENERATED_ACTION_NAME = MOTION_ACTION_PREFIX
 
@@ -258,7 +259,7 @@ def _animatica_motion_actions() -> list:
     """Every motion-bake action the addon owns (current and legacy names)."""
     return [
         a for a in bpy.data.actions
-        if a.name.startswith(request_builder._GENERATED_ACTION_PREFIXES)
+        if a.name.startswith(rig_probe._GENERATED_ACTION_PREFIXES)
     ]
 
 
@@ -594,7 +595,7 @@ class ANIMATICA_OT_generate(Operator):
         #      sampler filters out (it only emits constraints from rotation
         #      fcurves), so a hand-authored Hips path stays visually
         #      distinguishable from the generated motion afterwards.
-        gen_start, gen_end = request_builder.compute_frame_range(
+        gen_start, gen_end = rig_probe.compute_frame_range(
             settings.prompt_blocks, arm, context.scene
         )
         self._gen_start_frame = gen_start
@@ -707,13 +708,13 @@ class ANIMATICA_OT_generate(Operator):
         gen_end_settings_scene_frame = context.scene.frame_end
         # Recompute gen_end via the same helper to stay in sync with what
         # was sent to the server.
-        _, gen_end = request_builder.compute_frame_range(
+        _, gen_end = rig_probe.compute_frame_range(
             settings.prompt_blocks, arm, context.scene
         )
 
         block_ranges = (
             _block_ranges_for_split(settings.prompt_blocks, gen_start, gen_end)
-            if not request_builder.is_control_rig(arm)
+            if not rig_probe.is_control_rig(arm)
             else []
         )
 
@@ -935,7 +936,7 @@ class ANIMATICA_OT_accept(Operator):
             elif (
                 preview_action is not None
                 and preview_action.name.startswith(
-                    request_builder._GENERATED_ACTION_PREFIXES
+                    rig_probe._GENERATED_ACTION_PREFIXES
                 )
             ):
                 # Single-block: push the preview as-is (it's already the
@@ -1014,7 +1015,7 @@ class ANIMATICA_OT_reject(Operator):
         )
         is_motion_preview = (
             preview is not None
-            and preview.name.startswith(request_builder._GENERATED_ACTION_PREFIXES)
+            and preview.name.startswith(rig_probe._GENERATED_ACTION_PREFIXES)
         )
 
         # Defensive: if the user manually assembled per-block actions onto
@@ -1052,7 +1053,7 @@ class ANIMATICA_OT_reject(Operator):
             return real_users <= 0
 
         for ac in [a for a in bpy.data.actions
-                   if a.name.startswith(request_builder._GENERATED_ACTION_PREFIXES)
+                   if a.name.startswith(rig_probe._GENERATED_ACTION_PREFIXES)
                    and _is_orphan(a)]:
             bpy.data.actions.remove(ac)
 
@@ -1215,7 +1216,7 @@ class ANIMATICA_OT_generate_pose(Operator):
 
         # Send the user's own armature skeleton — the server retargets it to
         # the canonical on the way in and back again on the way out.
-        request_skeleton = request_builder.armature_to_skeleton(arm)
+        request_skeleton = rig_probe.armature_to_skeleton(arm)
 
         if not model_caps.get("supports_retargeting", True):
             canonical_joints = {j["name"] for j in model_caps["canonical_skeleton"]["joints"]}

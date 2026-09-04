@@ -25,7 +25,7 @@ from typing import Any, Collection
 import bpy
 from mathutils import Matrix, Quaternion, Vector
 
-from . import coords, request_builder
+from . import coords, rig_probe
 
 
 # MMCP world (right-handed Y-up) → Blender world (right-handed Z-up) as a 3×3
@@ -276,7 +276,7 @@ def bake_gltf_to_armature(
     # foot-roll cursor in detail. Our deform-bone keyframes act as the
     # source animation; the operator builds a temporary clean source rig
     # internally and bakes onto the control rig.
-    if request_builder.is_control_rig(armature_obj):
+    if rig_probe.is_control_rig(armature_obj):
         timestamps = next(iter(decoded_inputs.values())) if decoded_inputs else []
         frames = [_frame_from_time(t, gltf, start_frame) for t in timestamps]
         if frames:
@@ -1208,7 +1208,7 @@ def _bake_to_control_rig(
         # by the per-frame keyframes the server returned.
         #
         # Rigify-specific extra: re-parent DEFs to the deform parent map the
-        # *request* used (``_build_deform_parent_map`` in request_builder).
+        # *request* used (``_build_deform_parent_map`` in rig_probe).
         # Rigify's DEFs natively parent through ``ORG-*`` intermediaries — at
         # rest the chain still looks right, but with ORG-* deleted DEFs
         # become orphans, and their keyframed rotations end up interpreted
@@ -1224,7 +1224,7 @@ def _bake_to_control_rig(
                     eb.name for eb in ebones
                     if src_arm.data.bones[eb.name].use_deform
                 }
-                parent_map = request_builder._build_deform_parent_map(
+                parent_map = rig_probe._build_deform_parent_map(
                     src_arm, deform_names
                 )
                 # Re-parent first (still need parents alive), then delete non-DEFs.
@@ -1698,7 +1698,7 @@ def resolve_pose_bake_joint_names(
         return {n[len(ns):] if n.startswith(ns) else n for n in names}
 
     out = set(selected_pose_bone_names)
-    if not request_builder.is_control_rig(armature_obj):
+    if not rig_probe.is_control_rig(armature_obj):
         return _bare(out)
     specs = _build_control_specs(armature_obj)
     extras: set[str] = set()
@@ -1840,7 +1840,7 @@ def bake_single_pose(
         written += 1
 
     if written:
-        if request_builder.is_control_rig(armature_obj):
+        if rig_probe.is_control_rig(armature_obj):
             _bake_to_control_rig(
                 armature_obj,
                 source_action=armature_obj.animation_data.action,
