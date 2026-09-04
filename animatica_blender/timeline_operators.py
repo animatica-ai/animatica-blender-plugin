@@ -1244,7 +1244,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         layout.label(text="0 = roll a fresh seed and pin it to this block", icon='INFO')
 
     def execute(self, context):
-        from . import client_shim, constraints_ui, gltf_to_blender, request_builder, rig_probe
+        from . import client_shim, core_adapter, gltf_to_blender, rig_probe
         from .operators import _live_target_armature_or_clear
 
         s = context.scene.animatica
@@ -1283,12 +1283,6 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             self.report({'ERROR'}, "Active action isn't a Animatica preview — generate first")
             return {'CANCELLED'}
 
-        source_action = (
-            bpy.data.actions.get(s.source_action_name)
-            if s.source_action_name
-            else None
-        )
-
         # Persist the user's seed choice onto the block so subsequent
         # regens pre-fill with it (matches the way pose-generate stashes
         # its last prompt onto the scene props).
@@ -1304,23 +1298,23 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         from . import properties
         properties.save_blocks_to_armature(arm, s)
 
+        # Soft warnings from the shared builder are reported after the build;
+        # only a BuildError stops the regeneration.
+        build_warnings: list[str] = []
         try:
-            req, (fs, fe) = request_builder.build_request_for_block(
-                block_index=idx,
-                model_id=s.model_id,
-                model_caps=model_caps,
-                armature_obj=arm,
-                prompt_blocks=s.prompt_blocks,
-                settings=s,
-                scene=context.scene,
-                constraint_objects=constraints_ui.walk_scene_constraints(context.scene),
+            req = core_adapter.build_block_request(
+                context, s, arm, model_caps, block, build_warnings,
                 preview_action=preview_action,
-                source_action=source_action,
                 seed_override=used_seed,
             )
-        except request_builder.BuildError as exc:
+        except core_adapter.BuildError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
+        for w in build_warnings:
+            self.report({'WARNING'}, w)
+
+        # The splice range is the block's own inclusive frame range.
+        fs, fe = int(block.frame_start), int(block.frame_end)
 
         # Frames sent as constraints become KEYFRAME-typed anchors after the
         # splice; everything else from the bake gets typed GENERATED. Same

@@ -17,8 +17,8 @@ This module owns:
   * Sampling helpers that turn each Blender object into the MMCP constraint
     dict shape (``{"type": "...", "frames": [...], ...}``).
 
-The actual assembly of the request body lives in ``request_builder.py`` —
-this module is purely UI + sampling.
+The actual assembly of the request body lives in the shared core, reached
+through ``core_adapter.py`` — this module is purely UI + sampling.
 """
 
 from __future__ import annotations

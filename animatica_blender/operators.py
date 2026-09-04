@@ -28,9 +28,9 @@ from . import (
     blender_compat,
     client_shim,
     constraints_ui,
+    core_adapter,
     gltf_to_blender,
     properties,
-    request_builder,
     rig_probe,
 )
 
@@ -564,19 +564,20 @@ class ANIMATICA_OT_generate(Operator):
                 else:
                     arm.animation_data.action = src
 
+        # Soft warnings from the shared builder (uncovered effector pins,
+        # starved segments, fps mismatch, …) are collected here and reported
+        # after the request is built — they don't stop the generation.
+        build_warnings: list[str] = []
         try:
-            req = request_builder.build_request(
-                model_id=settings.model_id,
-                model_caps=model_caps,
-                armature_obj=arm,
-                prompt_blocks=settings.prompt_blocks,
-                settings=settings,
-                scene=context.scene,
-                constraint_objects=constraints_ui.walk_scene_constraints(context.scene),
+            req = core_adapter.build_request(
+                context, settings, arm, model_caps,
+                settings.prompt_blocks, build_warnings,
             )
-        except request_builder.BuildError as exc:
+        except core_adapter.BuildError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
+        for w in build_warnings:
+            self.report({'WARNING'}, w)
 
         # Save the source action for Accept / Reject (no-op if already saved).
         _stash_source_action_name(settings, arm)
@@ -1217,40 +1218,21 @@ class ANIMATICA_OT_generate_pose(Operator):
         # known-good prompt.
         s.last_pose_prompt = self.prompt
 
-        # Send the user's own armature skeleton — the server retargets it to
-        # the canonical on the way in and back again on the way out.
-        request_skeleton = rig_probe.armature_to_skeleton(arm)
-
-        if not model_caps.get("supports_retargeting", True):
-            canonical_joints = {j["name"] for j in model_caps["canonical_skeleton"]["joints"]}
-            missing = canonical_joints - {pb.name for pb in arm.pose.bones}
-            if missing:
-                self.report({'ERROR'},
-                            f"Server does not support retargeting and the armature is "
-                            f"missing {len(missing)} canonical joint(s). Re-import via "
-                            f"'Import canonical skeleton'")
-                return {'CANCELLED'}
-            request_skeleton = model_caps["canonical_skeleton"]
-
         # Single PoseSegment — server's specialized text-to-pose model returns
         # a 1-frame glTF directly. No client-side middle-frame extraction.
-        req = {
-            "protocol_version": request_builder.PROTOCOL_VERSION,
-            "model":            s.model_id,
-            "skeleton":         request_skeleton,
-            "segments": [{
-                "type":   "pose",
-                "prompt": self.prompt,
-            }],
-            "options": {
-                "diffusion_steps": request_builder.QUALITY_PRESETS.get(
-                    s.quality_preset, int(s.custom_steps)
-                ),
-                "num_samples":     1,
-                "seed":            int(self.seed) if int(self.seed) > 0 else None,
-                "post_processing": bool(s.post_processing),
-            },
-        }
+        # The skeleton (the user's own armature, or the canonical echoed back
+        # when the server can't retarget) and the retargeting check both live
+        # in the shared builder now.
+        build_warnings: list[str] = []
+        try:
+            req = core_adapter.build_pose_request(
+                s, arm, model_caps, self.prompt, build_warnings, seed=self.seed,
+            )
+        except core_adapter.BuildError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        for w in build_warnings:
+            self.report({'WARNING'}, w)
 
         self._target_frame = int(context.scene.frame_current)
 
