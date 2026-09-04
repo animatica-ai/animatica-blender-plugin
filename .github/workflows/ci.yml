@@ -4,11 +4,13 @@ on: [push, pull_request]
 
 jobs:
   vendored-core-is-untouched:
-    # The plugin runs no pure tests: they belong to motionmcp-client-sdk, and a
-    # consumer re-running tests for code it does not own is the duplication
-    # this extraction removed. What it MUST check is that nobody edited the
-    # generated tree -- a fix made there is lost on the next sync, silently,
-    # and leaves the three plugins disagreeing.
+    # The plugin re-runs none of core's own tests: they belong to
+    # motionmcp-client-sdk, and a consumer re-running tests for code it does
+    # not own is the duplication this extraction removed. What it MUST check
+    # is that nobody edited the generated tree -- a fix made there is lost on
+    # the next sync, silently, and leaves the three plugins disagreeing.
+    # (The plugin's OWN tests, covering the adapter that sits between Blender
+    # and core, run in the `tests` job below.)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,3 +57,35 @@ jobs:
       - name: the plugin byte-compiles
         working-directory: animatica-blender-plugin
         run: python -m compileall -q animatica_blender scripts
+
+  tests:
+    # The adapter between Blender and core is the addon's own code, and it is
+    # the piece a core bump can break without any import failing -- a request
+    # that still builds but no longer says the same thing. These tests run
+    # without Blender: the adapter's pure half loads off disk, and the parity
+    # test rebuilds the frozen A/B checkpoints through core and compares the
+    # canonical request hash. That last one needs the SDK's goldens, so it
+    # checks core out for the fixtures, not for the code.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {path: animatica-blender-plugin}
+      - uses: actions/checkout@v4
+        with:
+          repository: animatica-ai/motionmcp-client-sdk
+          path: motionmcp-client-sdk
+          token: ${{ secrets.CORE_REPO_TOKEN }}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      # numpy: core's request builder and glTF parser use it. Blender ships
+      # its own; CI has to say so out loud.
+      - name: test dependencies
+        run: python -m pip install --quiet pytest numpy
+      - name: pytest
+        working-directory: animatica-blender-plugin
+        env:
+          # Without this the parity test SKIPS rather than fails -- and a
+          # skipped gate that nobody reads is the failure mode this job
+          # exists to prevent. Point it at the goldens explicitly.
+          ANIMATICA_AB_GOLDEN: ${{ github.workspace }}/motionmcp-client-sdk/tools/ab_suite/golden/blender/local
+        run: python -m pytest -q tests
