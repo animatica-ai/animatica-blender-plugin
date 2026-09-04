@@ -366,3 +366,81 @@ na timelinie przestaną działać bez żadnego błędu.
    wchodzić w to repo bez uzgodnienia kolejności.
 5. **Seedy per segment (K8):** zrobić w SDK przed B3 (rekomendacja — to
    luka SDK, nie Blendera), czy świadomie tymczasowo stracić funkcję?
+
+---
+
+## 9. Dziennik wdrożenia (2026-09-04)
+
+Plan wdrożony w całości na gałęzi `feature/core-convergence`. Decyzje z §8
+podjęte wg rekomendacji zapisanych w planie, bo wdrożenie ruszyło bez
+odpowiedzi — każda jest niżej nazwana wprost.
+
+### Odpowiedzi na §8
+
+1. **D6 — przyjmujemy zachowanie core.** Z jednym pomiarem, który zmienia
+   wymowę: `_inject_default_walk_path` dla `ardy-core-rp` jest na ścieżce
+   blenderowej **martwe**. Funkcja wychodzi wcześnie, gdy w `constraints`
+   jest jakikolwiek `root_path`, a automatyczna kotwica klatki 0 nim jest.
+   Użytkownik ARDY nie zobaczy więc syntetycznego marszu — ryzyko R5
+   nie materializuje się.
+2. **R4 — vendorujemy cały pakiet.** Zmierzone: zip rośnie z 10 734 006 B
+   do 11 972 115 B, czyli o 1 209 KiB (11,5 %); `gui/` + `gates/` to
+   19 682 linie i 284 KiB skompresowanych, ok. 23 % przyrostu. Do
+   przyjęcia; wykluczenia w `VendorConfig` zostają jako opcja na później.
+3. **D3 — bez bridge'a.** Potwierdzone w kodzie: nie-GUI połowa core nie
+   importuje ani `bridge`, ani `host`.
+4. **K7 i K8 zrobione po naszej stronie**, każde w osobnym worktree SDK,
+   żeby nie dotykać 14 niezacommitowanych plików w głównym checkoucie.
+   Gałęzie: `fix/ab-blender-runner-rename`, `feature/builder-gaps-for-blender`.
+5. **K8 przed B3** — tak. Pin core przesuwany dwa razy, ostatecznie na
+   commit z seedami per segment i `fill_mode`.
+
+### Odstępstwa od planu
+
+| # | Plan mówił | Zrobiono | Dlaczego |
+|---|---|---|---|
+| 1 | B0.5: checkpoint **c5** (dwa bloki z przypiętymi seedami), golden zamrożony na starym `develop` | c5 **nie powstał**; regresję seedów pilnują testy jednostkowe (`tests/test_core_adapter.py::TestSegments`) i test SDK `test_segment_seeds.py` | `--freeze-golden` wymaga żywego serwera **i** zera FAIL na wszystkich trzech hostach — MoBu potrzebuje działającej konsoli MotionBuilder, Max `3dsmaxbatch`. Test jednostkowy pilnuje tego samego bez tej maszynerii |
+| 2 | Regen bloku: `frame_range_override` poszerzony o **±1** | zakres bloku **bez** poszerzenia; kotwice na `block_start`/`block_end`, próbkowane z klatek ±1 | Core relatywizuje wszystkie markery do `frame_range[0]`, więc ±1 przesunęłoby o klatkę każdą edycję użytkownika i każdy efektor. MoBu robi to samo bez poszerzania |
+| 3 | `constraints_ui.sample_*` mają emitować `ConstraintMarker` | `sample_*` bez zmian; konwersja dict→marker w `core_adapter` | Czysta, testowalna bez Blendera; zero ryzyka dla ścieżki przed przepięciem |
+| 4 | §1: `M_TO_CM`, `DEFAULT_FPS` z core | nie dotyczy | Tych stałych w addonie nie ma |
+| 5 | §5.5: ubytek ok. **1 500 linii** | ubytek **103** linii | Kasacja to −659, ale `core_adapter.py` ma 715 linii, z czego ok. 400 to docstringi cytujące pomiary. Logika nie jest zdublowana (żadnego budowania segmentów, budżetu ograniczeń, kotwic, timingu) — to gęstość komentarza, nie kod |
+
+### Zmiany w SDK, których plan nie przewidywał
+
+- **`fill_mode` nie przechodził przez wspólny builder.** Addon wysyła
+  `rest`/`generate` (sterowanie serwerowym `FullBodyConstraintSet`), core
+  gubił pole. Bez poprawki konwergencja wyłączyłaby tę funkcję po cichu.
+  Naprawione w SDK obok seedów per segment.
+- **Runner A/B musiał przejść na `core_adapter`** — plan przewidywał w K7
+  tylko rename importów, ale po usunięciu `request_builder.py` runner nie
+  miał czego wołać. Przy okazji naprawił się c3, który wcześniej padał na
+  `AttributeError`.
+
+### Weryfikacja (§5) — stan faktyczny
+
+| # | Sprawdzenie | Wynik |
+|---|---|---|
+| 1 | `scripts/sync_core.py` | „vendored tree matches core exactly" |
+| 2 | Suite A/B, odtwarzanie z kasety, hashe kanoniczne | **c1, c2, c3 = golden**; c4 nie — patrz niżej |
+| 3 | Regresja bake'u | 7 nagranych odpowiedzi × 4 ścieżki: rotacja maks. 2,4e-06 stopnia, pozycje co do bitu |
+| 4 | E2E na żywym serwerze (kimodo) | PASS: capabilities → armatura → request → generate → bake, 123 krzywe, 7380 kluczy |
+| 5 | Bilans linii | −103 (patrz odstępstwo 5) |
+| 6 | Reload addonu bez pozostałości core | PASS, dwukrotnie pod rząd |
+| — | Testy addonu (nowe) | 56 zielonych |
+| — | Testy SDK | 1187 zielonych + 1 pominięty |
+
+**c4 — dług spoza tego zadania.** Jedyna różnica to `ab_scenario.HAND_PIN`,
+który zmienił się w SDK `c2076fd` **po** zamrożeniu blenderowych goldenów:
+`(0.35, 1.20, 0.40)` → `(0.30, 1.20, 1.30)`. Po przywróceniu wartości
+z epoki goldena w pamięci c4 trafia bajt w bajt. Zamknięcie tego wymaga
+przenagrania goldenów Blendera i wpisu c4 w kasecie — z żywym serwerem
+i wszystkimi hostami.
+
+### Czego nie zweryfikowano
+
+- **ARDY end-to-end.** Lokalny serwer serwuje dziś tylko `kimodo-soma-rp`;
+  ARDY mieszka w prywatnym forku i wymaga własnej konfiguracji. Ścieżka
+  addonu jest dla obu modeli identyczna — różnice są serwerowe.
+- **Operatory modalne w GUI.** W trybie `-b` nie ma menedżera okien, więc
+  E2E woła to, co operatory wołają, z pominięciem samej pętli modalnej.
+- **Tryb `record` runnera A/B** — przepięty na `client_shim`, nieuruchomiony.
