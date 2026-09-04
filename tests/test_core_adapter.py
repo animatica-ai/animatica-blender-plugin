@@ -223,19 +223,16 @@ class TestMarkersFromRootPath:
         assert adapter.markers_from_root_path([], None, (0, 10)) == []
         assert adapter.markers_from_root_path(None, None, (0, 10)) == []
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="FINDING (not fixed here): the timed branch is "
-               "`zip(frames, pts)`, so a PROP_POINT_FRAMES list left stale by "
-               "a newly added control point silently DROPS the extra points "
-               "instead of failing or falling back to the even spread. "
-               "Delete this marker once the adapter validates the two lengths.",
-    )
     def test_a_short_frame_list_must_not_silently_drop_control_points(
             self, adapter):
+        # A stale PROP_POINT_FRAMES — the user added a control point and the
+        # timing list did not grow — used to be zipped against the points,
+        # dropping the tail of the path with no error. It now falls back to
+        # the even spread, so the whole path still reaches the server.
         points = [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)]
         markers = adapter.markers_from_root_path(points, [5], (0, 99))
         assert len(markers) == len(points)
+        assert [m.frame for m in markers] == [0, 50, 99]
 
 
 # ---------------------------------------------------------------------------

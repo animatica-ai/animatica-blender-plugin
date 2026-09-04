@@ -230,11 +230,18 @@ def markers_from_root_path(
     evenly across ``frame_range`` inclusive. Core turns each marker into its own
     single-waypoint ``root_path`` wire — a deliberate shape, not drift, and the
     only one its seam-copy and heading passes accept (diff report §3.14).
+
+    A frame list that does not cover every point is treated as absent rather
+    than zipped against them: the curve's timing property goes stale the moment
+    a control point is added, and silently dropping the tail of the path is a
+    worse answer than retiming the whole of it.
     """
     pts = [(float(p[0]), float(p[1])) for p in points_xz or ()]
     if not pts:
         return []
     lo, hi = int(frame_range[0]), int(frame_range[1])
+    if frames is not None and len(frames) < len(pts):
+        frames = None
     if frames is not None:
         pairs = list(zip((int(f) for f in frames), pts))
     elif len(pts) == 1:
