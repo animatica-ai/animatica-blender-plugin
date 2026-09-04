@@ -1,0 +1,57 @@
+name: ci
+
+on: [push, pull_request]
+
+jobs:
+  vendored-core-is-untouched:
+    # The plugin runs no pure tests: they belong to motionmcp-client-sdk, and a
+    # consumer re-running tests for code it does not own is the duplication
+    # this extraction removed. What it MUST check is that nobody edited the
+    # generated tree -- a fix made there is lost on the next sync, silently,
+    # and leaves the three plugins disagreeing.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {path: animatica-blender-plugin}
+      # The core is a separate private repo, and the default GITHUB_TOKEN is
+      # scoped to this one -- checkout needs a token that can read it.
+      # CORE_REPO_TOKEN: a fine-grained PAT, read-only on Contents of
+      # animatica-ai/motionmcp-client-sdk, stored as a repo secret.
+      #
+      # Checked first, by name, with the fix in the message: without the
+      # token the core checkout fails and sync_core.py could only exit 2
+      # ("cannot tell", NOT "no drift") -- a CI that cannot tell must say so
+      # loudly. (Pattern shared with the MoBu plugin's vendored-core job.)
+      - name: the core token is set
+        shell: bash
+        env:
+          CORE_REPO_TOKEN: ${{ secrets.CORE_REPO_TOKEN }}
+        run: |
+          if [ -z "$CORE_REPO_TOKEN" ]; then
+            echo "::error::CORE_REPO_TOKEN is not set on this repository, so core cannot be checked out and sync_core.py could only exit 2 ('cannot tell'). Issue a fine-grained PAT, read-only on Contents of animatica-ai/motionmcp-client-sdk, then: gh secret set CORE_REPO_TOKEN --repo animatica-ai/animatica-blender-plugin"
+            exit 1
+          fi
+          echo "CORE_REPO_TOKEN present"
+      - uses: actions/checkout@v4
+        with:
+          repository: animatica-ai/motionmcp-client-sdk
+          path: motionmcp-client-sdk
+          token: ${{ secrets.CORE_REPO_TOKEN }}
+          # sync_core.py compares against the commit CORE-VERSION pins, via
+          # `git archive <sha>` in this checkout -- and the pin is normally
+          # BEHIND core's tip. A depth-1 checkout holds one commit, so the
+          # rev-parse fails and the gate exits 2 on every run; full history
+          # is also what lets a mismatch be classified STALE vs LOCALLY
+          # EDITED instead of guessed at.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - name: vendored tree matches core
+        working-directory: animatica-blender-plugin
+        env:
+          ANIMATICA_CORE: ${{ github.workspace }}/motionmcp-client-sdk
+        run: python scripts/sync_core.py
+
+      - name: the plugin byte-compiles
+        working-directory: animatica-blender-plugin
+        run: python -m compileall -q animatica_blender scripts
