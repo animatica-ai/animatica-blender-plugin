@@ -5,9 +5,10 @@ animation per generated sample. Each animation has rotation channels per
 joint (target.path == "rotation") plus one translation channel on the root
 (target.path == "translation"). Buffers are embedded as ``data:`` URIs.
 
-This module decodes those channels and writes them as Blender F-curve
-keyframes on the target armature's pose bones. Coord conversion goes through
-``coords`` (MMCP Y-up → Blender Z-up).
+Decoding those channels is ``animatica_core.gltf_parser.parse_gltf_samples``'
+job — this module writes the decoded samples as Blender F-curve keyframes on
+the target armature's pose bones. Coord conversion goes through ``coords``
+(MMCP Y-up → Blender Z-up).
 
 Public API:
     * ``bake_gltf_to_armature(gltf, armature_obj, sample_index=0, action_name=...)
@@ -18,12 +19,11 @@ Public API:
 
 from __future__ import annotations
 
-import base64
-import struct
 from typing import Any, Collection
 
 import bpy
-from mathutils import Matrix, Quaternion, Vector
+from animatica_core.gltf_parser import parse_gltf_samples
+from mathutils import Matrix, Vector
 
 from . import coords, rig_probe
 
@@ -105,6 +105,54 @@ def read_extension_metadata(gltf: dict[str, Any]) -> dict[str, Any]:
     return (gltf.get("extensions") or {}).get("MMCP_motion") or {}
 
 
+# ---------------------------------------------------------------------------
+# Sample decoding
+#
+# Buffer decoding is ``animatica_core.gltf_parser``'s job; the bake paths call
+# ``_decode_sample`` once per document and index the result by frame and joint.
+# ---------------------------------------------------------------------------
+
+def _translated_joint_names(gltf: dict[str, Any], sample_index: int) -> set[str]:
+    """Joint names carrying a ``translation`` track in ``animations[i]``.
+
+    ``parse_gltf_samples`` zero-fills ``posed_joints`` for every joint without
+    a translation channel, so a zeroed row is indistinguishable from a root
+    parked at the origin. Reading the channel list — document structure, not
+    buffer data — says which joints the translation actually applies to.
+    """
+    nodes = gltf.get("nodes") or []
+    anim  = (gltf.get("animations") or [])[sample_index]
+    names: set[str] = set()
+    for ch in anim.get("channels") or []:
+        target = ch.get("target") or {}
+        if target.get("path") != TRANSLATION_PATH:
+            continue
+        node_idx = target.get("node")
+        if node_idx is None or node_idx >= len(nodes):
+            continue
+        names.add(nodes[node_idx].get("name", ""))
+    return names
+
+
+def _decode_sample(gltf: dict[str, Any], sample_index: int) -> tuple[dict[str, Any], set[str]]:
+    """``(motion_data, joints_with_translation)`` for one sample of ``gltf``.
+
+    One decode pass over the whole document; callers index
+    ``local_rot_mats[t, j]`` / ``posed_joints[t, j]`` by frame and joint
+    instead of re-reading accessors per channel.
+    """
+    return parse_gltf_samples(gltf)[sample_index], _translated_joint_names(gltf, sample_index)
+
+
+def _rot_matrix(local_rot_mats, frame: int, joint: int) -> Matrix:
+    """``local_rot_mats[frame, joint]`` as a mathutils 3×3 matrix.
+
+    ``.tolist()`` widens the core's float32 entries to Python floats; feeding
+    numpy scalars to ``Matrix`` directly is not part of its contract.
+    """
+    return Matrix(local_rot_mats[frame, joint].tolist())
+
+
 def bake_gltf_to_armature(
     gltf: dict[str, Any],
     armature_obj: bpy.types.Object,
@@ -138,44 +186,11 @@ def bake_gltf_to_armature(
     if sample_index < 0 or sample_index >= len(animations):
         raise ValueError(f"sample_index {sample_index} out of range (0..{len(animations) - 1})")
 
-    nodes = gltf.get("nodes") or []
-    anim  = animations[sample_index]
-    samplers = anim.get("samplers") or []
-    channels = anim.get("channels") or []
-
-    # Pre-decode each unique sampler.output once. Multiple channels can share
-    # an input timestamps accessor, so dedupe.
-    decoded_outputs: dict[int, list[tuple]] = {}
-    decoded_inputs:  dict[int, list[float]] = {}
-
-    def _input_for(sampler_idx: int) -> list[float]:
-        s = samplers[sampler_idx]
-        in_idx = s["input"]
-        if in_idx not in decoded_inputs:
-            decoded_inputs[in_idx] = _read_floats(gltf, in_idx, "SCALAR")
-        return decoded_inputs[in_idx]
-
-    def _quats_for(sampler_idx: int) -> list[tuple[float, float, float, float]]:
-        s = samplers[sampler_idx]
-        out_idx = s["output"]
-        if out_idx not in decoded_outputs:
-            floats = _read_floats(gltf, out_idx, "VEC4")
-            decoded_outputs[out_idx] = [
-                (floats[i], floats[i + 1], floats[i + 2], floats[i + 3])
-                for i in range(0, len(floats), 4)
-            ]
-        return decoded_outputs[out_idx]
-
-    def _vec3s_for(sampler_idx: int) -> list[tuple[float, float, float]]:
-        s = samplers[sampler_idx]
-        out_idx = s["output"]
-        if out_idx not in decoded_outputs:
-            floats = _read_floats(gltf, out_idx, "VEC3")
-            decoded_outputs[out_idx] = [
-                (floats[i], floats[i + 1], floats[i + 2])
-                for i in range(0, len(floats), 3)
-            ]
-        return decoded_outputs[out_idx]
+    sample, translated = _decode_sample(gltf, sample_index)
+    joint_names = sample["joint_names"]
+    rot_mats    = sample["local_rot_mats"]
+    root_pos    = sample["posed_joints"]
+    num_frames  = int(sample["num_frames"])
 
     # Make sure pose-bone rotation modes are quaternion (we're feeding quats).
     pose = armature_obj.pose
@@ -197,73 +212,55 @@ def bake_gltf_to_armature(
     mw_rot_t = mw_rot.transposed()
 
     skipped: list[str] = []
+    keyed_any = False
 
-    # --- Rotation channels ---
-    for ch in channels:
-        target = ch.get("target") or {}
-        if target.get("path") != ROTATION_PATH:
-            continue
-        node_idx = target.get("node")
-        if node_idx is None or node_idx >= len(nodes):
-            continue
-        joint_name = nodes[node_idx].get("name", "")
+    # --- Rotation tracks ---
+    for j, joint_name in enumerate(joint_names):
         bone = resolve_joint_bone(pose, joint_name, _ns)
         if bone is None:
             skipped.append(joint_name)
             continue
-
-        sampler_idx = ch["sampler"]
-        timestamps  = _input_for(sampler_idx)
-        quats       = _quats_for(sampler_idx)
+        keyed_any = True
 
         # Inverse of the outbound chain in ``sample_pose_keyframes``:
         #   MMCP Y-up → Blender world → armature-local → bone-local rest.
         ML     = bone.bone.matrix_local.to_3x3()
         ML_inv = ML.transposed()   # ML is orthogonal → inverse = transpose
 
-        for ts, q_mmcp in zip(timestamps, quats):
-            qx, qy, qz, qw = q_mmcp
-            R_mmcp          = Quaternion((qw, qx, qy, qz)).to_matrix()
+        for t in range(num_frames):
+            R_mmcp          = _rot_matrix(rot_mats, t, j)
             R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
             R_blender_arm   = mw_rot_t @ R_blender_world @ mw_rot
             R_bone          = ML_inv @ R_blender_arm @ ML
             bone.rotation_quaternion = R_bone.to_quaternion()
             bone.keyframe_insert(
                 data_path="rotation_quaternion",
-                frame=_frame_from_time(ts, gltf, start_frame),
+                frame=start_frame + t,
             )
 
-    # --- Root translation channel(s) ---
-    for ch in channels:
-        target = ch.get("target") or {}
-        if target.get("path") != TRANSLATION_PATH:
+    # --- Root translation track(s) ---
+    for j, joint_name in enumerate(joint_names):
+        if joint_name not in translated:
             continue
-        node_idx = target.get("node")
-        if node_idx is None or node_idx >= len(nodes):
-            continue
-        joint_name = nodes[node_idx].get("name", "")
         bone = resolve_joint_bone(pose, joint_name, _ns)
         if bone is None:
             skipped.append(joint_name)
             continue
-
-        sampler_idx = ch["sampler"]
-        timestamps  = _input_for(sampler_idx)
-        positions   = _vec3s_for(sampler_idx)
+        keyed_any = True
 
         # MMCP world → Blender world → armature-local → bone-local offset.
         rest_head     = bone.bone.head_local             # armature-local rest
         ML            = bone.bone.matrix_local.to_3x3()  # armature → bone-local
         arm_world_inv = armature_obj.matrix_world.inverted()
 
-        for ts, p_mmcp in zip(timestamps, positions):
-            world     = Vector(coords.mmcp_pos_to_blender(p_mmcp))
+        for t in range(num_frames):
+            world     = Vector(coords.mmcp_pos_to_blender(root_pos[t, j].tolist()))
             arm_local = arm_world_inv @ world
             delta     = arm_local - rest_head
             bone.location = ML.transposed() @ delta
             bone.keyframe_insert(
                 data_path="location",
-                frame=_frame_from_time(ts, gltf, start_frame),
+                frame=start_frame + t,
             )
 
     if skipped:
@@ -276,16 +273,13 @@ def bake_gltf_to_armature(
     # foot-roll cursor in detail. Our deform-bone keyframes act as the
     # source animation; the operator builds a temporary clean source rig
     # internally and bakes onto the control rig.
-    if rig_probe.is_control_rig(armature_obj):
-        timestamps = next(iter(decoded_inputs.values())) if decoded_inputs else []
-        frames = [_frame_from_time(t, gltf, start_frame) for t in timestamps]
-        if frames:
-            _bake_to_control_rig(
-                armature_obj,
-                source_action=new_action,
-                frame_start=min(frames),
-                frame_end=max(frames),
-            )
+    if rig_probe.is_control_rig(armature_obj) and keyed_any and num_frames:
+        _bake_to_control_rig(
+            armature_obj,
+            source_action=new_action,
+            frame_start=start_frame,
+            frame_end=start_frame + num_frames - 1,
+        )
 
     if anchor_frames is not None:
         _tag_keyframe_types(new_action, anchor_frames)
@@ -340,42 +334,11 @@ def splice_gltf_into_action(
     if fe_target < fs_target:
         raise ValueError(f"target_range start > end: ({fs_target}, {fe_target})")
 
-    nodes = gltf.get("nodes") or []
-    anim  = animations[sample_index]
-    samplers = anim.get("samplers") or []
-    channels = anim.get("channels") or []
-
-    decoded_outputs: dict[int, list[tuple]] = {}
-    decoded_inputs:  dict[int, list[float]] = {}
-
-    def _input_for(sampler_idx: int) -> list[float]:
-        s = samplers[sampler_idx]
-        in_idx = s["input"]
-        if in_idx not in decoded_inputs:
-            decoded_inputs[in_idx] = _read_floats(gltf, in_idx, "SCALAR")
-        return decoded_inputs[in_idx]
-
-    def _quats_for(sampler_idx: int) -> list[tuple[float, float, float, float]]:
-        s = samplers[sampler_idx]
-        out_idx = s["output"]
-        if out_idx not in decoded_outputs:
-            floats = _read_floats(gltf, out_idx, "VEC4")
-            decoded_outputs[out_idx] = [
-                (floats[i], floats[i + 1], floats[i + 2], floats[i + 3])
-                for i in range(0, len(floats), 4)
-            ]
-        return decoded_outputs[out_idx]
-
-    def _vec3s_for(sampler_idx: int) -> list[tuple[float, float, float]]:
-        s = samplers[sampler_idx]
-        out_idx = s["output"]
-        if out_idx not in decoded_outputs:
-            floats = _read_floats(gltf, out_idx, "VEC3")
-            decoded_outputs[out_idx] = [
-                (floats[i], floats[i + 1], floats[i + 2])
-                for i in range(0, len(floats), 3)
-            ]
-        return decoded_outputs[out_idx]
+    sample, translated = _decode_sample(gltf, sample_index)
+    joint_names = sample["joint_names"]
+    rot_mats    = sample["local_rot_mats"]
+    root_pos    = sample["posed_joints"]
+    num_frames  = int(sample["num_frames"])
 
     pose = armature_obj.pose
     _ns = bone_namespace(pose)
@@ -436,62 +399,41 @@ def splice_gltf_into_action(
 
     # Step 2 — insert new keys from the gltf, filtered to the target range.
     # Same coordinate-conversion chain as bake_gltf_to_armature.
-    for ch in channels:
-        target = ch.get("target") or {}
-        if target.get("path") != ROTATION_PATH:
-            continue
-        node_idx = target.get("node")
-        if node_idx is None or node_idx >= len(nodes):
-            continue
-        joint_name = nodes[node_idx].get("name", "")
+    for j, joint_name in enumerate(joint_names):
         bone = resolve_joint_bone(pose, joint_name, _ns)
         if bone is None:
             continue
 
-        sampler_idx = ch["sampler"]
-        timestamps  = _input_for(sampler_idx)
-        quats       = _quats_for(sampler_idx)
-
         ML     = bone.bone.matrix_local.to_3x3()
         ML_inv = ML.transposed()
 
-        for ts, q_mmcp in zip(timestamps, quats):
-            frame = _frame_from_time(ts, gltf, request_start_frame)
+        for t in range(num_frames):
+            frame = request_start_frame + t
             if not (fs_target <= frame <= fe_target):
                 continue
-            qx, qy, qz, qw = q_mmcp
-            R_mmcp          = Quaternion((qw, qx, qy, qz)).to_matrix()
+            R_mmcp          = _rot_matrix(rot_mats, t, j)
             R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
             R_blender_arm   = mw_rot_t @ R_blender_world @ mw_rot
             R_bone          = ML_inv @ R_blender_arm @ ML
             bone.rotation_quaternion = R_bone.to_quaternion()
             bone.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
-    for ch in channels:
-        target = ch.get("target") or {}
-        if target.get("path") != TRANSLATION_PATH:
+    for j, joint_name in enumerate(joint_names):
+        if joint_name not in translated:
             continue
-        node_idx = target.get("node")
-        if node_idx is None or node_idx >= len(nodes):
-            continue
-        joint_name = nodes[node_idx].get("name", "")
         bone = resolve_joint_bone(pose, joint_name, _ns)
         if bone is None:
             continue
-
-        sampler_idx = ch["sampler"]
-        timestamps  = _input_for(sampler_idx)
-        positions   = _vec3s_for(sampler_idx)
 
         rest_head = bone.bone.head_local
         ML        = bone.bone.matrix_local.to_3x3()
         ML_T      = ML.transposed()
 
-        for ts, p_mmcp in zip(timestamps, positions):
-            frame = _frame_from_time(ts, gltf, request_start_frame)
+        for t in range(num_frames):
+            frame = request_start_frame + t
             if not (fs_target <= frame <= fe_target):
                 continue
-            world     = Vector(coords.mmcp_pos_to_blender(p_mmcp))
+            world     = Vector(coords.mmcp_pos_to_blender(root_pos[t, j].tolist()))
             arm_local = arm_world_inv @ world
             delta     = arm_local - rest_head
             bone.location = ML_T @ delta
@@ -591,43 +533,12 @@ def bake_gltf_to_actions_per_block(
     if sample_index < 0 or sample_index >= len(animations):
         raise ValueError(f"sample_index {sample_index} out of range (0..{len(animations) - 1})")
 
-    nodes    = gltf.get("nodes") or []
-    anim     = animations[sample_index]
-    samplers = anim.get("samplers") or []
-    channels = anim.get("channels") or []
-
-    # Same dedup-on-output decoding as the single-action path.
-    decoded_outputs: dict[int, list[tuple]] = {}
-    decoded_inputs:  dict[int, list[float]] = {}
-
-    def _input_for(idx: int) -> list[float]:
-        s = samplers[idx]
-        ii = s["input"]
-        if ii not in decoded_inputs:
-            decoded_inputs[ii] = _read_floats(gltf, ii, "SCALAR")
-        return decoded_inputs[ii]
-
-    def _quats_for(idx: int) -> list[tuple[float, float, float, float]]:
-        s = samplers[idx]
-        oi = s["output"]
-        if oi not in decoded_outputs:
-            f = _read_floats(gltf, oi, "VEC4")
-            decoded_outputs[oi] = [
-                (f[i], f[i + 1], f[i + 2], f[i + 3])
-                for i in range(0, len(f), 4)
-            ]
-        return decoded_outputs[oi]
-
-    def _vec3s_for(idx: int) -> list[tuple[float, float, float]]:
-        s = samplers[idx]
-        oi = s["output"]
-        if oi not in decoded_outputs:
-            f = _read_floats(gltf, oi, "VEC3")
-            decoded_outputs[oi] = [
-                (f[i], f[i + 1], f[i + 2])
-                for i in range(0, len(f), 3)
-            ]
-        return decoded_outputs[oi]
+    # One decode pass for the whole document; every block indexes into it.
+    sample, translated = _decode_sample(gltf, sample_index)
+    joint_names = sample["joint_names"]
+    rot_mats    = sample["local_rot_mats"]
+    root_pos    = sample["posed_joints"]
+    num_frames  = int(sample["num_frames"])
 
     pose = armature_obj.pose
     _ns = bone_namespace(pose)
@@ -695,22 +606,12 @@ def bake_gltf_to_actions_per_block(
             fc.keyframe_points.foreach_set("co", full)
             fc.update()
 
-        # Rotation channels (one per non-root bone, plus root).
-        for ch in channels:
-            target = ch.get("target") or {}
-            if target.get("path") != ROTATION_PATH:
-                continue
-            node_idx = target.get("node")
-            if node_idx is None or node_idx >= len(nodes):
-                continue
-            joint_name = nodes[node_idx].get("name", "")
+        # Rotation tracks (one per non-root bone, plus root).
+        for j, joint_name in enumerate(joint_names):
             bone = resolve_joint_bone(pose, joint_name, _ns)
             if bone is None:
                 skipped.append(joint_name)
                 continue
-
-            timestamps = _input_for(ch["sampler"])
-            quats      = _quats_for(ch["sampler"])
 
             ML     = bone.bone.matrix_local.to_3x3()
             ML_inv = ML.transposed()
@@ -722,12 +623,11 @@ def bake_gltf_to_actions_per_block(
             buf_z: list[float] = []
             buf_f: list[int]   = []
 
-            for ts, q_mmcp in zip(timestamps, quats):
-                frame = _frame_from_time(ts, gltf, request_start_frame)
+            for t in range(num_frames):
+                frame = request_start_frame + t
                 if not (fs <= frame <= fe):
                     continue
-                qx, qy, qz, qw = q_mmcp
-                R_mmcp          = Quaternion((qw, qx, qy, qz)).to_matrix()
+                R_mmcp          = _rot_matrix(rot_mats, t, j)
                 R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
                 R_blender_arm   = mw_rot_t @ R_blender_world @ mw_rot
                 R_bone          = ML_inv @ R_blender_arm @ ML
@@ -743,22 +643,14 @@ def bake_gltf_to_actions_per_block(
             _write_kps(_fc(data_path, 2), buf_f, buf_y)
             _write_kps(_fc(data_path, 3), buf_f, buf_z)
 
-        # Translation channels (root bone only in practice).
-        for ch in channels:
-            target = ch.get("target") or {}
-            if target.get("path") != TRANSLATION_PATH:
+        # Translation tracks (root bone only in practice).
+        for j, joint_name in enumerate(joint_names):
+            if joint_name not in translated:
                 continue
-            node_idx = target.get("node")
-            if node_idx is None or node_idx >= len(nodes):
-                continue
-            joint_name = nodes[node_idx].get("name", "")
             bone = resolve_joint_bone(pose, joint_name, _ns)
             if bone is None:
                 skipped.append(joint_name)
                 continue
-
-            timestamps = _input_for(ch["sampler"])
-            positions  = _vec3s_for(ch["sampler"])
 
             rest_head = bone.bone.head_local
             ML        = bone.bone.matrix_local.to_3x3()
@@ -770,11 +662,11 @@ def bake_gltf_to_actions_per_block(
             buf_z: list[float] = []
             buf_f: list[int]   = []
 
-            for ts, p_mmcp in zip(timestamps, positions):
-                frame = _frame_from_time(ts, gltf, request_start_frame)
+            for t in range(num_frames):
+                frame = request_start_frame + t
                 if not (fs <= frame <= fe):
                     continue
-                world     = Vector(coords.mmcp_pos_to_blender(p_mmcp))
+                world     = Vector(coords.mmcp_pos_to_blender(root_pos[t, j].tolist()))
                 arm_local = arm_world_inv @ world
                 delta     = arm_local - rest_head
                 local_t   = ML_T @ delta
@@ -1752,10 +1644,11 @@ def bake_single_pose(
     if not animations or sample_index >= len(animations):
         raise ValueError("response is missing the requested sample")
 
-    nodes    = gltf.get("nodes") or []
-    anim     = animations[sample_index]
-    samplers = anim.get("samplers") or []
-    channels = anim.get("channels") or []
+    sample, translated = _decode_sample(gltf, sample_index)
+    joint_names = sample["joint_names"]
+    rot_mats    = sample["local_rot_mats"]
+    root_pos    = sample["posed_joints"]
+    num_frames  = int(sample["num_frames"])
 
     # Armature must have an action to receive keyframes. Create one if needed.
     if armature_obj.animation_data is None:
@@ -1781,63 +1674,51 @@ def bake_single_pose(
         )
 
     written = 0
-    for ch in channels:
-        target = ch.get("target") or {}
-        path = target.get("path")
-        if path == TRANSLATION_PATH and root_translation == "skip":
-            continue
-        if path not in (ROTATION_PATH, TRANSLATION_PATH):
-            continue
+    for j, joint_name in enumerate(joint_names):
+        paths = [ROTATION_PATH]
+        if joint_name in translated and root_translation != "skip":
+            paths.append(TRANSLATION_PATH)
 
-        node_idx = target.get("node")
-        if node_idx is None or node_idx >= len(nodes):
-            continue
-        joint_name = nodes[node_idx].get("name", "")
         bone = resolve_joint_bone(pose, joint_name, _ns)
         if bone is None:
             continue
         if joint_name_filter is not None and joint_name not in joint_name_filter:
             continue
-
-        sampler = samplers[ch["sampler"]]
+        if source_frame >= num_frames:
+            continue
 
         ML = bone.bone.matrix_local.to_3x3()
 
-        if path == ROTATION_PATH:
-            quats = _read_floats(gltf, sampler["output"], "VEC4")
-            if source_frame * 4 + 4 > len(quats):
-                continue
-            qx, qy, qz, qw = quats[source_frame * 4:(source_frame + 1) * 4]
-            R_mmcp = Quaternion((qw, qx, qy, qz)).to_matrix()
-            R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
-            R_blender_arm = mw_rot_t @ R_blender_world @ mw_rot
-            R_bone = ML.transposed() @ R_blender_arm @ ML
-            bone.rotation_quaternion = R_bone.to_quaternion()
-            bone.keyframe_insert(data_path="rotation_quaternion", frame=target_frame)
-        else:
-            vec3s = _read_floats(gltf, sampler["output"], "VEC3")
-            if source_frame * 3 + 3 > len(vec3s):
-                continue
-            p_mmcp = tuple(vec3s[source_frame * 3:(source_frame + 1) * 3])
-            pose_world = Vector(coords.mmcp_pos_to_blender(p_mmcp))
+        for path in paths:
+            if path == ROTATION_PATH:
+                R_mmcp = _rot_matrix(rot_mats, source_frame, j)
+                R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
+                R_blender_arm = mw_rot_t @ R_blender_world @ mw_rot
+                R_bone = ML.transposed() @ R_blender_arm @ ML
+                bone.rotation_quaternion = R_bone.to_quaternion()
+                bone.keyframe_insert(data_path="rotation_quaternion", frame=target_frame)
+            else:
+                pose_world = Vector(
+                    coords.mmcp_pos_to_blender(root_pos[source_frame, j].tolist())
+                )
 
-            if root_translation == "height_only":
-                # Keep the bone's current world xy (whatever the user has
-                # placed the rig at, including any prior keyframe at this
-                # frame) and only override world z with the generated pose's
-                # height. Lets a "crouching" pose drop toward the floor
-                # without yanking the character to the canonical origin in xy.
-                current_world = armature_obj.matrix_world @ bone.head
-                target_world = Vector((current_world.x, current_world.y, pose_world.z))
-            else:  # "full"
-                target_world = pose_world
+                if root_translation == "height_only":
+                    # Keep the bone's current world xy (whatever the user has
+                    # placed the rig at, including any prior keyframe at this
+                    # frame) and only override world z with the generated pose's
+                    # height. Lets a "crouching" pose drop toward the floor
+                    # without yanking the character to the canonical origin in xy.
+                    current_world = armature_obj.matrix_world @ bone.head
+                    target_world = Vector((current_world.x, current_world.y, pose_world.z))
+                else:  # "full"
+                    target_world = pose_world
 
-            arm_local = armature_obj.matrix_world.inverted() @ target_world
-            delta = arm_local - bone.bone.head_local
-            bone.location = ML.transposed() @ delta
-            bone.keyframe_insert(data_path="location", frame=target_frame)
+                arm_local = armature_obj.matrix_world.inverted() @ target_world
+                delta = arm_local - bone.bone.head_local
+                bone.location = ML.transposed() @ delta
+                bone.keyframe_insert(data_path="location", frame=target_frame)
 
-        written += 1
+            written += 1
 
     if written:
         if rig_probe.is_control_rig(armature_obj):
@@ -1858,71 +1739,3 @@ def bake_single_pose(
         )
 
     return written
-
-
-# ---------------------------------------------------------------------------
-# Frame index helper
-# ---------------------------------------------------------------------------
-
-def _frame_from_time(timestamp_seconds: float, gltf: dict[str, Any], start_frame: int) -> int:
-    """Convert a sampler timestamp (seconds) to a Blender frame index.
-
-    The MMCP_motion extension publishes ``fps`` so the addon can place
-    keyframes on integer scene frames regardless of Blender's frame rate
-    setting.
-    """
-    fps = float(read_extension_metadata(gltf).get("fps") or 30.0)
-    return int(round(timestamp_seconds * fps)) + start_frame
-
-
-# ---------------------------------------------------------------------------
-# glTF accessor decoding (SCALAR, VEC3, VEC4 of float32 only — that's what
-# the MMCP server emits in v1).
-# ---------------------------------------------------------------------------
-
-_TYPE_COMPONENTS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
-_FLOAT_COMPONENT = 5126   # glTF componentType
-
-
-def _read_floats(gltf: dict[str, Any], accessor_idx: int, expected_type: str) -> list[float]:
-    accessors    = gltf.get("accessors") or []
-    buffer_views = gltf.get("bufferViews") or []
-    buffers      = gltf.get("buffers") or []
-
-    accessor = accessors[accessor_idx]
-    if accessor.get("componentType") != _FLOAT_COMPONENT:
-        raise ValueError(
-            f"accessor {accessor_idx}: expected float32 (5126), got {accessor.get('componentType')}"
-        )
-    if accessor.get("type") != expected_type:
-        raise ValueError(
-            f"accessor {accessor_idx}: expected type {expected_type}, got {accessor.get('type')}"
-        )
-
-    components = _TYPE_COMPONENTS[expected_type]
-    count      = int(accessor["count"])
-    n_floats   = count * components
-
-    view = buffer_views[accessor["bufferView"]]
-    buf  = buffers[view["buffer"]]
-    raw  = _decode_buffer(buf)
-
-    start = int(view.get("byteOffset", 0)) + int(accessor.get("byteOffset", 0))
-    end   = start + n_floats * 4
-    if end > len(raw):
-        raise ValueError(
-            f"accessor {accessor_idx}: range {start}..{end} exceeds buffer length {len(raw)}"
-        )
-
-    return list(struct.unpack(f"<{n_floats}f", raw[start:end]))
-
-
-def _decode_buffer(buf: dict[str, Any]) -> bytes:
-    uri = buf.get("uri")
-    if not uri:
-        # External buffer (.bin sidecar) — not produced by mmcp_server in v1.
-        raise ValueError("external buffer URIs are not supported")
-    if not uri.startswith("data:"):
-        raise ValueError(f"non-data URI buffers not supported: {uri[:40]}…")
-    _, b64 = uri.split(",", 1)
-    return base64.b64decode(b64)
