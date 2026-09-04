@@ -29,6 +29,31 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Changed
 
+- **The addon shares its non-Blender half with the other Animatica plugins.**
+  Assembling the MMCP request, talking to the server and decoding the glTF
+  response are no longer written here: they come from `animatica_core`, the
+  package the 3ds Max and MotionBuilder plugins also use, vendored into
+  `animatica_blender/animatica_core/` at the commit named in `CORE-VERSION`.
+  What stays Blender's own is the UI, the bake into actions and NLA strips,
+  the control-rig handling and the axis conversion. Measured against the
+  cross-host A/B checkpoints, the requests the addon sends are byte-identical
+  to the ones it sent before, and a baked clip differs by at most 2.4e-06
+  degrees of rotation.
+
+  Four things change for users:
+
+  - **A clip longer than the model allows is refused before it is sent**,
+    instead of being rejected by the server after the round trip. The panel
+    warns as it always did.
+  - **The builder's warnings now appear in Blender.** An effector pin with no
+    body context, or a scene running at a different frame rate than the model,
+    used to be noted only in the panel or not at all.
+  - **A path curve drawn without per-point timing sends its control points**
+    spread evenly across the range, rather than a densely resampled polyline.
+    Curves that carry their own per-point frames are unaffected.
+  - **Pose generation respects the CFG panel.** The pose request never carried
+    guidance settings before, so those sliders did nothing for it.
+
 - **Renamed from Proscenium to Animatica.** The rename reaches every
   identifier, not just the labels: the Python package is now
   `animatica_blender`, operators are `bpy.ops.animatica.*`, scene settings
