@@ -440,6 +440,15 @@ def _marker_to_wire(
             "frame":             frame,
             "joint_rotations":   jr,
         }
+        # ``fill_mode`` ("rest" | "generate") steers the server's
+        # FullBodyConstraintSet: whether joints left unkeyed by this pin stay
+        # in rest pose or get generated. Blender sets it (constraints_ui.py
+        # sample_pose_keyframes); MoBu/Max don't, so the key is emitted only
+        # when present and non-empty -- their requests stay byte-identical.
+        # No allowed-value validation here; the server owns that.
+        fill_mode = value.get("fill_mode")
+        if fill_mode:
+            out["fill_mode"] = fill_mode
         rp = value.get("root_position")
         if rp is not None and len(rp) == 3:
             rx, rz = float(rp[0]) - ox, float(rp[2]) - oz
