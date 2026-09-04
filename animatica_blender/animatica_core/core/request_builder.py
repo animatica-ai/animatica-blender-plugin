@@ -81,7 +81,30 @@ def compute_frame_range(
 # Segments
 # ---------------------------------------------------------------------------
 
-def build_segments(prompts: Iterable[Any], frame_range: tuple[int, int]) -> list[dict[str, Any]]:
+def _segment_seed(block: Any) -> int:
+    """One prompt block's own seed, or 0 for "no per-segment seed".
+
+    Reads ``block.seed`` first, then ``block.params["seed"]`` (``PromptBox``
+    carries per-block settings in its ``params`` dict). Only a concrete
+    ``int`` greater than zero counts — 0 means "let the server pick", and
+    ``bool`` is not a seed even though Python says it is an ``int``.
+    """
+    raw = getattr(block, "seed", None)
+    if raw is None:
+        params = getattr(block, "params", None)
+        if isinstance(params, dict):
+            raw = params.get("seed")
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return 0
+    return raw if raw > 0 else 0
+
+
+def build_segments(
+    prompts: Iterable[Any],
+    frame_range: tuple[int, int],
+    *,
+    supports_segment_seed: bool = False,
+) -> list[dict[str, Any]]:
     """Convert ``PromptBox`` instances into MMCP segments.
 
     Strategy mirrors proscenium:
@@ -93,8 +116,16 @@ def build_segments(prompts: Iterable[Any], frame_range: tuple[int, int]) -> list
         UnconditionedSegment so the model picks a sensible interpolation.
       * Overlaps are resolved by bumping the next block past the previous
         block's end.
+
+    When ``supports_segment_seed`` is True (the connected model advertises
+    ``supports_segment_seed`` in ``/capabilities``), each block's own seed
+    (>0) rides along on its segment so one full-timeline Generate can give
+    every block a distinct, reproducible seed. Against servers without that
+    capability the seed is omitted — they reject unknown segment fields
+    (``extra="forbid"``) — and the request-level seed drives the whole clip
+    as before. Gap-filling segments never carry a seed.
     """
-    enabled: list[tuple[int, int, str]] = []
+    enabled: list[tuple[int, int, str, int]] = []
     for b in prompts:
         if not getattr(b, "enabled", True):
             continue
@@ -105,39 +136,48 @@ def build_segments(prompts: Iterable[Any], frame_range: tuple[int, int]) -> list
         e = min(e_raw, frame_range[1])
         if e < s:
             continue
-        enabled.append((s, e, text))
+        enabled.append((s, e, text, _segment_seed(b)))
 
     if not enabled:
         return []
 
     enabled.sort(key=lambda t: t[0])
 
-    cleaned: list[tuple[int, int, str]] = []
+    cleaned: list[tuple[int, int, str, int]] = []
     prev_end = frame_range[0] - 1
-    for s, e, p in enabled:
+    for s, e, p, seed in enabled:
         s = max(s, prev_end + 1)
         if s > e:
             continue
-        cleaned.append((s, e, p))
+        cleaned.append((s, e, p, seed))
         prev_end = e
     if not cleaned:
         return []
 
+    def _with_seed(segment: dict[str, Any], seed: int) -> dict[str, Any]:
+        # Attach the block's seed only when the server can read it and the
+        # block set a concrete value (0 == "let the server pick").
+        if supports_segment_seed and seed > 0:
+            segment["seed"] = seed
+        return segment
+
     segments: list[dict[str, Any]] = []
     cursor = frame_range[0]
-    for s, e, prompt in cleaned:
+    for s, e, prompt, seed in cleaned:
         if s > cursor:
             segments.append({"type": "unconditioned", "duration_frames": s - cursor})
         if prompt:
-            segments.append({
+            segments.append(_with_seed({
                 "type":            "text",
                 "prompt":          prompt,
                 "duration_frames": e - s + 1,
-            })
+            }, seed))
         else:
             # Empty/whitespace prompt -> unconditioned (TextSegment fails
             # server-side validation on min_length=1).
-            segments.append({"type": "unconditioned", "duration_frames": e - s + 1})
+            segments.append(_with_seed(
+                {"type": "unconditioned", "duration_frames": e - s + 1}, seed,
+            ))
         cursor = e + 1
 
     if cursor <= frame_range[1]:
@@ -1508,23 +1548,37 @@ def build_options(
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def _normalize_segments(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _normalize_segments(
+    raw: list[dict[str, Any]],
+    *,
+    supports_segment_seed: bool = False,
+) -> list[dict[str, Any]]:
     """Normalize caller-supplied ``{"text","duration_frames"}`` segments to wire shape.
 
     Drops empty-text segments, emits
     ``{"type":"text","prompt":<stripped>,"duration_frames":max(1,int)}``.
     Preserves the caller's duration values verbatim (no ``+1`` reframing).
+
+    A caller-supplied per-segment ``seed`` survives only when the model
+    advertises ``supports_segment_seed`` — same gate as
+    :func:`build_segments`, since older servers reject unknown segment
+    fields (``extra="forbid"``).
     """
     out: list[dict[str, Any]] = []
     for s in raw:
         text = (s.get("text") or "").strip()
         if not text:
             continue
-        out.append({
+        seg: dict[str, Any] = {
             "type":            "text",
             "prompt":          text,
             "duration_frames": max(1, int(s["duration_frames"])),
-        })
+        }
+        if supports_segment_seed:
+            seed = s.get("seed")
+            if isinstance(seed, int) and not isinstance(seed, bool) and seed > 0:
+                seg["seed"] = seed
+        out.append(seg)
     return out
 
 
@@ -1686,10 +1740,16 @@ def build_request(
         frame_range = (_fr_lo, _fr_hi)
     else:
         frame_range = compute_frame_range(prompts, fallback)
+    # Per-segment seeds only reach the wire when the model says it reads them
+    # (see build_segments) — flat boolean on the /capabilities model entry,
+    # read like supports_retargeting.
+    supports_segment_seed = bool(model_caps.get("supports_segment_seed"))
     if segments_override is not None:
-        segments = _normalize_segments(segments_override)
+        segments = _normalize_segments(
+            segments_override, supports_segment_seed=supports_segment_seed)
     else:
-        segments = build_segments(prompts, frame_range)
+        segments = build_segments(
+            prompts, frame_range, supports_segment_seed=supports_segment_seed)
     total_frames = (
         sum(s["duration_frames"] for s in segments)
         if segments
