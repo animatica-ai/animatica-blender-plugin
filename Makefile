@@ -7,16 +7,20 @@
 # `make install` symlinks the source tree into your Blender 5+ addons
 # directory so editing files lands live in Blender on the next reload.
 # Override BLENDER_ADDONS_DIR if your install path is non-standard.
+#
+# `make sync-core` checks the vendored SDK copy against the pin in
+# CORE-VERSION; `make sync-core WRITE=1` re-vendors it at that pin.
 
 ADDON         := animatica_blender
 VERSION       := $(shell python3 -c "import re,pathlib;t=pathlib.Path('$(ADDON)/__init__.py').read_text();m=re.search(r'\"version\":\s*\(([\d, ]+)\)',t);print('.'.join(p.strip() for p in m.group(1).split(',')))")
+CORE          := $(shell cat $(ADDON)/CORE-VERSION)
 DIST          := dist
 ZIP           := $(DIST)/animatica-blender-$(VERSION).zip
 
 # macOS default Blender 5.x addon path. Override on Linux/Windows.
 BLENDER_ADDONS_DIR ?= $(HOME)/Library/Application Support/Blender/5.0/scripts/addons
 
-.PHONY: zip clean install uninstall info
+.PHONY: zip clean install uninstall info sync-core
 
 zip: $(ZIP)
 
@@ -48,8 +52,12 @@ clean:
 	rm -rf $(DIST)
 	find $(ADDON) -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 
+sync-core:
+	python3 scripts/sync_core.py $(if $(WRITE),--write,)
+
 info:
 	@echo "addon:     $(ADDON)"
 	@echo "version:   $(VERSION)"
+	@echo "core:      $(CORE)"
 	@echo "zip:       $(ZIP)"
 	@echo "install:   $(BLENDER_ADDONS_DIR)/$(ADDON)"
