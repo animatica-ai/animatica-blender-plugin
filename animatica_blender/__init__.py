@@ -20,6 +20,28 @@ bl_info = {
     "category": "Animation",
 }
 
+import os
+import sys
+
+_ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _ensure_on_sys_path() -> None:
+    """Put the addon directory on ``sys.path`` so the core vendored beside this
+    package is importable as top-level ``animatica_core`` — the name its own
+    absolute imports use.
+
+    Runs at module scope, not from ``register()``: the submodules imported
+    below import core at module level, so by the time ``register()`` ran it
+    would already be too late. ``register()`` calls it again, because
+    ``unregister()`` takes the entry back out.
+    """
+    if _ADDON_DIR not in sys.path:
+        sys.path.insert(0, _ADDON_DIR)
+
+
+_ensure_on_sys_path()
+
 import bpy
 from bpy.app.handlers import persistent
 
@@ -123,7 +145,73 @@ def _purge_stale_handlers(handler_list, fn_name: str) -> None:
             handler_list.remove(h)
 
 
+def _core_version(root: str) -> str:
+    """The SDK commit the core under *root* was vendored from, if it says."""
+    try:
+        with open(os.path.join(root, "CORE-VERSION")) as fh:
+            return fh.read().strip() or "(empty)"
+    except OSError:
+        return "(no CORE-VERSION)"
+
+
+def _warn_on_foreign_core() -> None:
+    """Warn if some other addon already owns the ``animatica_core`` name.
+
+    Two addons vendoring core into one Blender share a single top-level module:
+    whichever registered first wins, and the other silently runs against a core
+    it was not pinned to. Nothing here can fix that — say which two copies are
+    involved and carry on.
+    """
+    mod = sys.modules.get("animatica_core")
+    if mod is None:
+        return
+    path = getattr(mod, "__file__", None)
+    root = os.path.dirname(os.path.dirname(os.path.abspath(path))) if path else None
+    if root is not None and os.path.normcase(root) == os.path.normcase(_ADDON_DIR):
+        return
+    print(f"[animatica] animatica_core is already imported from another addon: "
+          f"{path or '(unknown location)'} "
+          f"[{_core_version(root) if root else '(no CORE-VERSION)'}]; "
+          f"this addon's own copy at {os.path.join(_ADDON_DIR, 'animatica_core')} "
+          f"[{_core_version(_ADDON_DIR)}] will not be used.")
+
+
+def _register_core() -> None:
+    """Declare this host to core. Identity only — no bridge: the half of core
+    this addon shares does not ask the host to touch the scene."""
+    _ensure_on_sys_path()
+    _warn_on_foreign_core()
+
+    from animatica_core import host
+    host.register(key="blender", product_name="Animatica for Blender")
+
+
+def _unregister_core() -> None:
+    """Drop the host registration, the loaded core modules and the path entry.
+
+    A live DCC otherwise keeps the old ``animatica_core.*`` modules across an
+    addon reload, so a re-vendored core would not take effect until Blender
+    restarts (motionmcp-client-sdk docs/VENDORING.md, "the trap: a live DCC
+    caches the old modules")."""
+    try:
+        from animatica_core import host
+    except ImportError:
+        pass
+    else:
+        if host.is_registered():
+            host.unregister()
+
+    for name in [m for m in sys.modules
+                 if m == "animatica_core" or m.startswith("animatica_core.")]:
+        del sys.modules[name]
+
+    while _ADDON_DIR in sys.path:
+        sys.path.remove(_ADDON_DIR)
+
+
 def register():
+    _register_core()
+
     properties.register()
     operators.register()
     bpy.utils.register_class(canonical_skeleton.ANIMATICA_OT_import_canonical_skeleton)
@@ -154,3 +242,6 @@ def unregister():
     bpy.utils.unregister_class(canonical_skeleton.ANIMATICA_OT_import_canonical_skeleton)
     operators.unregister()
     properties.unregister()
+
+    # Last: the classes above may still reach into core while unregistering.
+    _unregister_core()
