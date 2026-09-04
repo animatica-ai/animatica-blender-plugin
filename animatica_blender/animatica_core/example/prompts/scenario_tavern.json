@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "segments": [
+    {
+      "text": "A person walks up to a bar and leans against it",
+      "start_frame": 0,
+      "end_frame": 96,
+      "color_idx": 0
+    },
+    {
+      "text": "A person leaning against a bar picks up a mug and drinks",
+      "start_frame": 96,
+      "end_frame": 180,
+      "color_idx": 1
+    },
+    {
+      "text": "A person sets down a mug and turns to walk away",
+      "start_frame": 180,
+      "end_frame": 252,
+      "color_idx": 2
+    }
+  ],
+  "constraints": []
+}

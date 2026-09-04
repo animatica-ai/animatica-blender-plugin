@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "segments": [
+    {
+      "text": "An old person walks forward slowly with a slight hunch",
+      "start_frame": 0,
+      "end_frame": 120,
+      "color_idx": 0
+    },
+    {
+      "text": "An old person stops, steadies themselves, and slowly sits down",
+      "start_frame": 120,
+      "end_frame": 228,
+      "color_idx": 1
+    }
+  ],
+  "constraints": []
+}

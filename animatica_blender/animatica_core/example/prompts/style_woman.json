@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "segments": [
+    {
+      "text": "A woman walks forward at a relaxed pace",
+      "start_frame": 0,
+      "end_frame": 96,
+      "color_idx": 0
+    },
+    {
+      "text": "A woman stops and waves with one hand",
+      "start_frame": 96,
+      "end_frame": 168,
+      "color_idx": 1
+    }
+  ],
+  "constraints": []
+}

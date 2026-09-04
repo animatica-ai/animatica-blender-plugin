@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "segments": [
+    {
+      "text": "A soldier walks forward cautiously, scanning from side to side",
+      "start_frame": 0,
+      "end_frame": 96,
+      "color_idx": 0
+    },
+    {
+      "text": "A cautious soldier crouches down low to take cover",
+      "start_frame": 96,
+      "end_frame": 168,
+      "color_idx": 1
+    },
+    {
+      "text": "A crouching soldier raises a rifle and aims forward",
+      "start_frame": 168,
+      "end_frame": 240,
+      "color_idx": 2
+    }
+  ],
+  "constraints": []
+}

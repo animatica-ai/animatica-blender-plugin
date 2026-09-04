@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "segments": [
+    {
+      "text": "A person raises both fists into a boxing stance",
+      "start_frame": 0,
+      "end_frame": 60,
+      "color_idx": 0
+    },
+    {
+      "text": "A person in a boxing stance throws a straight punch with the right hand",
+      "start_frame": 60,
+      "end_frame": 132,
+      "color_idx": 1
+    },
+    {
+      "text": "A person throws a punch and then dodges backward",
+      "start_frame": 132,
+      "end_frame": 216,
+      "color_idx": 2
+    }
+  ],
+  "constraints": []
+}

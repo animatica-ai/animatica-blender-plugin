@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "segments": [
+    {
+      "text": "A person moves like a lumbering monster, hunched low with heavy stomping steps",
+      "start_frame": 0,
+      "end_frame": 120,
+      "color_idx": 0
+    },
+    {
+      "text": "A hunched, monstrous person swings both arms wide and roars",
+      "start_frame": 120,
+      "end_frame": 216,
+      "color_idx": 1
+    }
+  ],
+  "constraints": []
+}

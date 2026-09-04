@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "segments": [
+    {
+      "text": "A person carefully balances with arms out while walking along a narrow edge",
+      "start_frame": 0,
+      "end_frame": 120,
+      "color_idx": 0
+    },
+    {
+      "text": "A person balancing on a narrow edge wobbles and regains balance",
+      "start_frame": 120,
+      "end_frame": 216,
+      "color_idx": 1
+    },
+    {
+      "text": "A person steadies themselves and steps off the edge onto solid ground",
+      "start_frame": 216,
+      "end_frame": 288,
+      "color_idx": 2
+    }
+  ],
+  "constraints": []
+}
