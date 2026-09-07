@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "segments": [
+    {
+      "text": "walk forward at a relaxed pace",
+      "start_frame": 0,
+      "end_frame": 48,
+      "color_idx": 0
+    },
+    {
+      "text": "turn to the left and slow down",
+      "start_frame": 48,
+      "end_frame": 96,
+      "color_idx": 1
+    },
+    {
+      "text": "wave with the right hand",
+      "start_frame": 96,
+      "end_frame": 144,
+      "color_idx": 2
+    }
+  ],
+  "constraints": []
+}

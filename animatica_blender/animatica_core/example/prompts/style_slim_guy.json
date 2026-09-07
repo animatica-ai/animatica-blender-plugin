@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "segments": [
+    {
+      "text": "A slim, light person walks forward with a quick, springy step",
+      "start_frame": 0,
+      "end_frame": 96,
+      "color_idx": 0
+    },
+    {
+      "text": "A slim, light person stops and shifts their weight casually",
+      "start_frame": 96,
+      "end_frame": 168,
+      "color_idx": 1
+    }
+  ],
+  "constraints": []
+}

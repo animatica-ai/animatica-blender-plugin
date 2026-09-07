@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "segments": [
+    {
+      "text": "A person raises a sword into a ready guard",
+      "start_frame": 0,
+      "end_frame": 60,
+      "color_idx": 0
+    },
+    {
+      "text": "A person in a sword guard swings a heavy overhead strike",
+      "start_frame": 60,
+      "end_frame": 138,
+      "color_idx": 1
+    },
+    {
+      "text": "A person swings a sword and then steps back to block",
+      "start_frame": 138,
+      "end_frame": 222,
+      "color_idx": 2
+    }
+  ],
+  "constraints": []
+}

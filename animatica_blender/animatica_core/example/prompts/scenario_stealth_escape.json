@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "segments": [
+    {
+      "text": "A stealthy person sneaks forward in a low crouch",
+      "start_frame": 0,
+      "end_frame": 96,
+      "color_idx": 0
+    },
+    {
+      "text": "A crouching person presses against a wall and peeks around the corner",
+      "start_frame": 96,
+      "end_frame": 180,
+      "color_idx": 1
+    },
+    {
+      "text": "A scared person sprints forward to escape",
+      "start_frame": 180,
+      "end_frame": 264,
+      "color_idx": 2
+    }
+  ],
+  "constraints": []
+}

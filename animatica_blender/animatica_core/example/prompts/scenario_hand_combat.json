@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "segments": [
+    {
+      "text": "A person throws a quick jab with the left hand",
+      "start_frame": 0,
+      "end_frame": 60,
+      "color_idx": 0
+    },
+    {
+      "text": "A person follows a left jab with a right cross",
+      "start_frame": 60,
+      "end_frame": 120,
+      "color_idx": 1
+    },
+    {
+      "text": "A person throws a punch and then blocks with both arms",
+      "start_frame": 120,
+      "end_frame": 198,
+      "color_idx": 2
+    }
+  ],
+  "constraints": []
+}

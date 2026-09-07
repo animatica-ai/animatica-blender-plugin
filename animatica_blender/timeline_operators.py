@@ -1244,7 +1244,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         layout.label(text="0 = roll a fresh seed and pin it to this block", icon='INFO')
 
     def execute(self, context):
-        from . import constraints_ui, gltf_to_blender, mmcp_client, request_builder
+        from . import client_shim, core_adapter, gltf_to_blender, rig_probe
         from .operators import _live_target_armature_or_clear
 
         s = context.scene.animatica
@@ -1267,7 +1267,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             self.report({'ERROR'}, "Set a target armature first")
             return {'CANCELLED'}
 
-        model_caps = mmcp_client.cached_model(s.model_id)
+        model_caps = client_shim.cached_model(s.model_id)
         if model_caps is None:
             self.report({'ERROR'}, "Connect to the server first")
             return {'CANCELLED'}
@@ -1278,16 +1278,10 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             else None
         )
         if preview_action is None or not preview_action.name.startswith(
-            request_builder._GENERATED_ACTION_PREFIXES
+            rig_probe._GENERATED_ACTION_PREFIXES
         ):
             self.report({'ERROR'}, "Active action isn't a Animatica preview — generate first")
             return {'CANCELLED'}
-
-        source_action = (
-            bpy.data.actions.get(s.source_action_name)
-            if s.source_action_name
-            else None
-        )
 
         # Persist the user's seed choice onto the block so subsequent
         # regens pre-fill with it (matches the way pose-generate stashes
@@ -1304,23 +1298,23 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         from . import properties
         properties.save_blocks_to_armature(arm, s)
 
+        # Soft warnings from the shared builder are reported after the build;
+        # only a BuildError stops the regeneration.
+        build_warnings: list[str] = []
         try:
-            req, (fs, fe) = request_builder.build_request_for_block(
-                block_index=idx,
-                model_id=s.model_id,
-                model_caps=model_caps,
-                armature_obj=arm,
-                prompt_blocks=s.prompt_blocks,
-                settings=s,
-                scene=context.scene,
-                constraint_objects=constraints_ui.walk_scene_constraints(context.scene),
+            req = core_adapter.build_block_request(
+                context, s, arm, model_caps, block, build_warnings,
                 preview_action=preview_action,
-                source_action=source_action,
                 seed_override=used_seed,
             )
-        except request_builder.BuildError as exc:
+        except core_adapter.BuildError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
+        for w in build_warnings:
+            self.report({'WARNING'}, w)
+
+        # The splice range is the block's own inclusive frame range.
+        fs, fe = int(block.frame_start), int(block.frame_end)
 
         # Frames sent as constraints become KEYFRAME-typed anchors after the
         # splice; everything else from the bake gets typed GENERATED. Same
@@ -1344,9 +1338,11 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         s.cancel_requested = False
         s.generation_elapsed = 0
         self._start_time = time.time()
+        # URL and token are read HERE, on the main thread: the worker must
+        # not touch bpy.context.preferences.
         self._thread = threading.Thread(
             target=self._worker,
-            args=(mmcp_client.get_mmcp_url(), req),
+            args=(client_shim.get_mmcp_url(), client_shim.get_access_token(), req),
             daemon=True,
         )
         self._thread.start()
@@ -1356,16 +1352,17 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         wm.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
-    def _worker(self, server_url, req):
-        from . import mmcp_client
+    def _worker(self, server_url, access_token, req):
+        from . import client_shim
         try:
-            client = mmcp_client.MmcpClient(server_url)
-            self._result = client.generate(req)
+            self._result = client_shim.generate(
+                req, access_token=access_token, server_url=server_url,
+            )
         except Exception as exc:                          # noqa: BLE001 — surfaced to UI
             self._error = exc
 
     def modal(self, context, event):
-        from . import gltf_to_blender
+        from . import client_shim, gltf_to_blender
         from .operators import (
             _clear_quota_state,
             _live_target_armature_or_clear,
@@ -1390,7 +1387,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         if self._error is not None:
             self._cleanup(context)
             _stash_quota_state(s, self._error)
-            self.report({'ERROR'}, f"Regenerate failed: {self._error}")
+            self.report({'ERROR'}, f"Regenerate failed: {client_shim.describe_error(self._error)}")
             return {'CANCELLED'}
 
         if self._result is None:

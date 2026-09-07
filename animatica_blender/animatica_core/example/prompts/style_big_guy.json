@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "segments": [
+    {
+      "text": "A large, heavy person walks forward with a slow, lumbering gait",
+      "start_frame": 0,
+      "end_frame": 108,
+      "color_idx": 0
+    },
+    {
+      "text": "A large, heavy person comes to a stop and crosses their arms",
+      "start_frame": 108,
+      "end_frame": 192,
+      "color_idx": 1
+    }
+  ],
+  "constraints": []
+}

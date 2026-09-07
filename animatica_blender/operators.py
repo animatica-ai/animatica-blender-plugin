@@ -26,11 +26,12 @@ from bpy.types import Operator
 
 from . import (
     blender_compat,
+    client_shim,
     constraints_ui,
+    core_adapter,
     gltf_to_blender,
-    mmcp_client,
     properties,
-    request_builder,
+    rig_probe,
 )
 
 
@@ -54,7 +55,7 @@ def _is_motion_bake_action(action) -> bool:
     """True for Animatica motion-bake actions (preview or committed)."""
     return (
         action is not None
-        and action.name.startswith(request_builder._GENERATED_ACTION_PREFIXES)
+        and action.name.startswith(rig_probe._GENERATED_ACTION_PREFIXES)
     )
 
 
@@ -96,7 +97,7 @@ POSE_ACTION_NAME     = "Animatica_Pose"
 
 # Kept for back-compat with action references in older scenes — older bakes
 # wrote to ``Proscenium_Generated``, and pre-rename bakes to
-# ``Proscenium_Motion``; the prefix tuple in request_builder catches every
+# ``Proscenium_Motion``; the prefix tuple in rig_probe catches every
 # generation of the naming.
 GENERATED_ACTION_NAME = MOTION_ACTION_PREFIX
 
@@ -258,7 +259,7 @@ def _animatica_motion_actions() -> list:
     """Every motion-bake action the addon owns (current and legacy names)."""
     return [
         a for a in bpy.data.actions
-        if a.name.startswith(request_builder._GENERATED_ACTION_PREFIXES)
+        if a.name.startswith(rig_probe._GENERATED_ACTION_PREFIXES)
     ]
 
 
@@ -405,11 +406,11 @@ def _stash_quota_state(settings, exc) -> None:
     """If ``exc`` is a quota-exceeded MmcpError, mirror its message and
     upgrade URL onto the scene settings so the panel can render a
     persistent banner with an "Upgrade" action. No-op for other errors."""
-    if not isinstance(exc, mmcp_client.MmcpError):
+    if not isinstance(exc, client_shim.MmcpError):
         return
     if exc.code != "quota_exceeded":
         return
-    settings.quota_exceeded_message = exc.message or str(exc)
+    settings.quota_exceeded_message = str(exc)
     settings.quota_upgrade_url = (exc.details or {}).get("upgrade_url", "")
 
 
@@ -456,20 +457,20 @@ class ANIMATICA_OT_connect(Operator):
     )
 
     def execute(self, context):
-        url = mmcp_client.get_mmcp_url()
+        url = client_shim.get_mmcp_url()
         try:
-            client = mmcp_client.MmcpClient(url, timeout=30)
-            caps = client.capabilities(refresh=True)
-        except mmcp_client.MmcpError as exc:
-            mmcp_client.clear_capabilities(error=str(exc))
-            self.report({'ERROR'}, f"Cannot connect to {url}: {exc}")
+            caps = client_shim.fetch_capabilities(timeout=30)
+        except client_shim.MmcpError as exc:
+            msg = client_shim.describe_error(exc)
+            client_shim.clear_capabilities(error=msg)
+            self.report({'ERROR'}, f"Cannot connect to {url}: {msg}")
             return {'CANCELLED'}
         except Exception as exc:                         # noqa: BLE001 — defensive
-            mmcp_client.clear_capabilities(error=str(exc))
+            client_shim.clear_capabilities(error=str(exc))
             self.report({'ERROR'}, f"Cannot connect to {url}: {exc}")
             return {'CANCELLED'}
 
-        mmcp_client.store_capabilities(caps)
+        client_shim.store_capabilities(caps)
         models = [m.get("id") for m in caps.get("models", [])]
 
         settings = context.scene.animatica
@@ -523,7 +524,7 @@ class ANIMATICA_OT_generate(Operator):
             )
             return {'CANCELLED'}
 
-        model_caps = mmcp_client.cached_model(settings.model_id)
+        model_caps = client_shim.cached_model(settings.model_id)
         if model_caps is None:
             self.report({'ERROR'}, "Connect to the server first (Animatica panel → Connect)")
             return {'CANCELLED'}
@@ -563,19 +564,20 @@ class ANIMATICA_OT_generate(Operator):
                 else:
                     arm.animation_data.action = src
 
+        # Soft warnings from the shared builder (uncovered effector pins,
+        # starved segments, fps mismatch, …) are collected here and reported
+        # after the request is built — they don't stop the generation.
+        build_warnings: list[str] = []
         try:
-            req = request_builder.build_request(
-                model_id=settings.model_id,
-                model_caps=model_caps,
-                armature_obj=arm,
-                prompt_blocks=settings.prompt_blocks,
-                settings=settings,
-                scene=context.scene,
-                constraint_objects=constraints_ui.walk_scene_constraints(context.scene),
+            req = core_adapter.build_request(
+                context, settings, arm, model_caps,
+                settings.prompt_blocks, build_warnings,
             )
-        except request_builder.BuildError as exc:
+        except core_adapter.BuildError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
+        for w in build_warnings:
+            self.report({'WARNING'}, w)
 
         # Save the source action for Accept / Reject (no-op if already saved).
         _stash_source_action_name(settings, arm)
@@ -594,7 +596,7 @@ class ANIMATICA_OT_generate(Operator):
         #      sampler filters out (it only emits constraints from rotation
         #      fcurves), so a hand-authored Hips path stays visually
         #      distinguishable from the generated motion afterwards.
-        gen_start, gen_end = request_builder.compute_frame_range(
+        gen_start, gen_end = rig_probe.compute_frame_range(
             settings.prompt_blocks, arm, context.scene
         )
         self._gen_start_frame = gen_start
@@ -635,9 +637,11 @@ class ANIMATICA_OT_generate(Operator):
         self._start_time = time.time()
         self._result = None
         self._error = None
+        # URL and token are read HERE, on the main thread: the worker must
+        # not touch bpy.context.preferences.
         self._thread = threading.Thread(
             target=self._worker,
-            args=(mmcp_client.get_mmcp_url(), req),
+            args=(client_shim.get_mmcp_url(), client_shim.get_access_token(), req),
             daemon=True,
         )
         self._thread.start()
@@ -648,10 +652,11 @@ class ANIMATICA_OT_generate(Operator):
         return {'RUNNING_MODAL'}
 
     # ----- thread body -----------------------------------------------------
-    def _worker(self, server_url: str, req: dict) -> None:
+    def _worker(self, server_url: str, access_token: str, req: dict) -> None:
         try:
-            client = mmcp_client.MmcpClient(server_url)
-            self._result = client.generate(req)
+            self._result = client_shim.generate(
+                req, access_token=access_token, server_url=server_url,
+            )
         except Exception as exc:                         # noqa: BLE001 — surfaced to UI
             self._error = exc
 
@@ -675,7 +680,7 @@ class ANIMATICA_OT_generate(Operator):
         if self._error is not None:
             self._cleanup(context)
             _stash_quota_state(context.scene.animatica, self._error)
-            self.report({'ERROR'}, f"Generation failed: {self._error}")
+            self.report({'ERROR'}, f"Generation failed: {client_shim.describe_error(self._error)}")
             return {'CANCELLED'}
 
         if self._result is None:
@@ -707,13 +712,13 @@ class ANIMATICA_OT_generate(Operator):
         gen_end_settings_scene_frame = context.scene.frame_end
         # Recompute gen_end via the same helper to stay in sync with what
         # was sent to the server.
-        _, gen_end = request_builder.compute_frame_range(
+        _, gen_end = rig_probe.compute_frame_range(
             settings.prompt_blocks, arm, context.scene
         )
 
         block_ranges = (
             _block_ranges_for_split(settings.prompt_blocks, gen_start, gen_end)
-            if not request_builder.is_control_rig(arm)
+            if not rig_probe.is_control_rig(arm)
             else []
         )
 
@@ -935,7 +940,7 @@ class ANIMATICA_OT_accept(Operator):
             elif (
                 preview_action is not None
                 and preview_action.name.startswith(
-                    request_builder._GENERATED_ACTION_PREFIXES
+                    rig_probe._GENERATED_ACTION_PREFIXES
                 )
             ):
                 # Single-block: push the preview as-is (it's already the
@@ -1014,7 +1019,7 @@ class ANIMATICA_OT_reject(Operator):
         )
         is_motion_preview = (
             preview is not None
-            and preview.name.startswith(request_builder._GENERATED_ACTION_PREFIXES)
+            and preview.name.startswith(rig_probe._GENERATED_ACTION_PREFIXES)
         )
 
         # Defensive: if the user manually assembled per-block actions onto
@@ -1052,7 +1057,7 @@ class ANIMATICA_OT_reject(Operator):
             return real_users <= 0
 
         for ac in [a for a in bpy.data.actions
-                   if a.name.startswith(request_builder._GENERATED_ACTION_PREFIXES)
+                   if a.name.startswith(rig_probe._GENERATED_ACTION_PREFIXES)
                    and _is_orphan(a)]:
             bpy.data.actions.remove(ac)
 
@@ -1147,7 +1152,7 @@ class ANIMATICA_OT_generate_pose(Operator):
         # Hide the operator entirely when the connected model doesn't claim
         # 'pose' segment support — text-to-pose is a cloud-only capability.
         s = context.scene.animatica
-        model_caps = mmcp_client.cached_model(s.model_id) if s.model_id else None
+        model_caps = client_shim.cached_model(s.model_id) if s.model_id else None
         if model_caps is None:
             return False
         return "pose" in (model_caps.get("supported_segments") or [])
@@ -1196,7 +1201,7 @@ class ANIMATICA_OT_generate_pose(Operator):
             )
             return {'CANCELLED'}
 
-        model_caps = mmcp_client.cached_model(s.model_id)
+        model_caps = client_shim.cached_model(s.model_id)
         if model_caps is None:
             self.report({'ERROR'}, "Connect to the server first")
             return {'CANCELLED'}
@@ -1213,40 +1218,21 @@ class ANIMATICA_OT_generate_pose(Operator):
         # known-good prompt.
         s.last_pose_prompt = self.prompt
 
-        # Send the user's own armature skeleton — the server retargets it to
-        # the canonical on the way in and back again on the way out.
-        request_skeleton = request_builder.armature_to_skeleton(arm)
-
-        if not model_caps.get("supports_retargeting", True):
-            canonical_joints = {j["name"] for j in model_caps["canonical_skeleton"]["joints"]}
-            missing = canonical_joints - {pb.name for pb in arm.pose.bones}
-            if missing:
-                self.report({'ERROR'},
-                            f"Server does not support retargeting and the armature is "
-                            f"missing {len(missing)} canonical joint(s). Re-import via "
-                            f"'Import canonical skeleton'")
-                return {'CANCELLED'}
-            request_skeleton = model_caps["canonical_skeleton"]
-
         # Single PoseSegment — server's specialized text-to-pose model returns
         # a 1-frame glTF directly. No client-side middle-frame extraction.
-        req = {
-            "protocol_version": request_builder.PROTOCOL_VERSION,
-            "model":            s.model_id,
-            "skeleton":         request_skeleton,
-            "segments": [{
-                "type":   "pose",
-                "prompt": self.prompt,
-            }],
-            "options": {
-                "diffusion_steps": request_builder.QUALITY_PRESETS.get(
-                    s.quality_preset, int(s.custom_steps)
-                ),
-                "num_samples":     1,
-                "seed":            int(self.seed) if int(self.seed) > 0 else None,
-                "post_processing": bool(s.post_processing),
-            },
-        }
+        # The skeleton (the user's own armature, or the canonical echoed back
+        # when the server can't retarget) and the retargeting check both live
+        # in the shared builder now.
+        build_warnings: list[str] = []
+        try:
+            req = core_adapter.build_pose_request(
+                s, arm, model_caps, self.prompt, build_warnings, seed=self.seed,
+            )
+        except core_adapter.BuildError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        for w in build_warnings:
+            self.report({'WARNING'}, w)
 
         self._target_frame = int(context.scene.frame_current)
 
@@ -1272,9 +1258,11 @@ class ANIMATICA_OT_generate_pose(Operator):
         self._start_time = time.time()
         self._result = None
         self._error = None
+        # URL and token are read HERE, on the main thread: the worker must
+        # not touch bpy.context.preferences.
         self._thread = threading.Thread(
             target=self._worker,
-            args=(mmcp_client.get_mmcp_url(), req),
+            args=(client_shim.get_mmcp_url(), client_shim.get_access_token(), req),
             daemon=True,
         )
         self._thread.start()
@@ -1285,10 +1273,11 @@ class ANIMATICA_OT_generate_pose(Operator):
         return {'RUNNING_MODAL'}
 
     # ----- thread body -----------------------------------------------------
-    def _worker(self, server_url: str, req: dict) -> None:
+    def _worker(self, server_url: str, access_token: str, req: dict) -> None:
         try:
-            client = mmcp_client.MmcpClient(server_url)
-            self._result = client.generate(req)
+            self._result = client_shim.generate(
+                req, access_token=access_token, server_url=server_url,
+            )
         except Exception as exc:                         # noqa: BLE001
             self._error = exc
 
@@ -1311,7 +1300,7 @@ class ANIMATICA_OT_generate_pose(Operator):
         if self._error is not None:
             self._cleanup(context)
             _stash_quota_state(context.scene.animatica, self._error)
-            self.report({'ERROR'}, f"Pose generation failed: {self._error}")
+            self.report({'ERROR'}, f"Pose generation failed: {client_shim.describe_error(self._error)}")
             return {'CANCELLED'}
 
         if self._result is None:
@@ -1415,9 +1404,9 @@ class ANIMATICA_OT_signin(Operator):
             self.report({'ERROR'}, "Email and password required")
             return {'CANCELLED'}
         try:
-            data = mmcp_client.sign_in(self.email, self.password)
+            data = client_shim.sign_in(self.email, self.password)
         except Exception as exc:                          # noqa: BLE001
-            self.report({'ERROR'}, f"Sign-in failed: {exc}")
+            self.report({'ERROR'}, f"Sign-in failed: {client_shim.describe_error(exc)}")
             return {'CANCELLED'}
         tier = data.get("tier", "")
         msg = f"Signed in as {data.get('email', self.email)}"
@@ -1433,7 +1422,7 @@ class ANIMATICA_OT_signout(Operator):
     bl_description = "Forget the cached Animatica session tokens"
 
     def execute(self, context):
-        mmcp_client.sign_out()
+        client_shim.sign_out()
         self.report({'INFO'}, "Signed out")
         return {'FINISHED'}
 

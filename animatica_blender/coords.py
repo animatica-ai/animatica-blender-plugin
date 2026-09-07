@@ -50,8 +50,8 @@ def blender_pos_to_mmcp(p: Sequence[float]) -> Vec3:
 
 def blender_quat_to_mmcp(q: Sequence[float]) -> Quat:
     """Blender quaternions on pose bones are stored as (w, x, y, z); callers
-    must reorder to (x, y, z, w) *before* calling this. See request_builder.py
-    for the conversion helper.
+    must reorder to (x, y, z, w) *before* calling this. See constraints_ui.py,
+    which samples pose keyframes, for the conversion helper.
     """
     qx, qy, qz, qw = q[0], q[1], q[2], q[3]
     return (qx, qz, -qy, qw)

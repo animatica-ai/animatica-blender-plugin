@@ -50,7 +50,7 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty
 from mathutils import Vector
 
-from . import body_mesh, coords, mmcp_client
+from . import body_mesh, client_shim, coords
 
 
 LEAF_TAIL_LENGTH = 0.05   # metres, +Y in MMCP frame (= +Z in Blender)
@@ -255,14 +255,18 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
             # changes the published canonical an import would silently
             # rebuild the stale rig. Fall back to the cache when the server
             # cannot be reached right now.
-            url = mmcp_client.get_mmcp_url()
+            url = client_shim.get_mmcp_url()
             try:
-                caps = mmcp_client.MmcpClient(url, timeout=30).capabilities(refresh=True)
-                mmcp_client.store_capabilities(caps)
+                caps = client_shim.fetch_capabilities(timeout=30)
+                client_shim.store_capabilities(caps)
             except Exception as exc:                                 # noqa: BLE001
-                self.report({'WARNING'}, f"Could not refresh capabilities from {url} ({exc}); using cached")
+                self.report(
+                    {'WARNING'},
+                    f"Could not refresh capabilities from {url} "
+                    f"({client_shim.describe_error(exc)}); using cached",
+                )
 
-            model = mmcp_client.cached_model(model_id)
+            model = client_shim.cached_model(model_id)
             if model is None:
                 self.report({'ERROR'}, f"Model {model_id!r} not in the cached capabilities; reconnect first")
                 return {'CANCELLED'}

@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "segments": [
+    {
+      "text": "A drunk person stumbles forward, swaying from side to side",
+      "start_frame": 0,
+      "end_frame": 108,
+      "color_idx": 0
+    },
+    {
+      "text": "A drunk person staggers and nearly loses their balance",
+      "start_frame": 108,
+      "end_frame": 204,
+      "color_idx": 1
+    },
+    {
+      "text": "A drunk person leans against a wall to steady themselves",
+      "start_frame": 204,
+      "end_frame": 288,
+      "color_idx": 2
+    }
+  ],
+  "constraints": []
+}

@@ -208,3 +208,24 @@ Release / Production
 This document provides the general contribution process.
 
 If the repository's `README.md`, development documentation, or other contributor documentation specifies additional requirements, those requirements take precedence.
+
+### Do not edit the vendored core
+
+`animatica_blender/animatica_core/` is a copy of a named commit of
+[motionmcp-client-sdk](https://github.com/animatica-ai/motionmcp-client-sdk),
+shared with the 3ds Max and MotionBuilder plugins. It is generated, not
+authored here.
+
+An edit made in that directory is lost the next time the copy is synced, and
+until then it makes this plugin disagree with the other two about what the
+same request means. CI fails the build when the copy has drifted from its pin.
+
+To change anything in there: open a branch on the SDK, land it there, then
+move this repo's pin in a separate commit.
+
+```bash
+python scripts/sync_core.py --write --ref <new sha>
+```
+
+`animatica_blender/CORE-VERSION` records the pin; `make sync-core` checks it.
+See [docs/developing.md](docs/developing.md) for the full arrangement.

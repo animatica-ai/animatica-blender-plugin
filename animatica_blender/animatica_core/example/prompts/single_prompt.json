@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "segments": [
+    {
+      "text": "walk forward at a relaxed pace",
+      "start_frame": 0,
+      "end_frame": 48,
+      "color_idx": 0
+    }
+  ],
+  "constraints": []
+}
