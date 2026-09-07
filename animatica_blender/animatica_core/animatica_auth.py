@@ -7,7 +7,7 @@ token on every MMCP call.  This module handles the sign-in / refresh /
 logout lifecycle and persists tokens to disk so the session survives
 MotionBuilder restarts.
 
-Token file: %APPDATA%\\animatica_core\\auth.json
+Token file: %APPDATA%\\animatica\\auth.json  (host.shared_dir())
 Shape:      { access_token, refresh_token, email, tier }
 
 Typical usage::

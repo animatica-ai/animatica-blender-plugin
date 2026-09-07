@@ -40,6 +40,16 @@ _UNREGISTERED = (
     "startup, alongside animatica_core.bridge.register()."
 )
 
+# The host application's own name, keyed the way the plugin registers itself.
+# Kept here rather than passed to register() so the three shipped plugins need
+# no coordinated change; an unknown key falls back to a neutral phrase.
+_APP_NAMES = {
+    "mobu": "MotionBuilder",
+    "max": "3ds Max",
+    "blender": "Blender",
+    "maya": "Maya",
+}
+
 
 def register(*, key: str, product_name: str, capabilities=()) -> None:
     """Declare the host. Called once, at plugin startup.
@@ -78,6 +88,21 @@ def product_name() -> str:
     if _product_name is None:
         raise RuntimeError(_UNREGISTERED)
     return _product_name
+
+
+def app_name() -> str:
+    """Name of the host *application*, for UI text that talks about the program.
+
+    ``product_name()`` is the plugin ("Animatica for MotionBuilder");
+    this is the program it runs inside ("MotionBuilder"). Shared UI needs
+    the latter -- "Open Animatica on MotionBuilder startup" reads as a
+    ported label in 3ds Max, and interpolating the product name there
+    would read "on Animatica for MotionBuilder startup".
+
+    Never raises: a label is not worth a crash, and the standalone widget
+    preview builds sections with no host registered.
+    """
+    return _APP_NAMES.get(_key or "", "your host application")
 
 
 def has(capability: str) -> bool:

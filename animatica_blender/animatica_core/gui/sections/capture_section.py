@@ -46,6 +46,7 @@ from __future__ import annotations
 import math
 import os
 
+from ... import host
 from ..qt_compat import QtWidgets, Signal
 from ..video_preview import VideoPreview
 from ..widgets import (Btn, CollapsibleSection, Combo, Field, Pill,
@@ -237,9 +238,13 @@ class CaptureSection(QtWidgets.QWidget):
                               ("all", "Everyone in the clip")],
                              value="single")
         self._people.valueChanged.connect(self._on_people_changed)
+        # Where the rigs land is named in the host's own vocabulary: a take
+        # on a host that has them, the current animation on one that does not.
+        _where = ("one take" if host.has(host.TAKES)
+                  else "the current animation")
         body.addWidget(Field("People", self._people,
-                             hint="Everyone: one rig per person, all keyed "
-                                  "into one take. Fixed camera only."))
+                             hint=f"Everyone: one rig per person, all keyed "
+                                  f"into {_where}. Fixed camera only."))
 
         self._fps = Combo([("15", "15 fps — half the wait"),
                            ("30", "30 fps — every frame")], value="15")

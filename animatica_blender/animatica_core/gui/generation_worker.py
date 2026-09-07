@@ -12,6 +12,7 @@ import time
 
 from .qt_compat import QtCore, Signal
 
+from .. import host
 from .. import mmcp_client
 from ..animatica_auth import get_auth
 from ..constants import ANIMATICA_MMCP_URL
@@ -130,7 +131,7 @@ class GenerationWorker(QtCore.QThread):
             )
             _emit(
                 f"Parsed {len(samples)} sample(s) in {time.time() - t_parse:.3f}s "
-                f"— sending to MotionBuilder…"
+                f"— sending to {host.app_name()}…"
             )
             self.result.emit(samples)
         except Exception as exc:

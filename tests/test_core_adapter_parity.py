@@ -23,13 +23,11 @@ import pytest
 from conftest import CHECKPOINTS
 
 
-#: The Blender goldens were frozen at cf31e7a (2026-09-02);
-#: ``ab_scenario.HAND_PIN`` moved one commit later (c2076fd). Diffing scenario
-#: drift is not this gate's job, so the pin is held at its golden-era value.
-#: If this test fails while ``test_the_scenario_pin_drifted_from_the_golden``
-#: also reports a drift, read the drift first: it is the SCENARIO that moved,
-#: not the builder.
-GOLDEN_ERA_HAND_PIN = (50, "LeftHand", (0.35, 1.20, 0.40))
+#: The scenario owns its own numbers. An earlier revision of this file pinned
+#: ``HAND_PIN`` to a golden-era value because the Blender goldens predated a
+#: change to it; the goldens have since been re-recorded, so reading the
+#: scenario directly is now both simpler and correct. Pinning it again would
+#: only re-create the same staleness in the other direction.
 
 
 class GoldenSettings:
@@ -72,7 +70,7 @@ def _markers(checkpoint, ab_scenario, adapter, frame_range):
         markers.extend(adapter.markers_from_root_path(points, frames,
                                                       frame_range))
     if checkpoint == "c4":
-        frame, joint, position = GOLDEN_ERA_HAND_PIN
+        frame, joint, position = ab_scenario.HAND_PIN
         markers.extend(adapter.markers_from_effector(joint, {frame: position},
                                                      frame_range))
     return markers
@@ -124,19 +122,13 @@ def _build(checkpoint, golden_request, model_caps, adapter, core, block_cls):
 
 
 def _pin_note(core):
-    """A line about ``HAND_PIN`` drift, or "" when the scenario still matches.
+    """Kept as a hook for future scenario drift; empty while none exists.
 
-    Carried into every parity failure message so nobody reads a moved scenario
-    as a moved builder.
+    The parity failure message carries it so a moved SCENARIO is never read as
+    a moved builder. Today the test reads ``ab_scenario`` directly, so there is
+    nothing to warn about.
     """
-    live = tuple(core.ab_scenario.HAND_PIN[:2]) + \
-        (tuple(core.ab_scenario.HAND_PIN[2]),)
-    frozen = GOLDEN_ERA_HAND_PIN[:2] + (tuple(GOLDEN_ERA_HAND_PIN[2]),)
-    if live == frozen:
-        return ""
-    return (f"NOTE: ab_scenario.HAND_PIN is {live} today but the goldens were "
-            f"frozen with {frozen}; this test pins the golden-era value "
-            f"(scenario drift, not builder drift).")
+    return ""
 
 
 def test_the_core_under_test_is_the_copy_vendored_in_the_addon(core):

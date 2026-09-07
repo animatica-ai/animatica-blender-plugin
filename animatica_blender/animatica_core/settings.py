@@ -1,8 +1,12 @@
-"""JSON settings persistence for Animatica to MotionBuilder.
+"""JSON settings persistence for the Animatica plugins.
 
-DCC-agnostic — no pyfbsdk imports.  Stored at:
-  %APPDATA%\\animatica_core\\settings.json  (Windows)
-  ~/animatica_core/settings.json           (fallback)
+DCC-agnostic — no pyfbsdk imports.  Locations come from
+:mod:`animatica_core.host`, which splits per-host UI state from the
+account-level data every host shares:
+  %APPDATA%\\animatica\\<host key>\\settings.json  (this host — ``host.data_dir()``)
+  %APPDATA%\\animatica\\shared.json               (``server_url``, ``use_cloud``)
+  %APPDATA%\\animatica\\auth.json                 (the login — ``animatica_auth``)
+Off Windows the same tree hangs off ``~/animatica`` instead.
 
 Pre-rename installs stored settings under ``pantomim_to_mobu``; ``load()``
 carries those over once (see ``_migrate_legacy_settings``).

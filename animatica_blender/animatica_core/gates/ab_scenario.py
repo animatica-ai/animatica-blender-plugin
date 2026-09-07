@@ -182,6 +182,75 @@ CROSS_HOST_PARITY_PROFILE = {
     + ["whole_constraint_set_translates_to_frame_zero_anchor"],
 }
 
+#: The scene/take rate every host authors at, whatever the model's native
+#: fps (Matt, 2026-09-04: "w testach wszystko generujemy na 30 fps"). The
+#: WIRE still carries the model's fps -- the product sends nothing else
+#: (request_builder: the server rejects a mismatch and does not resample) --
+#: so on a 20 fps model the suite exercises the product's fps-mismatch path:
+#: keys land frame-for-frame (model frame N -> scene frame N; the default
+#: ``match_scene_fps`` on Max/MoBu, Blender's apply is frame-indexed by
+#: construction), the clip plays at 30 fps and the constraint frames stay
+#: where authored. On a 30 fps model nothing changes.
+SCENE_FPS = 30.0
+
+
+def _fps_default(model_caps):
+    fps = (model_caps or {}).get("fps") or 30
+    return int(fps) if float(fps) == int(fps) else float(fps)
+
+
+def profile_for(model_caps):
+    """The layer-1 profile for *model_caps* (PLAN-modele D5).
+
+    :data:`DEFAULT_PROFILE` with the ``timing.fps`` default set to the
+    MODEL's fps. A request without a ``timing`` section (Blender sends
+    none) means "the model's native rate" on the server, so that -- and
+    only that -- is the value an absent section may fold onto; folding it
+    onto 30 for a 20 fps model would give two hosts two keys for one
+    request. For a 30 fps model the result IS DEFAULT_PROFILE (same keys,
+    same values), so every recorded kimodo key stays put.
+    """
+    return {**DEFAULT_PROFILE, "defaults": {"timing.fps": _fps_default(model_caps)}}
+
+
+def parity_profile_for(model_caps):
+    """:data:`CROSS_HOST_PARITY_PROFILE` for *model_caps* -- see
+    :func:`profile_for` for the one field that moves."""
+    return {**CROSS_HOST_PARITY_PROFILE,
+            "defaults": {"timing.fps": _fps_default(model_caps)}}
+
+
+#: What the scenario needs from a model to be authored on it at all.
+REQUIRED_CONSTRAINTS = ("root_path", "effector_target")
+
+
+def expressible_on(model_caps):
+    """Why this scenario CANNOT be authored on *model_caps*, as a list of
+    reasons -- empty when it can (PLAN-modele D4). The orchestrator turns a
+    non-empty list into N/A rows with these words instead of launching
+    hosts onto a certain refusal; the conditions live here, next to the
+    constants that create them."""
+    caps = model_caps or {}
+    reasons = []
+    supported = set(caps.get("supported_constraints") or [])
+    missing = [c for c in REQUIRED_CONSTRAINTS if c not in supported]
+    if missing:
+        reasons.append(f"model does not support {missing} constraints")
+    joints = {(j.get("name") if isinstance(j, dict) else j)
+              for j in (caps.get("canonical_skeleton") or {}).get("joints")
+              or []}
+    if HAND_PIN[1] not in joints:
+        reasons.append(f"canonical skeleton has no {HAND_PIN[1]!r} joint "
+                       f"(the c4 pin)")
+    fps = float(caps.get("fps") or 0)
+    limit = (caps.get("limits") or {}).get("max_duration_seconds")
+    if fps and limit and TOTAL_FRAMES / fps > float(limit):
+        reasons.append(f"{TOTAL_FRAMES} frames at {fps:g} fps is "
+                       f"{TOTAL_FRAMES / fps:.2f} s, over the model's "
+                       f"max_duration_seconds {float(limit):g}")
+    return reasons
+
+
 #: The SKIP-cascade wording (PLAN-testy-ab §3) — asserted by the teeth.
 SKIP_CASCADE = ("SKIP-cascade: stan po {failed} niewiarygodny -- {cp} nie "
                 "biegnie na zepsutym stanie")
@@ -218,7 +287,8 @@ class HostABScenario:
     generator: str
     #: Provenance ``meta.backend`` — which server family answered/recorded.
     backend: str = "local"
-    #: Layer-1 canonicalization profile; None -> :data:`DEFAULT_PROFILE`.
+    #: Layer-1 canonicalization profile; None -> :func:`profile_for`
+    #: (model_caps) -- DEFAULT_PROFILE for a 30 fps model.
     profile: dict = None
     #: ``() -> (x, z) | None`` — where the rig's root stands at the take's
     #: start frame, in the WIRE frame. Called before every build_request;
@@ -352,12 +422,14 @@ def run(host: HostABScenario, check, output_dir, checkpoints=None):
     if unknown:
         raise ValueError(f"unknown checkpoint id(s) {unknown} — this "
                          f"scenario has {list(CHECKPOINTS)}")
-    profile = host.profile or DEFAULT_PROFILE
+    profile = host.profile or profile_for(host.model_caps)
     last_idx = max(CHECKPOINTS.index(cp) for cp in requested)
 
     canonical = (host.model_caps or {}).get("canonical_skeleton") or {}
     hierarchy, rest, _names = skeleton_block_to_hierarchy(canonical)
-    fps = float(host.model_caps.get("fps") or constants.DEFAULT_FPS)
+    # The SCENE rate, not the model's: see SCENE_FPS. The request builder
+    # puts the model's fps on the wire regardless.
+    fps = SCENE_FPS
 
     # Q1(b): the refusal propagates — the wrapper words the SKIP.
     scene_api.new_scene()
@@ -378,8 +450,8 @@ def run(host: HostABScenario, check, output_dir, checkpoints=None):
               f"{len(joint_map)} built vs {len(hierarchy)} in caps")
         scene_api.set_take_range(0, TOTAL_FRAMES - 1)
 
-        # The product state the window would author into. Fixed seed, model
-        # fps (no mismatch warnings), everything else on product defaults —
+        # The product state the window would author into. Fixed seed, the
+        # scene at SCENE_FPS, everything else on product defaults —
         # a changed default that reshapes the wire is exactly the drift
         # layer 1 exists to catch.
         state = AppState()

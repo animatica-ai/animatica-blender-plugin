@@ -144,13 +144,21 @@ def core(adapter):
 # A/B goldens (optional — the parity test skips without them)
 # ---------------------------------------------------------------------------
 
-GOLDEN_TAIL = ("tools", "ab_suite", "golden", "blender", "local")
+#: Where a checkout keeps the frozen Blender goldens. The SDK reorganised
+#: them once models became part of the axis: the old layout keyed by host
+#: first, the new one by backend and model, with the host innermost. Both are
+#: searched so this test does not silently start skipping the day the suite
+#: moves its files again — a skipped parity gate reads exactly like a passing
+#: one.
+GOLDEN_TAILS = (
+    ("tools", "ab_suite", "golden", "local", "kimodo-soma-rp", "blender"),
+    ("tools", "ab_suite", "golden", "blender", "local"),
+)
 
-#: Checkouts of the SDK that are known to carry the frozen Blender goldens.
-#: Not authoritative — ``ANIMATICA_AB_GOLDEN`` overrides, and the repo's
-#: siblings are scanned too, so a differently named worktree still works.
+#: Checkouts of the SDK that are known to carry them. Not authoritative —
+#: ``ANIMATICA_AB_GOLDEN`` overrides, and the repo's siblings are scanned too,
+#: so a differently named worktree still works.
 DEFAULT_SDK_ROOTS = (
-    Path("C:/_CODE/motionmcp-client-sdk-wt-k7"),
     Path("C:/_CODE/motionmcp-client-sdk"),
 )
 
@@ -161,18 +169,18 @@ def _golden_candidates():
     if env_dir:
         yield Path(env_dir)
 
+    roots = []
     env_core = os.environ.get("ANIMATICA_CORE")
     if env_core:
         base = Path(env_core)
         # Accept either the SDK checkout root or the animatica_core package dir.
-        for root in (base, base.parent):
-            yield root.joinpath(*GOLDEN_TAIL)
+        roots += [base, base.parent]
+    roots += list(DEFAULT_SDK_ROOTS)
+    roots += sorted(REPO_ROOT.parent.glob("motionmcp-client-sdk*"))
 
-    for root in DEFAULT_SDK_ROOTS:
-        yield root.joinpath(*GOLDEN_TAIL)
-
-    for sibling in sorted(REPO_ROOT.parent.glob("motionmcp-client-sdk*")):
-        yield sibling.joinpath(*GOLDEN_TAIL)
+    for root in roots:
+        for tail in GOLDEN_TAILS:
+            yield root.joinpath(*tail)
 
 
 CHECKPOINTS = ("c1", "c2", "c3", "c4")

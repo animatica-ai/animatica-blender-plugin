@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Animatica for 3ds Max — User Manual</title>
+<style>
+  :root{
+    /* mmcp neutral base (animatica.ai/mmcp) + Animatica "Ember" accent */
+    --bg:#1e1e1e; --bg2:#181818; --card:#262626; --card2:#2e2e2e;
+    --line:#3a3a3a; --line2:#2c2c2c;
+    --text:#f2ece4; --text2:#c2b8ab; --muted:#8a7f71;
+    --accent:#ed8e5c;      /* ember (Path / accent) */
+    --accent-h:#f4a476;    /* ember hover */
+    --accent2:#A879D0;     /* purple (Full Body) */
+    --blue:#6FB7FF; --red:#DE6E61; --green:#A6CF7B; --info:#8FB6DA;
+    --on-accent:#1a0e07;
+    --radius:10px;
+    --mono:"Geist Mono","JetBrains Mono","SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+    --sans:"Geist","Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);
+    font-size:15.5px;line-height:1.65;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  /* Layout */
+  .wrap{display:flex;max-width:1280px;margin:0 auto;gap:0}
+  nav.side{position:sticky;top:0;align-self:flex-start;height:100vh;overflow-y:auto;
+    width:290px;flex:0 0 290px;padding:26px 18px 60px;border-right:1px solid var(--line2);
+    background:var(--bg2)}
+  nav.side::-webkit-scrollbar{width:8px}
+  nav.side::-webkit-scrollbar-thumb{background:#3a3a3a;border-radius:8px}
+  main{flex:1;min-width:0;padding:44px 52px 120px;max-width:900px}
+
+  nav .brand{font-weight:700;font-size:16px;letter-spacing:.2px;margin-bottom:2px}
+  nav .brandsub{color:var(--muted);font-size:12.5px;margin-bottom:22px}
+  nav a.navlink{display:block;color:var(--text2);padding:5px 10px;border-radius:7px;
+    font-size:14px;margin:1px 0}
+  nav a.navlink:hover{background:var(--card);color:var(--text);text-decoration:none}
+  nav .navgroup{color:var(--muted);font-size:11px;text-transform:uppercase;
+    letter-spacing:.14em;margin:20px 10px 6px}
+
+  /* Headings */
+  h1{font-size:33px;line-height:1.2;margin:0 0 6px;letter-spacing:-.3px}
+  h2{font-size:24px;margin:52px 0 14px;padding-bottom:9px;border-bottom:1px solid var(--line);
+    letter-spacing:-.2px;scroll-margin-top:20px}
+  h3{font-size:18.5px;margin:30px 0 10px;color:#fff;scroll-margin-top:20px}
+  h4{font-size:15px;margin:20px 0 6px;color:var(--text);text-transform:uppercase;
+    letter-spacing:.08em;font-weight:600}
+  p{margin:11px 0}
+  ul,ol{margin:11px 0;padding-left:22px}
+  li{margin:5px 0}
+  code{font-family:var(--mono);font-size:.86em;background:var(--card2);color:#f0c29a;
+    padding:2px 6px;border-radius:5px;border:1px solid var(--line2)}
+  pre{background:#161616;border:1px solid var(--line);border-radius:var(--radius);
+    padding:15px 17px;overflow-x:auto;margin:14px 0}
+  pre code{background:none;border:none;padding:0;color:#e4ded4;font-size:13px;line-height:1.6}
+
+  .lead{font-size:17px;color:var(--text2);margin:14px 0 8px}
+  .kicker{color:var(--accent);font-weight:600;font-size:12.5px;letter-spacing:.16em;
+    text-transform:uppercase}
+
+  /* Cards / callouts */
+  .card{background:var(--card);border:1px solid var(--line2);border-radius:var(--radius);
+    padding:18px 20px;margin:16px 0}
+  .note{border-left:3px solid var(--info);background:rgba(143,182,218,.08);padding:12px 16px;
+    border-radius:8px;margin:14px 0}
+  .warn{border-left:3px solid var(--accent);background:rgba(237,142,92,.10);padding:12px 16px;
+    border-radius:8px;margin:14px 0}
+  .danger{border-left:3px solid var(--red);background:rgba(222,110,97,.10);padding:12px 16px;
+    border-radius:8px;margin:14px 0}
+  .note .lab,.warn .lab,.danger .lab{font-weight:700;font-size:12px;text-transform:uppercase;
+    letter-spacing:.1em;display:block;margin-bottom:3px}
+  .note .lab{color:var(--info)} .warn .lab{color:var(--accent)} .danger .lab{color:var(--red)}
+
+  /* Step chips */
+  .stepchip{display:inline-flex;align-items:center;justify-content:center;
+    width:26px;height:26px;border-radius:7px;background:var(--accent);color:var(--on-accent);
+    font-weight:700;font-size:14px;margin-right:10px;vertical-align:middle}
+  .sec-h{display:flex;align-items:center}
+
+  /* Tables */
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line2);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;
+    letter-spacing:.06em;border-bottom:1px solid var(--line)}
+  tr:hover td{background:#262626}
+  td code,th code{white-space:nowrap}
+  .kbd{font-family:var(--mono);font-size:12.5px;background:#161616;
+    border:1px solid #4a4a4a;border-bottom-width:2px;border-radius:6px;padding:2px 7px;
+    color:#f2ece4;white-space:nowrap;display:inline-block}
+
+  /* Pills */
+  .pill{display:inline-block;font-size:11.5px;padding:2px 9px;border-radius:20px;
+    border:1px solid var(--line);color:var(--text2);margin:0 4px 4px 0;white-space:nowrap}
+  .pill.p{border-color:#5c4a72;color:#c9a9e6;background:#241d30}   /* purple */
+  .pill.b{border-color:#3a5f80;color:#a6cff5;background:#152230}   /* blue */
+  .pill.r{border-color:#7a3d3d;color:#f0a8a8;background:#2a1818}   /* red */
+  .pill.a{border-color:#6b5424;color:#e6bd7a;background:#241d10}   /* amber */
+  .swatch{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:6px;
+    vertical-align:baseline}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}
+    nav.side{display:none} main{padding:28px 22px 80px}}
+  hr{border:none;border-top:1px solid var(--line2);margin:40px 0}
+  .foot{color:var(--muted);font-size:13px;margin-top:60px;border-top:1px solid var(--line2);
+    padding-top:18px}
+  .toc-top{columns:2;gap:26px;margin:18px 0}
+  .toc-top a{display:block;padding:3px 0;font-size:14px}
+  .tag{font-family:var(--mono);font-size:12px;color:var(--muted)}
+
+  figure.shot{margin:20px 0 22px;padding:0;text-align:center}
+  figure.shot img{max-width:100%;height:auto;border:1px solid var(--line);
+    border-radius:10px;box-shadow:0 6px 22px rgba(0,0,0,.35);background:#161616}
+  figure.shot figcaption{color:var(--muted);font-size:12.5px;margin-top:8px;
+    font-style:italic}
+  figure.shot.wide img{max-width:100%}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ============ SIDEBAR ============ -->
+<nav class="side">
+  <div class="brand">Animatica → 3ds Max</div>
+  <div class="brandsub">User Manual</div>
+
+  <div class="navgroup">Getting started</div>
+  <a class="navlink" href="#overview">Overview</a>
+  <a class="navlink" href="#requirements">Requirements</a>
+  <a class="navlink" href="#install">Installation</a>
+  <a class="navlink" href="#menu">The Animatica menu</a>
+  <a class="navlink" href="#layout">The tool window</a>
+  <a class="navlink" href="#firstmotion">Your first motion</a>
+
+  <div class="navgroup">Panel reference</div>
+  <a class="navlink" href="#s-model">00 · Model</a>
+  <a class="navlink" href="#s-skeleton">01 · Skeleton</a>
+  <a class="navlink" href="#s-import">02 · Motion Import</a>
+  <a class="navlink" href="#s-generate">03 · Text to Motion</a>
+  <a class="navlink" href="#s-constraints">· Constraints</a>
+  <a class="navlink" href="#s-pose">04 · Single Pose</a>
+  <a class="navlink" href="#s-timeline">· Prompt Timeline</a>
+  <a class="navlink" href="#s-console">05 · Console</a>
+
+  <div class="navgroup">Windows</div>
+  <a class="navlink" href="#video">Video to Motion</a>
+  <a class="navlink" href="#settings">Settings</a>
+
+  <div class="navgroup">Reference</div>
+  <a class="navlink" href="#export">Exporting</a>
+  <a class="navlink" href="#files">Where your files live</a>
+  <a class="navlink" href="#shortcuts">Keyboard &amp; mouse</a>
+  <a class="navlink" href="#trouble">Troubleshooting</a>
+  <a class="navlink" href="#glossary">Glossary &amp; units</a>
+
+  <div class="navgroup">Protocol</div>
+  <a class="navlink" href="https://animatica.ai/mmcp" target="_blank" rel="noopener">MMCP spec ↗</a>
+</nav>
+
+<!-- ============ MAIN ============ -->
+<main>
+  <span class="kicker">3ds Max Plugin · User Manual</span>
+  <h1>Animatica for 3ds Max</h1>
+  <p class="lead">Generate character animation from text prompts — and constrain, refine and export it — inside Autodesk 3ds Max.</p>
+  <p class="tag">3ds Max 2027 · Windows x64</p>
+
+  <!-- ===================== OVERVIEW ===================== -->
+  <h2 id="overview">Overview</h2>
+  <p>Animatica for 3ds Max is a dockable tool window that brings motion generation into your Max scene. You describe the motion you want in plain language, and the plugin sends that request to an <strong><a href="https://animatica.ai/mmcp" target="_blank" rel="noopener">MMCP</a></strong> (Motion&nbsp;MCP) server — a local one on your machine, or <strong>Animatica&nbsp;Cloud</strong> — and keys the returned animation onto a skeleton in your scene.</p>
+
+  <p>Three things are worth knowing before you start:</p>
+  <ul>
+    <li><strong>The server does the generating.</strong> The plugin never launches a server and never generates locally; without a reachable server nothing can be produced.</li>
+    <li><strong>The server also decides retargeting.</strong> Your rig goes on the wire as it is, and the server's own gate picks the fast path or its trained retarget model. If a server carries no retarget model, the plugin falls back to the model's canonical skeleton for a rig that matches it, and otherwise refuses in words rather than producing something wrong.</li>
+    <li><strong>Max is Z-up; the protocol is Y-up in meters.</strong> The conversion is done for you in one place, and your scene unit is read at runtime — you do not have to work in centimeters.</li>
+  </ul>
+
+  <div class="toc-top">
+    <a href="#install">Installation</a>
+    <a href="#menu">The Animatica menu</a>
+    <a href="#s-skeleton">Creating a skeleton</a>
+    <a href="#s-timeline">Writing prompts on the timeline</a>
+    <a href="#s-constraints">Constraints: paths and pins</a>
+    <a href="#video">Video to Motion</a>
+    <a href="#export">Exporting to FBX</a>
+    <a href="#trouble">Troubleshooting</a>
+  </div>
+
+  <!-- ===================== REQUIREMENTS ===================== -->
+  <h2 id="requirements">Requirements</h2>
+  <table>
+    <tr><th>Item</th><th>Requirement</th></tr>
+    <tr><td><strong>Host</strong></td><td>Autodesk 3ds Max 2027, Windows x64.</td></tr>
+    <tr><td><strong>Menu system</strong></td><td>The plugin registers its menu through Max's 2025+ CUI menu system (the <code>#cuiRegisterMenus</code> notification). It does not use <code>menuMan</code>, which is absent in Max 2027.</td></tr>
+    <tr><td><strong>Python / Qt / NumPy</strong></td><td>Python 3.13.9 and PySide6 6.8.3 ship with a stock Max 2027. NumPy does not: it is resolved from your per-user site-packages (<code>%APPDATA%\Python\Python313\site-packages</code>), which is where a stock installation already puts it. The plugin checks for it at startup and refuses with a <code>pip install</code> line rather than a traceback.</td></tr>
+    <tr><td><strong>Server</strong></td><td>An MMCP server: either a local one (default <code>http://localhost:8000</code>) or Animatica Cloud at <code>api.animatica.ai</code>, which needs an account.</td></tr>
+  </table>
+
+  <div class="note">
+    <span class="lab">NumPy check</span>
+    NumPy is checked, not installed, at startup. On a Max whose Python has been altered, the plugin stops with one sentence naming the interpreter and the <code>pip install</code> command to run — never a traceback.
+  </div>
+
+  <!-- ===================== INSTALL ===================== -->
+  <h2 id="install">Installation</h2>
+  <p>The installer works <strong>in place</strong>: the plugin source stays where you unpacked it, and only a small launcher is written into Max's per-user startup folder. Because that launcher just puts the checkout on Python's path, editing plugin source never requires reinstalling.</p>
+
+  <pre><code>python scripts/install.py              # install into every detected Max
+python scripts/install.py --list       # just show what was detected
+python scripts/install.py --uninstall  # remove the launcher again</code></pre>
+
+  <p>Then <strong>restart 3ds Max</strong>. An <strong>Animatica</strong> menu appears in the main menu bar.</p>
+
+  <h3>What the installer writes</h3>
+  <p>One file, <code>animatica_to_max_startup.py</code>, into</p>
+  <pre><code>%LOCALAPPDATA%\Autodesk\3dsMax\&lt;year&gt; - 64bit\&lt;LOCALE&gt;\scripts\startup\</code></pre>
+  <p>for <em>every</em> Max version and <em>every</em> locale folder it finds (<code>ENU</code>, <code>JPN</code>, <code>DEU</code>, …). Max reads only the profile tree of the language it is running in, which is why each locale gets its own copy. If a version directory has no locale folder yet, <code>ENU</code> is used as the default.</p>
+
+  <p>The install is per-user, so it never asks for administrator rights. There is <strong>no <code>.exe</code> installer</strong> — <code>scripts/install.py</code> is the whole install path.</p>
+
+  <div class="warn">
+    <span class="lab">No profile found</span>
+    If the installer reports that no 3ds Max user profile exists under <code>%LOCALAPPDATA%\Autodesk\3dsMax</code>, start 3ds Max once so it creates its profile, then run the installer again.
+  </div>
+
+  <h3>Why the menu survives a workspace switch</h3>
+  <p>Max re-fires its menu-registration notification on every workspace or menu reload. The plugin subscribes to that notification and rebuilds the menu identified by a stable GUID, so the menu neither disappears when you switch workspace nor accumulates duplicates.</p>
+
+  <!-- ===================== MENU ===================== -->
+  <h2 id="menu">The Animatica menu</h2>
+  <p>Seven items, in the order they appear in the menu:</p>
+
+  <table>
+    <tr><th>#</th><th>Item</th><th>What it does</th></tr>
+    <tr><td>1</td><td><strong>Open Animatica Tool…</strong></td><td>Shows the docked Animatica tool window — the main window, which owns all of the plugin's state.</td></tr>
+    <tr><td>2</td><td><strong>Video to Motion…</strong></td><td>Opens the Video to Motion window. It also brings up the main window first, because the rig the capture is applied to belongs to it.</td></tr>
+    <tr><td>3</td><td><strong>Console…</strong></td><td>Opens the Console in its own window. The main window is opened first, because the log lives on it.</td></tr>
+    <tr><td>4</td><td><strong>Settings…</strong></td><td>Opens the Settings window (backend, server URL, rig options, interface toggles).</td></tr>
+    <tr><td>5</td><td><strong>Load Example Prompt…</strong></td><td>Opens the example-prompt chooser. It is modeless, so you can keep it open while you work; picking it again focuses the existing chooser instead of stacking another one. If the tool window is still opening, the plugin says so and asks you to pick the item again.</td></tr>
+    <tr><td>6</td><td><strong>User Manual…</strong></td><td>Opens the hosted user manual in your web browser. If the browser cannot be launched, the address is shown in a message box so you can copy it.</td></tr>
+    <tr><td>7</td><td><strong>About Animatica</strong></td><td>A short message box naming the product and the MMCP server it talks to.</td></tr>
+  </table>
+
+  <!-- ===================== LAYOUT ===================== -->
+  <h2 id="layout">The tool window</h2>
+  <p>The window docks natively into the 3ds Max main window, and Max restores its dock position across sessions. Text fields inside it are flagged so Max's single-key hotkeys do not swallow your typing — you can type a prompt containing any letter without the viewport reacting.</p>
+
+  <figure class="shot">
+    <img src="max_main_window.png" alt="The Animatica tool window as it opens in 3ds Max">
+    <figcaption>The window as it opens: the “Animatica · 3ds Max / Motion Generation” header with the Timeline button top-right, then the Model, Skeleton and Text to Motion cards. The Skeleton card's pill reads “not created” until a rig exists.</figcaption>
+  </figure>
+
+  <p>Everything is one scrolling column of collapsible, numbered cards. The numbers are the workflow order, not a hierarchy:</p>
+
+  <table>
+    <tr><th>Card</th><th>Purpose</th><th>Visible by default</th></tr>
+    <tr><td><strong>00 · Model</strong></td><td>Which model generates, and the knobs only that model has</td><td>Yes</td></tr>
+    <tr><td><strong>01 · Skeleton</strong></td><td>Create, adopt, pick or delete the rig</td><td>Yes</td></tr>
+    <tr><td><strong>02 · Motion Import</strong></td><td>Load motion from a file on disk</td><td>No — Settings ▸ Interface reveals it</td></tr>
+    <tr><td><strong>03 · Text to Motion</strong></td><td>Generation parameters, output placement, constraints, and the Generate button</td><td>Yes</td></tr>
+    <tr><td><strong>04 · Single Pose</strong></td><td>One pose at the current frame</td><td>Yes</td></tr>
+    <tr><td><strong>05 · Console</strong></td><td>The log every other window writes to</td><td>Opens as its own window</td></tr>
+  </table>
+
+  <p><strong>Settings is not a card here</strong> — it opens as a separate window from the Animatica menu, and shares this window's state.</p>
+
+  <figure class="shot">
+    <img src="max_main_window_all_sections.png" alt="The Animatica tool window with every section expanded">
+    <figcaption>All sections expanded: Model, Skeleton, and Text to Motion with its General / Advanced / Output Target groups (Placement, Ground, Layer &amp; Rig), the collapsed Constraints sub-card, the Generate Motion button, and Single Pose at the bottom.</figcaption>
+  </figure>
+
+  <!-- ===================== FIRST MOTION ===================== -->
+  <h2 id="firstmotion">Your first motion</h2>
+  <ol>
+    <li>Open <strong>Settings</strong> and point the plugin at a server: keep <strong>Local</strong> and set the <strong>Server URL</strong>, or switch to <strong>Cloud</strong> and log in. Press <strong>Test</strong>.</li>
+    <li>In <strong>01 · Skeleton</strong>, press <strong>Create Skeleton</strong>. A 77-joint rig is built under the <em>Namespace</em> shown in the card.</li>
+    <li>Open the <strong>Timeline</strong> (the button in the window header) and add a prompt block: press <strong>Add Prompt</strong>, or double-click empty timeline space and type.</li>
+    <li>Optionally add constraints — a <em>Path</em> for where the character walks, effector pins for where a hand or foot must be.</li>
+    <li>Press <strong>Generate Motion</strong> (or <strong>Generate</strong> in the timeline header, or <span class="kbd">Ctrl+G</span> over the timeline). The progress bar and the elapsed clock run while the server works; the result is keyed onto your rig.</li>
+  </ol>
+
+  <!-- ===================== 00 MODEL ===================== -->
+  <h2 id="s-model"><span class="sec-h"><span class="stepchip">00</span>Model</span></h2>
+  <p>The model comes first because it decides the rest: the canonical skeleton, the frame rate, how long a single clip may be, and whether the motion steers from a trajectory.</p>
+
+  <figure class="shot">
+    <img src="max_model_section.png" alt="The Model card">
+    <figcaption>The Model card with the model dropdown and the facts line. Before a server has answered, the line reads “Connect to a server to read this model's capabilities.”</figcaption>
+  </figure>
+
+  <ul>
+    <li><strong>Model</strong> — populated from the server's capabilities. Until a probe answers, the dropdown holds the model you used last.</li>
+    <li><strong>Facts line</strong> — what the server says about the chosen model: its frame rate, the joint count of its canonical skeleton, the longest request it accepts, and whether it steers from a trajectory. These are facts, not settings; they explain why the same prompt behaves differently between models.</li>
+    <li><strong>Default walk speed (m/s)</strong> — appears only for trajectory-driven models, and is used when no <em>Path</em> is drawn.</li>
+  </ul>
+
+  <!-- ===================== 01 SKELETON ===================== -->
+  <h2 id="s-skeleton"><span class="sec-h"><span class="stepchip">01</span>Skeleton</span></h2>
+
+  <figure class="shot">
+    <img src="max_skeleton_section.png" alt="The Skeleton card">
+    <figcaption>The Skeleton card: the existing-skeleton picker with Refresh, the “Show canonical skeletons only” filter, the Namespace field, “Create new skeleton on generate”, and the Create Skeleton / Adopt / Delete buttons.</figcaption>
+  </figure>
+
+  <table>
+    <tr><th>Control</th><th>What it does</th></tr>
+    <tr><td><strong>Existing skeleton</strong> + <strong>Refresh</strong></td><td>Lists the skeleton roots in the scene so you can target a rig that is already there. Nothing is auto-picked for you: if the previous selection is gone, the picker shows blank rather than silently choosing a rig you never chose.</td></tr>
+    <tr><td><strong>Show canonical skeletons only</strong></td><td>On by default — the list shows only rigs the plugin built. If the filtered list comes out empty, the plugin falls back to showing all roots.</td></tr>
+    <tr><td><strong>Namespace</strong></td><td>The prefix on created joints (default <code>animatica</code>), which keeps several rigs apart. The same field appears in the timeline header; the two stay in lock-step.</td></tr>
+    <tr><td><strong>Create new skeleton on generate</strong></td><td>Build a fresh rig as part of the next generation instead of reusing the current one.</td></tr>
+    <tr><td><strong>Create Skeleton</strong></td><td>Builds the canonical <code>soma77</code> rig — 77 joints, rooted at <em>Hips</em> — under the namespace.</td></tr>
+    <tr><td><strong>Adopt</strong></td><td>Makes the selected rig pipeline-ready: stores its <em>current</em> pose as the bind pose, plus hip height and namespace.</td></tr>
+    <tr><td><strong>Delete</strong></td><td>Removes the selected rig and the constraint markers the plugin attached to it, after a confirmation. It cannot be undone.</td></tr>
+    <tr><td><strong>Header pill</strong></td><td><span class="pill">not created</span> until a rig is ready, then <span class="pill">ready</span>.</td></tr>
+  </table>
+
+  <h3>Reusing a rig under the same namespace</h3>
+  <p>If a rig already exists under the namespace you typed, <strong>Create Skeleton</strong> reuses it — but only after checking its <em>shape</em>. A rig built for one model is rooted at <em>Hips</em> just like every other, so a name match alone is not enough. If joints the selected model needs are missing, the plugin refuses, names how many are missing with a few examples, and tells you to change the namespace or delete the existing rig.</p>
+
+  <h3>Adopting your own rig</h3>
+  <p>Adopt is you asserting <em>this pose is the rest pose</em>, so it overwrites any stored bind pose unconditionally. It works two ways:</p>
+  <ul>
+    <li>from the <strong>picker</strong>, for a rig the plugin recognises; or</li>
+    <li>from the <strong>viewport selection</strong> — select any node of the rig and the plugin climbs to the top node and adopts from there. This is the escape hatch for an imported rig whose joint names the detection does not recognise.</li>
+  </ul>
+  <p>Adopt deliberately does <em>not</em> mark the rig canonical, so an adopted rig stays out of the “canonical skeletons only” list. That is by design: it keeps rigs you brought in distinct from rigs the plugin built.</p>
+
+  <div class="note">
+    <span class="lab">Namespace-free rigs</span>
+    The namespace prefix is derived from the root's name — the part before a <code>:</code>, or before a <code>_</code>. A root with neither falls back to the namespace in the card.
+  </div>
+
+  <!-- ===================== 02 IMPORT ===================== -->
+  <h2 id="s-import"><span class="sec-h"><span class="stepchip">02</span>Motion Import</span></h2>
+  <p>Hidden by default, because the plugin is generation-first. Reveal it with <em>Show Motion Import panel</em> in Settings ▸ Interface; the choice is remembered and the card appears and disappears live.</p>
+
+  <figure class="shot">
+    <img src="max_motion_import_section.png" alt="The Motion Import card">
+    <figcaption>Motion Import: a file field with Browse and a Load Motion button. Accepted files are <code>.npz</code>, <code>.bvh</code> and <code>.glb</code>; the header pill shows the loaded extension.</figcaption>
+  </figure>
+
+  <!-- ===================== 03 GENERATE ===================== -->
+  <h2 id="s-generate"><span class="sec-h"><span class="stepchip">03</span>Text to Motion</span></h2>
+  <p>The generation request itself. The prompts live on the <a href="#s-timeline">Prompt Timeline</a>; this card holds the parameters and the button.</p>
+
+  <figure class="shot">
+    <img src="max_text_to_motion_section.png" alt="The Text to Motion card with its sub-groups">
+    <figcaption>Text to Motion: the collapsed General and Advanced groups, then Output Target with Placement, Ground and Layer &amp; Rig, the Constraints sub-card showing its “0 active” pill, and the Generate Motion button.</figcaption>
+  </figure>
+
+  <h3>General</h3>
+  <table>
+    <tr><th>Control</th><th>Meaning</th></tr>
+    <tr><td><strong>Duration</strong></td><td>Read-only: how long the current timeline content runs.</td></tr>
+    <tr><td><strong>Max single prompt</strong></td><td>Fixed reminder that one prompt block covers at most 10&nbsp;s.</td></tr>
+    <tr><td><strong>Diffusion steps</strong></td><td>Quality against time: <em>Draft (100)</em>, <em>Standard (300)</em>, <em>Fine (500)</em>, or <em>Custom…</em>.</td></tr>
+    <tr><td><strong>Custom diffusion steps</strong></td><td>Revealed by the <em>Custom…</em> preset; accepts 1–1000. Above 500 a warning appears — the server caps steps at 500 and may reject higher values.</td></tr>
+    <tr><td><strong>Seed</strong> / <strong>Random</strong></td><td>Fix a seed to repeat a result, or tick Random to vary it. The field greys out while Random is on.</td></tr>
+    <tr><td><strong>Reset</strong></td><td>Each group has its own Reset, scoped to the fields that group owns.</td></tr>
+  </table>
+
+  <div class="note">
+    <span class="lab">Honest presets</span>
+    If a saved step count does not match a fixed preset, the dropdown shows <em>Custom…</em> and the number verbatim — the preset label never claims a value that is not the one being sent.
+  </div>
+
+  <h3>Advanced</h3>
+  <p>Off until you flip the toggle in the group header. The Reset here restores the parameters but deliberately leaves the toggle alone, so a reset does not collapse the panel you are editing.</p>
+  <table>
+    <tr><th>Control</th><th>Range</th><th>Meaning</th></tr>
+    <tr><td><strong>Num samples</strong></td><td>1–8</td><td>How many candidate motions the server samples for the request.</td></tr>
+    <tr><td><strong>CFG type</strong></td><td>Separated / Regular / Nocfg</td><td>How the guidance is applied.</td></tr>
+    <tr><td><strong>CFG weight (text)</strong></td><td>0–10</td><td>How strongly the text steers the result.</td></tr>
+    <tr><td><strong>CFG weight (constraint)</strong></td><td>0–10</td><td>How strongly your constraints steer it.</td></tr>
+    <tr><td><strong>Transition frames</strong></td><td>0–30</td><td>Blend length between consecutive prompt blocks.</td></tr>
+    <tr><td><strong>Initial heading (deg)</strong></td><td>0–360</td><td>Which way the character starts facing.</td></tr>
+    <tr><td><strong>Server post-processing</strong></td><td>on/off</td><td>Runs the server's own pass (root-drift correction) over the sampled motion. On by default.</td></tr>
+    <tr><td><strong>Root margin (m)</strong></td><td>0–0.2</td><td>Horizontal slack for that correction. Greys out with the box above it.</td></tr>
+  </table>
+  <div class="note">
+    <span class="lab">Root margin</span>
+    Root margin is collected and remembered, but not put on the wire — the field is documented here so its value is not mistaken for something the server acted on.
+  </div>
+
+  <h3>Output Target</h3>
+  <p>In 3ds Max there is exactly one target: the scene holds one animation, and a generation <strong>replaces</strong> it. Because there is nothing to pick between, the mode picker is not shown — the timeline header simply reads <em>Mode: Replace</em>.</p>
+
+  <h4>Placement</h4>
+  <ul>
+    <li><strong>Use current position</strong> — start from the skeleton's scene XZ and facing, not from the origin.</li>
+    <li><strong>Preserve height</strong> — send the rig's current hip height to the model, so the motion is generated at that height rather than shifted afterwards.</li>
+  </ul>
+
+  <h4>Ground</h4>
+  <p>A movable ground-plane object whose height is folded into generated motion.</p>
+  <ul>
+    <li><strong>Create Ground</strong> spawns the plane (or finds the existing one).</li>
+    <li><strong>Refresh</strong> pulls the plane's live height into the <strong>Ground height (m)</strong> field; editing that field moves the plane. The plane is the source of truth — the field is a mirror, and it is disabled until a plane exists.</li>
+    <li><strong>Hide</strong> / <strong>Show</strong> toggles the plane's visibility, and the button label follows the plane's actual state.</li>
+    <li><strong>Apply ground offset</strong> is the master switch for the fold itself. It is policy rather than a plane control, so it stays available even with no plane in the scene.</li>
+  </ul>
+
+  <h4>Layer &amp; Rig</h4>
+  <ul>
+    <li><strong>Generate on base layer only</strong> — key onto the base layer regardless of which animation layer is active. This is key placement only; additive layers above still show.</li>
+  </ul>
+  <p>3ds Max exposes native animation layers, which is why this switch is here and why it is the only one in the group.</p>
+
+  <h3>Generate Motion</h3>
+  <p>Builds one request from every prompt block on the timeline and sends it. While it runs, a progress row below the card shows the phase, an indeterminate bar and an elapsed clock; the card itself is disabled so a second click cannot race the first. <span class="kbd">Ctrl+G</span> over the timeline does the same thing, as does <strong>Generate</strong> in the timeline header.</p>
+
+  <!-- ===================== CONSTRAINTS ===================== -->
+  <h2 id="s-constraints">Constraints</h2>
+  <p>Constraints steer the generation request, which is why the card sits <em>inside</em> Text to Motion (collapsed) rather than next to the timeline. Its header pill counts how many are active.</p>
+
+  <h3>The six types</h3>
+  <table>
+    <tr><th>Type</th><th>What it pins</th></tr>
+    <tr><td><span class="swatch" style="background:#A879D0"></span><strong>Full Body</strong></td><td>The pose <em>shape</em> at that frame — joint rotations only. The root is deliberately left free, so the character still travels and reaches the pose during the animation.</td></tr>
+    <tr><td><span class="swatch" style="background:#6FB7FF"></span><strong>Left Leg</strong></td><td>The left-foot effector position at that frame.</td></tr>
+    <tr><td><span class="swatch" style="background:#FF8A8A"></span><strong>Right Leg</strong></td><td>The right-foot effector position at that frame.</td></tr>
+    <tr><td><span class="swatch" style="background:#3A7BD5"></span><strong>Left Arm</strong></td><td>The left-hand effector position at that frame.</td></tr>
+    <tr><td><span class="swatch" style="background:#D5483A"></span><strong>Right Arm</strong></td><td>The right-hand effector position at that frame.</td></tr>
+    <tr><td><span class="swatch" style="background:#E0A24E"></span><strong>Path</strong></td><td>A ground waypoint — where the character should be, in XZ, at that frame. Several waypoints make a route.</td></tr>
+  </table>
+  <p>The same colours are used by the type picker, the timeline pins and the viewport markers, so a pin you see on the ruler is recognisably the same thing as the marker in the scene.</p>
+
+  <h3>Adding constraints</h3>
+  <ul>
+    <li><strong>Add Constraint</strong> in the card captures the currently selected type at the playhead, from the rig.</li>
+    <li>The six <strong>quick-add buttons</strong> in the timeline header do the same for their own type, without disturbing the card's selection.</li>
+    <li>Clicking a constraint icon on the timeline adds that type at the block's midpoint; right-clicking the timeline offers the same actions in a context menu.</li>
+    <li>Capture needs a rig: with no skeleton picked, the plugin logs a warning and does nothing.</li>
+  </ul>
+
+  <h3>Path waypoints</h3>
+  <p>The <em>first</em> waypoint is sampled from where the character actually stands, so the path is anchored to the rig. Every waypoint after that is placed from its neighbours instead of being sampled — on a rig with no motion yet, sampling would drop every pin in the same spot and you would have to dig each one out of the pile. Drag the marker in the viewport to put the waypoint where you want it; the movement line redraws as you drag.</p>
+  <p>Two related display switches live in the card: <strong>Show path length</strong> and <strong>Show marker name</strong>. Both are viewport-only and never reach the server.</p>
+
+  <h3>Effector pins</h3>
+  <p>Left/Right Leg and Left/Right Arm each sample their effector joint's position at the frame. One constraint per type per frame: capturing the same type at the same frame replaces the previous one rather than stacking a second.</p>
+
+  <h3>The rest of the card</h3>
+  <ul>
+    <li><strong>Convert Animkeys</strong> turns the rig's existing animation keys into constraints — also available from the timeline header.</li>
+    <li><strong>Keep constraint keyframes</strong> keys a captured Full Body pose onto the rig as well, so scrubbing previews the pinned pose. <strong>Clear All Keyframes</strong> removes them again.</li>
+    <li><strong>◀ Prev</strong> / <strong>Next ▶</strong> jump the playhead to the adjacent authored constraint frame, wrapping at both ends. <span class="kbd">[</span> and <span class="kbd">]</span> do the same over the timeline.</li>
+  </ul>
+
+  <!-- ===================== 04 POSE ===================== -->
+  <h2 id="s-pose"><span class="sec-h"><span class="stepchip">04</span>Single Pose</span></h2>
+  <p>One pose at the current frame, from one short prompt.</p>
+
+  <figure class="shot">
+    <img src="max_single_pose_section.png" alt="The Single Pose card">
+    <figcaption>Single Pose: the pose prompt, the root/hip placement flags, and the Generate Pose at Current Frame button.</figcaption>
+  </figure>
+
+  <table>
+    <tr><th>Control</th><th>Meaning</th></tr>
+    <tr><td><strong>Pose prompt</strong></td><td>A short description of the pose. The same field appears inline in the timeline header, and the two mirror each other.</td></tr>
+    <tr><td><strong>Use current position</strong></td><td>Key the pose at the rig's scene XZ and facing.</td></tr>
+    <tr><td><strong>Keep current height</strong></td><td>On: keep the rig's hip height. Off: seat the pose on the ground plane.</td></tr>
+    <tr><td><strong>Auto apply as constraint</strong></td><td>Also record the generated pose as a Full Body constraint at that frame, so a later generation reproduces it.</td></tr>
+    <tr><td><strong>Key pose</strong></td><td>Bake a keyframe at the current frame.</td></tr>
+    <tr><td><strong>Generate Pose at Current Frame</strong></td><td>Sends the request. The <strong>Pose</strong> button in the timeline header runs the same pipeline from the playhead.</td></tr>
+  </table>
+
+  <!-- ===================== TIMELINE ===================== -->
+  <h2 id="s-timeline">Prompt Timeline</h2>
+  <p>The timeline has no home inside the panel: it lives in a floating window that opens by itself the first time the tool window is shown, and is re-opened from the <strong>Timeline</strong> button in the header. Closing it hides it — your prompts are not lost.</p>
+
+  <figure class="shot wide">
+    <img src="max_timeline.png" alt="The Animatica Prompt Timeline window">
+    <figcaption>The Prompt Timeline. Header, left to right: the skeleton selector, the namespace field with Add, the six constraint quick-add buttons, Convert Animkeys, the inline pose prompt with Pose, and the mode readout — “Replace”. The right-hand column holds Generate, Add Prompt, Save Prompts / Load Prompts and the zoom controls (+, −, Fit); the ruler below carries the prompt blocks and constraint pins.</figcaption>
+  </figure>
+
+  <h3>Blocks</h3>
+  <ul>
+    <li><strong>Add Prompt</strong> creates a block; double-clicking empty space creates one and opens its editor straight away.</li>
+    <li>Double-click a block to edit its text inline. <span class="kbd">Enter</span> commits, <span class="kbd">Esc</span> cancels.</li>
+    <li>Drag a block to move it, drag its edge to resize. Hold <span class="kbd">Shift</span> to disable snapping, <span class="kbd">Alt</span> to push the neighbour out of the way (or to jump past it), <span class="kbd">Ctrl</span> while resizing an edge to scale the block's interior pins with it.</li>
+    <li>Right-click for the context menu: constraint actions, prompt actions (edit, regenerate, export, snap) and view fits.</li>
+    <li>Faint dots in the marker band mark frames where the root joint carries keys.</li>
+  </ul>
+
+  <h3>Header controls</h3>
+  <p>The skeleton selector and namespace field are the same controls as in card 01 and stay in lock-step with them. <strong>Add</strong> creates a skeleton under the namespace shown. <strong>Fit</strong> re-syncs the view to the scene range and resets the zoom.</p>
+
+  <div class="note">
+    <span class="lab">The scene range is yours</span>
+    The timeline follows the scene's range and frame rate live, and Animatica never writes the scene range back.
+  </div>
+
+  <h3>Saving prompts</h3>
+  <p>Prompts travel <em>inside the <code>.max</code> file</em>: they are stored on the scene root in a binary-safe slot that survives save and load, and they are invisible in Max's own file-properties UI. <strong>Save Prompts</strong> and <strong>Load Prompts</strong> additionally write them to, and read them from, a file of their own — useful for moving a set of prompts between scenes.</p>
+
+  <!-- ===================== CONSOLE ===================== -->
+  <h2 id="s-console"><span class="sec-h"><span class="stepchip">05</span>Console</span></h2>
+  <p>The log every other window writes to, in its own window (<em>Animatica ▸ Console…</em>).</p>
+
+  <figure class="shot">
+    <img src="max_console.png" alt="The Animatica Console window">
+    <figcaption>The Console: timestamped, level-tagged lines — here <code>[ok] Ready.</code>, <code>[info] Found 0 skeleton(s).</code> and <code>[info] Timeline opened as a floating window.</code> — with the entry count in the header pill, and clear controls bottom-right.</figcaption>
+  </figure>
+
+  <p>Two behaviours worth knowing:</p>
+  <ul>
+    <li><strong>Nothing is lost by opening it late.</strong> The main window logs whether or not the Console has ever been opened; when it opens, the buffer is replayed.</li>
+    <li><strong>Closing hides it.</strong> The log lives in the shared state either way, so re-opening never rebuilds the view.</li>
+  </ul>
+
+  <p>The Console is also where the plugin announces itself at startup, printing which source folder this Max session loaded and when that source was last edited. Max keeps an imported module for the life of the process, so that line is how you tell whether the code you just edited is actually the code that is running.</p>
+
+  <!-- ===================== VIDEO ===================== -->
+  <h2 id="video">Video to Motion</h2>
+  <p>A clip goes in, motion lands on the rig. Open it from <em>Animatica ▸ Video to Motion…</em>; the window is titled <em>Animatica Video to Motion</em>.</p>
+
+  <figure class="shot">
+    <img src="max_video_to_motion.png" alt="The Video to Motion window">
+    <figcaption>Video to Motion: the video path with Browse, the collapsed Preview and More cameras groups, and the Camera, People and Sample rate dropdowns with their explanatory hints.</figcaption>
+  </figure>
+
+  <table>
+    <tr><th>Control</th><th>Meaning</th></tr>
+    <tr><td><strong>Video</strong></td><td>The clip — <code>.mp4</code> or <code>.mov</code>. One person, fixed camera gives the best result.</td></tr>
+    <tr><td><strong>Preview</strong></td><td>A collapsed frame preview of the selected clip.</td></tr>
+    <tr><td><strong>More cameras</strong></td><td>Add further angles of the same take. Start every phone, clap once above your head, and the clap is the sync point.</td></tr>
+    <tr><td><strong>Camera</strong></td><td><em>Static (tripod, phone on a shelf)</em> or moving. Moving estimates the camera's path from the video instead of assuming it is fixed — slower, and it depends on how much background stays visible.</td></tr>
+    <tr><td><strong>People</strong></td><td><em>One person</em>, or everyone — one rig per person, all keyed into one animation. Fixed camera only.</td></tr>
+    <tr><td><strong>Sample rate</strong></td><td>How densely the clip is sampled (e.g. <em>15 fps — half the wait</em>). Roughly a second of processing per sampled frame; it changes the wait, never the playback speed.</td></tr>
+    <tr><td><strong>Props</strong></td><td>Objects to track as animated nulls, named in plain words (“sports ball, chair”).</td></tr>
+    <tr><td><strong>Capture Motion</strong> / <strong>Reapply last</strong> / <strong>Cancel</strong></td><td>Run the capture, re-apply the previous result, or stop a running job.</td></tr>
+  </table>
+
+  <div class="note">
+    <span class="lab">Why capture is simpler than Generate</span>
+    A capture comes back on the same joints, in the same order, as the rig already in your scene — so applying it needs no retarget at all. And because Max holds one animation, a capture replaces the previous one rather than landing in a container of its own; there is no session-shot list here.
+  </div>
+
+  <!-- ===================== SETTINGS ===================== -->
+  <h2 id="settings">Settings</h2>
+  <p>Opened from <em>Animatica ▸ Settings…</em>. It is a window rather than a card, and it shares the tool window's state, so a change here takes effect immediately.</p>
+
+  <figure class="shot">
+    <img src="max_settings.png" alt="The Animatica Settings window with its groups expanded">
+    <figcaption>Settings: Connection (backend toggle, server URL, Test), Naming, Non-canonical rigs, Debug, Extra options with its experiment switches, Interface, and the Keyboard Shortcuts reference. Each group has its own Reset.</figcaption>
+  </figure>
+
+  <h3>Connection</h3>
+  <ul>
+    <li><strong>Backend</strong> — <em>Local</em> or <em>Cloud (api.animatica.ai)</em>.</li>
+    <li><strong>Server URL</strong> (Local) — where your MMCP server listens; the default is <code>http://localhost:8000</code>. <strong>Test</strong> re-checks it.</li>
+    <li><strong>Email</strong> / <strong>Password</strong> / <strong>Log In</strong> / <strong>Log Out</strong> / <strong>Test Connection</strong> (Cloud) — your Animatica account.</li>
+  </ul>
+  <p>The backend and the server URL are <strong>shared across every Animatica host on the machine</strong>: it is one account against one server, so signing in or changing the URL in one application covers the others. Everything else in this window is per-host.</p>
+  <p>The header pill reports the last verdict. Availability is re-probed on first show, on <strong>Test</strong>, when you switch backend, and — debounced — while you type a URL. Typing only updates the pill; a backend switch may also offer recovery actions.</p>
+
+  <h3>Naming</h3>
+  <p>Empty in 3ds Max. The controls this group holds elsewhere describe named animation containers, which Max does not have.</p>
+
+  <h3>Non-canonical rigs</h3>
+  <ul>
+    <li><strong>Skip top joint when sending hierarchy</strong> — on by default. Most rigs carry a synthetic reference node above the hips that the server does not expect; this uses the next joint, usually <em>Hips</em>, as the character root.</li>
+    <li><strong>Retarget route</strong> — how a rig that differs from the model's skeleton is reconciled. Leave it on <em>Auto</em>: in 3ds Max retargeting happens on the server, so <em>Auto</em> asks the server for its retarget state and lets it decide; <em>Server</em> forces the rig onto the wire; <em>None</em> asks for no retarget anywhere. A route carried over from another host that names a local retarget is not honoured silently — it resolves back to <em>Auto</em> and says so in the Console.</li>
+    <li><strong>Compensate group scale</strong> + <strong>Group scale</strong> — for a rig sitting under a scaled parent. Offsets are divided by the value on send and multiplied back on apply. Uniform scale only.</li>
+  </ul>
+
+  <h3>Debug</h3>
+  <p>A <strong>Debug folder</strong> and a switch that writes one folder per generation run underneath it. The rest of the group holds clearly-labelled experiment levers (each says in its own sublabel that it is an experiment, and what the server does with it) — leave them alone unless you are chasing a specific problem with support.</p>
+
+  <h3>Extra options</h3>
+  <table>
+    <tr><th>Option</th><th>Meaning</th></tr>
+    <tr><td><strong>Match scene FPS</strong></td><td>On: generated motion is keyed frame-for-frame at the scene frame rate, so authored frames and constraints stay 1:1. Off: keys land at the model's native 30&nbsp;fps — real-time pace, but frames may shift. A no-op in a 30&nbsp;fps scene.</td></tr>
+    <tr><td><strong>Send path heading (face along path)</strong></td><td>An A/B experiment; it may over-constrain turning. Compare with it off.</td></tr>
+    <tr><td><strong>Send real body context with hand/foot pins</strong></td><td>An A/B experiment. Off (the default) lets the server approximate the body from a T-pose.</td></tr>
+    <tr><td><strong>Path waypoint wins over same-frame hand/foot pins</strong></td><td>Off (default): pins snap onto their target, and the body may jump to reach them. On: your waypoint is steered — smoother motion, pins land near but not on their target.</td></tr>
+    <tr><td><strong>Duplicate path waypoints at block seams</strong></td><td>On by default: a waypoint on a shared block boundary is also sent one frame earlier, so both blocks are steered. Off sends it to the later block only, which can leave the earlier one unsteered and sliding at the seam.</td></tr>
+    <tr><td><strong>Correct ground offset</strong></td><td>Subtracts the measured server float so feet land on the ground. Canonical rigs only; it shifts pinned poses down by the same amount.</td></tr>
+    <tr><td><strong>Ground captured motion</strong></td><td>Measures the planted foot on your rig from the service's foot contacts and seats a capture on the ground.</td></tr>
+  </table>
+
+  <h3>Interface</h3>
+  <ul>
+    <li><strong>Show Motion Import panel</strong> — reveals card 02. This one takes effect immediately.</li>
+    <li><strong>Show Live Drive panel</strong> — has no effect in 3ds Max. The panel is shown only where the host declares a live-drive capability, and this one does not, so the preference alone cannot reveal it. It is the capability, not the toggle, that decides.</li>
+    <li>The third switch in this group is labelled for a different host, and nothing in the 3ds Max plugin reads it. The Animatica window is opened from the Animatica menu.</li>
+  </ul>
+
+  <h3>Keyboard Shortcuts</h3>
+  <p>A collapsed, read-only reference to everything in <a href="#shortcuts">Keyboard &amp; mouse</a> below.</p>
+
+  <!-- ===================== EXPORT ===================== -->
+  <h2 id="export">Exporting</h2>
+  <p>The plugin has <strong>no export path of its own</strong>. You export the way you export anything else in Max: <strong>File ▸ Export</strong>, and pick FBX.</p>
+
+  <h3>What happens during the export</h3>
+  <p>The plugin rides on Max's own export callbacks. On <code>#preExport</code> it zeroes the visual aim offset on every joint it created; on <code>#postExport</code> it restores each offset exactly and checks that <em>no node transform moved</em> in the meantime. That check is deliberately loud: a moved transform after an export is the one thing this machinery exists to make impossible, so it prints the offending node names rather than passing quietly.</p>
+
+  <div class="note">
+    <span class="lab">Why the offset is removed for the export</span>
+    The builder aims each bone's <em>visual</em> — geometry only; the node transform stays the identity rest the protocol requires. Max serialises that visual offset into the FBX in a way other applications fold into the bone rest, so a rig that reads to the millimetre in one application came back about a metre off in another (measured 2026-09-02: 1009&nbsp;mm at the head, 1399&nbsp;mm at worst). With the offset zeroed for the duration of the export, the same measurement is 0.0&nbsp;mm on every joint.
+  </div>
+
+  <p>Nothing is asked of you: exporting through <strong>File ▸ Export</strong> is enough, and your scene is left exactly as it was afterwards.</p>
+
+  <!-- ===================== FILES ===================== -->
+  <h2 id="files">Where your files live</h2>
+  <table>
+    <tr><th>Path</th><th>What is in it</th></tr>
+    <tr><td><code>%APPDATA%\animatica\shared.json</code></td><td>The account-level settings: the server URL and whether you are on Cloud. Shared by every Animatica host on the machine.</td></tr>
+    <tr><td><code>%APPDATA%\animatica\auth.json</code></td><td>Your sign-in, likewise shared — signing in once covers every host.</td></tr>
+    <tr><td><code>%APPDATA%\animatica\max\settings.json</code></td><td>Everything else: namespace, modes, window state, generation options. Per-host on purpose, so two applications cannot overwrite each other's interface state.</td></tr>
+    <tr><td><code>%LOCALAPPDATA%\animatica\max\</code></td><td>Regenerable data only. Safe to delete without losing settings, and it does not roam.</td></tr>
+    <tr><td><code>%LOCALAPPDATA%\Autodesk\3dsMax\&lt;year&gt; - 64bit\&lt;LOCALE&gt;\scripts\startup\animatica_to_max_startup.py</code></td><td>The launcher written by the installer. Removed by <code>install.py --uninstall</code>.</td></tr>
+    <tr><td>Your <code>.max</code> scene</td><td>Prompts and the rig's stamps (bind pose, hip height, namespace) travel inside the scene file itself.</td></tr>
+  </table>
+  <p>Settings files are written atomically — a half-written settings file would be worse than a missing one — and the shared keys are split out of the per-host file automatically, so a server URL you set in one application is the one every application uses.</p>
+
+  <!-- ===================== SHORTCUTS ===================== -->
+  <h2 id="shortcuts">Keyboard &amp; mouse</h2>
+  <p>Shortcuts fire while the mouse hovers the timeline. Arrows, <span class="kbd">Home</span>/<span class="kbd">End</span>, <span class="kbd">[</span>/<span class="kbd">]</span>, <span class="kbd">,</span>/<span class="kbd">.</span>, <span class="kbd">Z</span>, <span class="kbd">Shift+D</span> and undo/redo are suspended while a prompt is being edited inline.</p>
+
+  <h3>Keyboard</h3>
+  <table>
+    <tr><th>Key</th><th>Action</th></tr>
+    <tr><td><span class="kbd">← / →</span></td><td>Nudge selected block −1 / +1 frame (steps the playhead if nothing is selected)</td></tr>
+    <tr><td><span class="kbd">Shift+← / →</span></td><td>Nudge selected block −10 / +10 frames</td></tr>
+    <tr><td><span class="kbd">Ctrl+← / →</span></td><td>Step playhead −1 / +1 frame</td></tr>
+    <tr><td><span class="kbd">Ctrl+Shift+← / →</span></td><td>Step playhead −10 / +10 frames</td></tr>
+    <tr><td><span class="kbd">Home / End</span></td><td>Snap playhead to selected block start / end</td></tr>
+    <tr><td><span class="kbd">Shift+Home / End</span></td><td>Snap selected block start / end to playhead</td></tr>
+    <tr><td><span class="kbd">Ctrl+Space</span></td><td>Play / stop toggle</td></tr>
+    <tr><td><span class="kbd">[ / ]</span></td><td>Jump to previous / next constraint frame</td></tr>
+    <tr><td><span class="kbd">, / .</span></td><td>Jump playhead to previous / next block edge</td></tr>
+    <tr><td><span class="kbd">F</span></td><td>Fit timeline to range</td></tr>
+    <tr><td><span class="kbd">Shift+F</span></td><td>Fit to selected prompt block(s)</td></tr>
+    <tr><td><span class="kbd">Z</span></td><td>Zoom to selected prompt block(s)</td></tr>
+    <tr><td><span class="kbd">Shift+Z</span></td><td>Fit zoom to all prompt blocks</td></tr>
+    <tr><td><span class="kbd">Ctrl+Z / Ctrl+Y</span></td><td>Undo / redo timeline edits</td></tr>
+    <tr><td><span class="kbd">Ctrl+G</span></td><td>Generate motion from all prompts</td></tr>
+    <tr><td><span class="kbd">Delete</span></td><td>Remove selected prompt block(s) and constraint pin(s) — one undo step</td></tr>
+    <tr><td><span class="kbd">Shift+D</span></td><td>Clear selection (blocks + constraint pins)</td></tr>
+    <tr><td><span class="kbd">Esc</span></td><td>Cancel inline prompt edit</td></tr>
+    <tr><td><span class="kbd">Enter</span></td><td>Commit inline prompt edit</td></tr>
+  </table>
+
+  <h3>Mouse &amp; block editing</h3>
+  <table>
+    <tr><th>Gesture</th><th>Action</th></tr>
+    <tr><td>Left-drag (empty)</td><td>Scrub playhead (at any height)</td></tr>
+    <tr><td>Left-click near playhead</td><td>Scrub — the playhead wins over constraint pins near its line</td></tr>
+    <tr><td>Left-click (empty)</td><td>Clear selection (blocks + constraint pins)</td></tr>
+    <tr><td>Ctrl+Left-drag (empty)</td><td>Rubber-band select blocks + constraint pins</td></tr>
+    <tr><td>Left-click block</td><td>Select block</td></tr>
+    <tr><td>Ctrl+Left-click block</td><td>Add / remove block from selection</td></tr>
+    <tr><td>Left-drag block</td><td>Move block(s); hold Shift to disable snapping</td></tr>
+    <tr><td>Alt+Left-drag block</td><td>Jump past a neighbour — snaps into the nearest free gap on the drop side</td></tr>
+    <tr><td>Left-drag block edge</td><td>Resize; Alt pushes the neighbour, Ctrl scales pins</td></tr>
+    <tr><td>Left-click constraint icon</td><td>Add constraint at block midpoint</td></tr>
+    <tr><td>Left-click constraint pin</td><td>Select the pin and its viewport marker; Ctrl toggles it in / out of the selection</td></tr>
+    <tr><td>Left-drag constraint pin</td><td>Move the constraint (grab the pin shape itself)</td></tr>
+    <tr><td>Double-click block</td><td>Edit prompt text inline</td></tr>
+    <tr><td>Double-click empty</td><td>Create a new block and edit it</td></tr>
+    <tr><td>Middle-drag</td><td>Pan the view</td></tr>
+    <tr><td>Ctrl+Scroll</td><td>Zoom timeline in / out at the cursor</td></tr>
+    <tr><td>Right-click</td><td>Context menu — constraints, prompt actions (edit / regenerate / export / snap) and view fits</td></tr>
+  </table>
+
+  <!-- ===================== TROUBLE ===================== -->
+  <h2 id="trouble">Troubleshooting</h2>
+
+  <h3>The Animatica menu is not there after restarting Max</h3>
+  <ul>
+    <li>Run <code>python scripts/install.py --list</code> and check that the startup folder it prints matches the Max version <em>and locale</em> you are running. Max reads only its own language's profile tree.</li>
+    <li>If no profile was detected at all, start Max once so it creates one, then install again.</li>
+    <li>Check the Max listener for the plugin's startup line. It names the folder this session loaded from and when that source was last edited — the fastest way to tell whether Max is running the copy you think it is.</li>
+  </ul>
+
+  <h3>“Local server unavailable”</h3>
+  <p>The plugin could not reach your local MMCP server. The dialog offers three actions: <strong>Switch to Cloud</strong>, <strong>How to start the server</strong> (guidance only — Animatica never launches a server process for you), and <strong>Dismiss</strong>.</p>
+  <div class="warn">
+    <span class="lab">A busy local server looks like a dead one</span>
+    The liveness probe waits five seconds. A single-worker local server that is in the middle of answering a generation cannot answer the probe within that window, so it is reported as unreachable even though it is running and working normally. Wait for the run to finish, then press <strong>Test</strong> in Settings.
+  </div>
+
+  <h3>The generation was refused because of my rig</h3>
+  <p>The server decides whether a retarget is needed. If the server carries no retarget model and your rig does not match the model's canonical skeleton, the plugin refuses rather than generating something wrong, in these words:</p>
+  <blockquote class="card"><p>this server does not support retargeting — use a rig that matches the model's canonical skeleton (Skeleton → Create), or a server with a retarget model</p></blockquote>
+  <p>Two ways forward: press <strong>Create Skeleton</strong> and generate onto the canonical rig, or point the plugin at a server that has a retarget model.</p>
+
+  <h3>Create Skeleton says joints are missing</h3>
+  <p>A rig already exists under that namespace, and it does not carry every joint the selected model needs. Either change the <strong>Namespace</strong> so a separate rig is built, or delete the existing rig.</p>
+
+  <h3>Constraint buttons do nothing</h3>
+  <p>Capture needs a rig. With no skeleton created or picked, the Console shows a warning — create or pick one first.</p>
+
+  <h3>The exported FBX reads wrong in another application</h3>
+  <p>Export through <strong>File ▸ Export</strong>. The export hygiene described <a href="#export">above</a> rides on Max's export callbacks, so a rig exported any other way does not get it. If the Console or listener printed a line about transforms having moved or offsets not being restored after an export, that is the check reporting a real problem — note the joint names it printed.</p>
+
+  <h3>A button in the window does nothing at all</h3>
+  <p>Open the Console: most failures are logged there as a line rather than raised at you. The startup path also reports its own failures by name (“Failed to open the Animatica tool”, “Failed to register the Animatica menu”) followed by the traceback in the listener.</p>
+
+  <!-- ===================== GLOSSARY ===================== -->
+  <h2 id="glossary">Glossary &amp; units</h2>
+  <table>
+    <tr><th>Term</th><th>Meaning</th></tr>
+    <tr><td><strong>MMCP</strong></td><td>The Motion&nbsp;MCP protocol the plugin speaks to the server. The plugin is a client; the server generates.</td></tr>
+    <tr><td><strong>Canonical skeleton</strong></td><td>A rig in the layout the model expects. <em>Create Skeleton</em> builds one — <code>soma77</code>, 77 joints, rooted at Hips. Rigs of your own go on the wire as they are and are retargeted server-side.</td></tr>
+    <tr><td><strong>Adopt</strong></td><td>Make a rig you already have pipeline-ready — store its current pose as the bind pose, plus hip height and namespace — without marking it canonical.</td></tr>
+    <tr><td><strong>Namespace</strong></td><td>The prefix on created joints (default <code>animatica</code>), which keeps several rigs in one scene apart.</td></tr>
+    <tr><td><strong>Constraint / pin</strong></td><td>One authored requirement at one frame: a pose shape, an effector position, or a path waypoint. Pins appear on the timeline; markers appear in the viewport.</td></tr>
+    <tr><td><strong>Path (root2d)</strong></td><td>A sequence of ground waypoints saying where the character should be, and when.</td></tr>
+    <tr><td><strong>Diffusion steps</strong></td><td>How much effort the model spends. More steps is better and slower; the server caps them at 500.</td></tr>
+    <tr><td><strong>Replace</strong></td><td>3ds Max holds one animation, so a generation replaces it. This is the only output mode here, which is why no mode picker is shown.</td></tr>
+  </table>
+
+  <h3>Units &amp; axes</h3>
+  <p>The protocol boundary is fixed at <strong>meters, right-handed Y-up</strong>. 3ds Max is <strong>Z-up</strong>, and its scene unit can be anything — both are converted for you in a single module, so nothing you do in the scene has to be expressed in the protocol's terms. Motion is generated at the model's native <strong>30&nbsp;fps</strong>; turn on <em>Match scene FPS</em> in Settings to have it keyed at your scene's rate instead.</p>
+
+  <div class="foot">
+    <p>Animatica for 3ds Max — User Manual.<br>
+    Requires 3ds Max 2027 on Windows x64. Product and account questions: <a href="https://animatica.ai" target="_blank" rel="noopener">animatica.ai</a>.</p>
+  </div>
+</main>
+</div>
+</body>
+</html>

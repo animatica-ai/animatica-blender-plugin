@@ -28,17 +28,26 @@ from .qt_compat import QtCore, QtWidgets
 from .sections.capture_section import CaptureSection
 from .widgets import Btn, SubSection
 
-# Shown in place of the list when no stamped take is in the scene. The
+# Shown in place of the list when nothing stamped is in the scene. The
 # restart sentence is not an apology: provenance is written to custom
 # properties the host owns, which could not be verified outside a live
 # session, so a reopened scene may genuinely come back with no
 # shots. Better said out loud than left as an empty rectangle.
-_EMPTY_SHOTS_TEXT = (
-    "No shots yet. Every capture you apply lands in its own take and "
-    "shows up here.\n"
-    "After a restart this list only comes back for shots whose capture "
-    "stamp survived in the scene file."
-)
+def _empty_shots_text() -> str:
+    """The empty-state copy, in the host's own vocabulary.
+
+    A host with named animation containers puts each capture in its own
+    take; a host without them has a single animation to land in, and
+    saying "take" there names something the user cannot find.
+    """
+    where = ("its own take" if host.has(host.TAKES)
+             else "the current animation")
+    return (
+        f"No shots yet. Every capture you apply lands in {where} and "
+        "shows up here.\n"
+        "After a restart this list only comes back for shots whose capture "
+        "stamp survived in the scene file."
+    )
 
 # Extra role on column 0 of a shot-list row: the index of the batch-queue
 # entry the row stands for. Take rows leave it unset, which is what tells
@@ -315,7 +324,7 @@ class MotionCaptureWindow(QtWidgets.QWidget):
         self.shot_list.itemClicked.connect(self._on_shot_clicked)
         self.sec_shots.body_layout.addWidget(self.shot_list)
 
-        self._shots_empty = QtWidgets.QLabel(_EMPTY_SHOTS_TEXT)
+        self._shots_empty = QtWidgets.QLabel(_empty_shots_text())
         self._shots_empty.setObjectName("field_hint")
         self._shots_empty.setWordWrap(True)
         self.sec_shots.body_layout.addWidget(self._shots_empty)

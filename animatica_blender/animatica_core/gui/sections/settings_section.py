@@ -179,15 +179,24 @@ class SettingsSection(QtWidgets.QWidget):
         # -- How to reconcile a rig with a model that has another skeleton -
         # Consulted only when they differ. The two routes are not rivals:
         # the server's retarget model was trained for this, and HIK works
-        # with nothing installed and is the only one usable live.
+        # with nothing installed and is the only one usable live. A host
+        # without a character system (3ds Max) has no HIK route to offer,
+        # so the option and the word disappear; a persisted "hik" then
+        # lands on "auto", which is what skeleton_policy maps it to anyway.
+        _has_character_system = host.has(host.CHARACTER_SYSTEM)
+        route_options = [
+            ("auto", "Auto — server if it can, else HIK"
+             if _has_character_system else "Auto — server if it can"),
+            ("server", "Server — send my rig, server retargets"),
+        ]
+        if _has_character_system:
+            route_options.append(
+                ("hik", "HIK — generate on the model's rig, drive mine"))
+        route_options.append(("none", "None — leave my rig alone"))
         route_row = QtWidgets.QHBoxLayout()
         route_row.addWidget(QtWidgets.QLabel("Retarget route"))
-        self._route = Combo([
-            ("auto", "Auto — server if it can, else HIK"),
-            ("server", "Server — send my rig, server retargets"),
-            ("hik", "HIK — generate on the model's rig, drive mine"),
-            ("none", "None — leave my rig alone"),
-        ], value=getattr(state, "retarget_route", "auto"))
+        self._route = Combo(
+            route_options, value=getattr(state, "retarget_route", "auto"))
         self._route.valueChanged.connect(
             lambda v: on_patch({"retarget_route": v}))
         route_row.addWidget(self._route, 1)
@@ -256,14 +265,17 @@ class SettingsSection(QtWidgets.QWidget):
         show_live_chk.toggled.connect(lambda v: on_patch({"show_live_drive": v}))
         interface.body_layout.addWidget(show_live_chk)
 
-        # -- Auto-open on MoBu startup -------------------------------------
+        # -- Auto-open on host startup -------------------------------------
         # Opt-in (default off): when on, the Animatica tool auto-opens once
-        # each MotionBuilder launch via a deferred OnUIIdle one-shot fired
-        # from _startup.register (never synchronous at import).
+        # each host launch via a deferred idle one-shot fired from
+        # _startup.register (never synchronous at import). The host names
+        # itself: this section is shared, and a 3ds Max user reading
+        # "MotionBuilder" here learns the plugin was ported, not how it works.
         auto_open_chk = Check(
-            "Open Animatica on MotionBuilder startup",
+            f"Open Animatica on {host.app_name()} startup",
             checked=state.auto_open_on_startup,
-            sublabel="Auto-open the tool window once when MotionBuilder finishes loading.",
+            sublabel=f"Auto-open the tool window once when {host.app_name()} "
+                     f"finishes loading.",
         )
         auto_open_chk.toggled.connect(lambda v: on_patch({"auto_open_on_startup": v}))
         interface.body_layout.addWidget(auto_open_chk)
@@ -699,7 +711,7 @@ class SettingsSection(QtWidgets.QWidget):
         )
         hint = QtWidgets.QLabel(
             "Shortcuts fire while the mouse hovers the timeline (otherwise they "
-            "pass through to MotionBuilder). Left-drag scrubs the playhead at any "
+            f"pass through to {host.app_name()}). Left-drag scrubs the playhead at any "
             "height; middle-drag pans. Arrows, Home/End, [ / ], , / ., Z, Shift+D "
             "and undo/redo are suspended while editing a prompt inline."
         )

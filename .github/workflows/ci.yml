@@ -87,5 +87,5 @@ jobs:
           # Without this the parity test SKIPS rather than fails -- and a
           # skipped gate that nobody reads is the failure mode this job
           # exists to prevent. Point it at the goldens explicitly.
-          ANIMATICA_AB_GOLDEN: ${{ github.workspace }}/motionmcp-client-sdk/tools/ab_suite/golden/blender/local
+          ANIMATICA_AB_GOLDEN: ${{ github.workspace }}/motionmcp-client-sdk/tools/ab_suite/golden/local/kimodo-soma-rp/blender
         run: python -m pytest -q tests
