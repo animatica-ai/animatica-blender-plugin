@@ -436,11 +436,19 @@ z epoki goldena w pamięci c4 trafia bajt w bajt. Zamknięcie tego wymaga
 przenagrania goldenów Blendera i wpisu c4 w kasecie — z żywym serwerem
 i wszystkimi hostami.
 
-### Czego nie zweryfikowano
+### Weryfikacja na chmurze (2026-09-07, `api.animatica.ai`, tier `dev`)
 
-- **ARDY end-to-end.** Lokalny serwer serwuje dziś tylko `kimodo-soma-rp`;
-  ARDY mieszka w prywatnym forku i wymaga własnej konfiguracji. Ścieżka
-  addonu jest dla obu modeli identyczna — różnice są serwerowe.
-- **Operatory modalne w GUI.** W trybie `-b` nie ma menedżera okien, więc
-  E2E woła to, co operatory wołają, z pominięciem samej pętli modalnej.
-- **Tryb `record` runnera A/B** — przepięty na `client_shim`, nieuruchomiony.
+Trzy przebiegi w Blenderze użytkownika (GUI, operatory modalne przez
+menedżera okien, osobna scena tymczasowa), po zalogowaniu w panelu:
+
+| Przebieg | Rig | Model | Generowanie | Bake |
+|---|---|---|---|---|
+| a | SOMA30 (30 kości) | kimodo-soma-rp | 113 s (zimny start) | 123 krzywe / 7380 kluczy, 0 pominiętych |
+| b | Animatic (77 kości, `animatica:`) | kimodo-soma-rp | 9 s (ciepły) | 311 krzywych / 18 660 kluczy, 0 pominiętych |
+| c | SOMA30 | ardy-core-rp | 113 s (zimny start) | 123 krzywe / 7380 kluczy, klatki 1–60, 0 pominiętych |
+
+Po każdym przebiegu Accept wypchnął strip do NLA. Ostrzeżenie core o fps
+(scena 30, ARDY 20) dotarło do użytkownika. Anonimowo chmura daje jeden
+model i 401 na `/generate` — obsłużone jako `MmcpError(auth_required)` bez
+tracebacku. Luki „ARDY end-to-end" i „operatory modalne w GUI" z wcześniejszej
+wersji tego dziennika są zamknięte.
