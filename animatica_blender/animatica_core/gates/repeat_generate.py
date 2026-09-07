@@ -41,7 +41,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import urllib.request
 from dataclasses import dataclass
 
 DRIFT_M = 0.005          # 5 mm on any joint's rest offset
@@ -74,7 +73,7 @@ def run(host: HostRepeatGenerate, check):
     from animatica_core.core import retarget
     from animatica_core.core.request_builder import PROTOCOL_VERSION
     from animatica_core.bridge import animation_target, builder, skeleton as skel
-    from animatica_core.gates import scene_api
+    from animatica_core.gates import scene_api, server_session
     from animatica_core.gltf_parser import parse_gltf
     from animatica_core.live.skeleton_adapter import skeleton_block_to_hierarchy
     from animatica_core.skeleton import (get_joint_hierarchy,
@@ -139,8 +138,7 @@ def run(host: HostRepeatGenerate, check):
           d0 < 1e-6, f"{d0 * 1000:.3f} mm")
 
     # ---- two motions, applied alternately ---------------------------------
-    caps = json.load(urllib.request.urlopen(f"{server}/capabilities",
-                                            timeout=90))
+    caps = server_session.capabilities(server)
     model = next(m for m in caps["models"] if m["id"].startswith("kimodo"))
     canonical, fps = model["canonical_skeleton"], float(model["fps"])
     src_hier, src_rest, _ = skeleton_block_to_hierarchy(canonical)
@@ -160,11 +158,7 @@ def run(host: HostRepeatGenerate, check):
                  "positions_xz": [[0.0, 3.0]]}],
             "timing": {"fps": fps},
         }
-        req = urllib.request.Request(
-            f"{server}/generate", data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=600) as r:
-            payload = json.loads(r.read())
+        payload = server_session.generate(server, body, timeout=600)
         return retarget.retarget_motion(parse_gltf(payload), src_hier,
                                         src_rest, hierarchy, rest)
 

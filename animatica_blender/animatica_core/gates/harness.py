@@ -123,9 +123,16 @@ def probe_server(server: str) -> tuple[bool, str]:
 
     Otherwise every server-dependent gate burns its own multi-minute timeout
     discovering the same thing.
+
+    Signed with the product's session where there is one (see
+    ``gates.server_session``): the cloud API answers an anonymous caller with
+    the lowest tier's models only, so an unsigned probe can pass while every
+    gate behind it fails on 401 — the probe must ask the question the gates
+    will ask.
     """
     try:
-        urllib.request.urlopen(f"{server}/capabilities", timeout=10)
+        from . import server_session
+        server_session.capabilities(server, timeout=10)
         return True, ""
     except Exception as exc:                               # noqa: BLE001
         return False, f"{type(exc).__name__}: {exc}"

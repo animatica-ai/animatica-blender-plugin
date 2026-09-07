@@ -45,7 +45,6 @@ from __future__ import annotations
 import json
 import os
 import time
-import urllib.request
 from dataclasses import dataclass
 
 SEED = 42
@@ -74,7 +73,7 @@ def run(host: HostDemo):
     from animatica_core.core import retarget
     from animatica_core.core.request_builder import PROTOCOL_VERSION
     from animatica_core.bridge import animator, builder
-    from animatica_core.gates import scene_api
+    from animatica_core.gates import scene_api, server_session
     from animatica_core.gltf_parser import parse_gltf
     from animatica_core.live.skeleton_adapter import skeleton_block_to_hierarchy
 
@@ -85,11 +84,13 @@ def run(host: HostDemo):
     travel_m = float(os.environ.get("ANIMATICA_TRAVEL", "3.0"))
 
     # -- 1. the server ------------------------------------------------------
-    caps = json.load(urllib.request.urlopen(f"{server}/capabilities",
-                                            timeout=60))
-    health = json.load(urllib.request.urlopen(f"{server}/health", timeout=15))
-    log("server:", health["status"],
-        "| retargeting:", health["retargeting"],
+    caps = server_session.capabilities(server)
+    # /health's SHAPE is the server's own: a local MMCP server names its
+    # encoder, models and devices; the cloud API answers {"status": "ok"} and
+    # nothing else (measured 2026-09-05 — reading health["retargeting"] there
+    # was a KeyError before a single check had run).
+    health = server_session.health(server)
+    log("server:", server_session.health_line(health),
         "| models:", [m["id"] for m in caps["models"]])
     model = next(m for m in caps["models"] if m["id"].startswith("kimodo"))
     canonical = model["canonical_skeleton"]
@@ -142,11 +143,7 @@ def run(host: HostDemo):
     log(f'generating: "{prompt}" + a {travel_m:.1f} m path '
         f'({frames} frames, seed {SEED})')
     t0 = time.time()
-    req = urllib.request.Request(
-        f"{server}/generate", data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=300) as r:
-        payload = json.loads(r.read())
+    payload = server_session.generate(server, body, timeout=300)
     log(f"server answered in {time.time() - t0:.1f}s")
 
     motion = parse_gltf(payload)
