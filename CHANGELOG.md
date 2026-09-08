@@ -11,6 +11,14 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Added
 
+- **Client attribution on generation requests.** The request that starts a
+  generation now carries `X-Animatica-Client: blender`, the addon build
+  (`X-Animatica-Client-Version`), the Blender it is running in
+  (`X-Animatica-Host-Version`) and a session id generated once per addon
+  launch, so the API can report DCC mix and failure rate per host version.
+  Attribution only — a missing or wrong value never affects a request. The
+  `202` poll follow-ups and `GET /capabilities` are deliberately not
+  attributed; neither starts a generation.
 - **The Animatic character is what "Import rig" loads.** The rigged, textured
   hero body ships at `assets/animatic_character.blend` and is appended whole —
   armature, skinned mesh and material — instead of a bare skeleton being built
