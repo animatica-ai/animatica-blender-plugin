@@ -178,12 +178,21 @@ def _warn_on_foreign_core() -> None:
 
 def _register_core() -> None:
     """Declare this host to core. Identity only — no bridge: the half of core
-    this addon shares does not ask the host to touch the scene."""
+    this addon shares does not ask the host to touch the scene.
+
+    Plugin/app versions are read here, on the main thread inside ``register()``,
+    because ``bpy`` is off-limits to the worker thread that later runs
+    ``client_shim.generate``; reading them here keeps that thread bpy-free."""
     _ensure_on_sys_path()
     _warn_on_foreign_core()
 
     from animatica_core import host
-    host.register(key="blender", product_name="Animatica for Blender")
+    host.register(
+        key="blender",
+        product_name="Animatica for Blender",
+        plugin_version=".".join(map(str, bl_info["version"])),
+        app_version=bpy.app.version_string,
+    )
 
 
 def _unregister_core() -> None:
