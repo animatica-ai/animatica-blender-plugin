@@ -299,7 +299,10 @@ class Segment(QFrame):
         super().__init__(parent)
         self.setObjectName("seg")
         row = QHBoxLayout(self)
-        row.setContentsMargins(2, 2, 2, 2)
+        # 1px here and 1px of QSS padding, over a 20px button: a segment
+        # ends up 26px tall, the height of a small Btn, so the header row
+        # reads as one line of controls (Matt, 2026-09-08).
+        row.setContentsMargins(1, 1, 1, 1)
         row.setSpacing(2)
         # No QButtonGroup: with checkable QPushButtons + an exclusive group
         # the per-button clicked() signal occasionally fails to dispatch on

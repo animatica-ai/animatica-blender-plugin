@@ -79,6 +79,14 @@ class AuthMixin:
         self.state.auth_tier = auth.tier or data.get("tier", "")
         self.sec_settings.refresh()
         self._log("ok", f"Signed in ({self.state.auth_tier or 'ok'}).")
+        if auth.last_save_error:
+            # The session works for this run and vanishes at the next start.
+            # Said here, once, with the OS's own reason -- not discovered as a
+            # surprise sign-out tomorrow.
+            self._log("warn",
+                      "Signed in, but the session could not be saved to disk: "
+                      f"{auth.last_save_error}. You will be signed out after "
+                      "restarting the host.")
         self._login_worker = None
         self._save_timer.start()
         who = self.state.auth_email or "Animatica Cloud"

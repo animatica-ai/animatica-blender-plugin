@@ -31,6 +31,8 @@ import uuid
 
 import numpy as np
 
+from . import host
+
 DEFAULT_CAPTURE_URL = os.environ.get("ANIMATICA_CAPTURE_URL",
                                      "http://localhost:8001")
 
@@ -184,7 +186,8 @@ def _start(request, *, target_fps, people, props, base_url) -> str:
         request["props"] = [str(p) for p in props]
     result = _request(f"{base_url}/capture/start",
                       data=json.dumps(request).encode(), method="POST",
-                      headers={"Content-Type": "application/json"})
+                      headers={"Content-Type": "application/json",
+                               **host.client_headers()})
     return result["id"]
 
 

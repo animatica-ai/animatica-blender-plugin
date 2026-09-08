@@ -86,6 +86,11 @@ class AnimaticaAuth:
         self.refresh_token: str | None = None
         self._email: str | None = None
         self._tier: str = "free"
+        #: Why the last :meth:`_save_tokens` failed, or None. A session that
+        #: lives only in memory works until the host restarts, then the user
+        #: is signed out without ever having been told -- so the failure is
+        #: recorded here for the GUI to say out loud instead of swallowed.
+        self.last_save_error: str | None = None
         self._migrate_legacy_tokens()
         self._load_tokens()
 
@@ -242,16 +247,24 @@ class AnimaticaAuth:
     # Token persistence
     # ------------------------------------------------------------------
 
-    def _save_tokens(self) -> None:
-        os.makedirs(shared_dir(), exist_ok=True)
+    def _save_tokens(self) -> bool:
+        """Persist the session atomically. Returns False (and records why in
+        :attr:`last_save_error`) instead of raising: a failed save must not
+        undo a login that just succeeded, but it must not be silent either.
+
+        The temp file carries the pid: the connection probe and a generation
+        worker can both refresh in the same second, and two threads sharing
+        one ``auth.json.tmp`` delete each other's half-written file.
+        """
         payload = {
             "access_token": self.access_token,
             "refresh_token": self.refresh_token,
             "email": self._email,
             "tier": self._tier,
         }
-        tmp = auth_path() + ".tmp"
+        tmp = f"{auth_path()}.{os.getpid()}.tmp"
         try:
+            os.makedirs(shared_dir(), exist_ok=True)
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh)
             os.replace(tmp, auth_path())
@@ -259,11 +272,15 @@ class AnimaticaAuth:
                 os.chmod(auth_path(), stat.S_IRUSR | stat.S_IWUSR)
             except OSError:
                 pass
-        except Exception:
+        except Exception as exc:
+            self.last_save_error = f"{type(exc).__name__}: {exc}"
             try:
                 os.unlink(tmp)
             except OSError:
                 pass
+            return False
+        self.last_save_error = None
+        return True
 
     def _migrate_legacy_tokens(self) -> None:
         """Carry a pre-rename ``auth.json`` forward once, then tighten perms.

@@ -85,6 +85,9 @@ class GenerationWorker(QtCore.QThread):
                     if auth.refresh():
                         self._access_token = auth.access_token
                         token = auth.access_token
+                        if auth.last_save_error:
+                            _emit("Session refreshed, but it could not be saved"
+                                  f" to disk: {auth.last_save_error}")
                         gltf = mmcp_client.generate(
                             url, self._request_body, access_token=token,
                             on_progress=_emit,

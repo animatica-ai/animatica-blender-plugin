@@ -67,6 +67,10 @@ PERSISTED_FIELDS = (
     # Panel-visibility toggle (Motion Import hidden by default).
     "show_motion_import",
     "show_live_drive",
+    # Compact layout toggles — one per window, both seeded compact on a
+    # fresh install (see the rule in load_persisted_into()).
+    "ui_compact",
+    "ui_compact_settings",
     # Last folder used by the Save/Load Prompts dialogs (example dir on first use).
     "last_prompt_dir",
     # Auto-open the tool window at host startup (opt-in, default off).
@@ -102,6 +106,24 @@ def load_persisted_into(state) -> None:
         data = user_settings.load()
     except Exception:
         return
+    # Product decision 2026-09-08: Compact is the default layout for a fresh
+    # install, while anyone who has already run the tool stays on Full. A file
+    # that names ui_compact is honoured either way, so the rule stops applying
+    # the moment the user toggles the layout once.
+    if not data.get("first_run_done") and "ui_compact" not in data:
+        try:
+            state.ui_compact = True
+        except Exception:
+            pass
+    # The Settings window carries its own flag, seeded by the same rule and
+    # keyed on its own name: a file that already names one but not the other
+    # (a build older than the split) still gets the fresh-install default for
+    # the one it does not name.
+    if not data.get("first_run_done") and "ui_compact_settings" not in data:
+        try:
+            state.ui_compact_settings = True
+        except Exception:
+            pass
     for key in PERSISTED_FIELDS:
         if key in data and hasattr(state, key):
             try:

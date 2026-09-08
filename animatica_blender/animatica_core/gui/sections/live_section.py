@@ -554,6 +554,10 @@ class LiveSection(QtWidgets.QWidget):
                 pass
             self._viz = None
 
+    def set_compact(self, compact: bool) -> None:
+        """The whole card's visibility is the scaffold's verdict
+        (show_live_drive and not compact); nothing inside changes."""
+
     # ------------------------------------------------------------------
     # control
     # ------------------------------------------------------------------

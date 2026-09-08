@@ -23,7 +23,14 @@ from .sections import (
     SettingsSection, SkeletonSection, ConstraintsSection,
     GenerateSection, PoseSection, LiveSection, ModelSection,
 )
-from .widgets import Btn
+from .widgets import Btn, Segment
+
+
+#: Metrics for the scrolling column itself — the padding around the cards and
+#: the gap between them. One tuple, not two: the column is as tight as the
+#: cards are, in Compact and in Full alike.
+_COL_MARGINS = (10, 8, 10, 8)
+_COL_SPACING = 6
 
 
 class Sections(NamedTuple):
@@ -49,6 +56,9 @@ def build_scroll_column(window) -> tuple[QtWidgets.QScrollArea, QtWidgets.QVBoxL
     The window itself has no margins — the padding lives on the inner column, so
     the scrollbar sits flush against the panel edge. Horizontal scrolling is off:
     every card is expected to wrap rather than push the column wider.
+
+    The column's padding and gap are one size, the tight one, whichever mode
+    the window is in.
     """
     outer = QtWidgets.QVBoxLayout(window)
     outer.setContentsMargins(0, 0, 0, 0)
@@ -63,18 +73,25 @@ def build_scroll_column(window) -> tuple[QtWidgets.QScrollArea, QtWidgets.QVBoxL
     content = QtWidgets.QWidget()
     scroll.setWidget(content)
     col = QtWidgets.QVBoxLayout(content)
-    col.setContentsMargins(12, 12, 12, 12)
-    col.setSpacing(8)
+    col.setContentsMargins(*_COL_MARGINS)
+    col.setSpacing(_COL_SPACING)
     return scroll, col
 
 
 def build_header_row(*, title: str, subtitle: str,
-                     on_timeline=None) -> QtWidgets.QHBoxLayout:
+                     on_timeline=None,
+                     trailing: "QtWidgets.QWidget | None" = None,
+                     ) -> QtWidgets.QHBoxLayout:
     """The branded header: mark chip, two-line title, and the Timeline button.
 
     *on_timeline* is connected to a right-aligned button that re-opens the
     floating Prompt Timeline (the timeline has no in-panel home); pass ``None``
     in a host that has no such window and the button is omitted.
+
+    *trailing* is a host-owned widget (the Compact/Full switch, in practice)
+    packed on the right AFTER the stretch and BEFORE the Timeline button, so
+    the header reads title … switch, Timeline. A host that passes nothing —
+    3ds Max today — gets exactly the row it got before.
 
     Status pills deliberately do not live here — skeleton readiness is already
     shown by the Skeleton card's own pill and FPS lives in the host's transport,
@@ -105,12 +122,50 @@ def build_header_row(*, title: str, subtitle: str,
     row.addLayout(title_col, 1)
     row.addStretch(1)
 
+    if trailing is not None:
+        row.addWidget(trailing, 0, QtCore.Qt.AlignVCenter)
+
     if on_timeline is not None:
         tl_btn = Btn("Timeline", icon="timeline", variant="surface", size="sm")
         tl_btn.setToolTip("Open the floating Prompt Timeline window")
         tl_btn.clicked.connect(on_timeline)
         row.addWidget(tl_btn, 0, QtCore.Qt.AlignVCenter)
     return row
+
+
+def build_layout_switch(state, on_patch,
+                        field: str = "ui_compact") -> Segment:
+    """A Compact/Full switch bound to one persisted layout flag on *state*.
+
+    The switch carries no state of its own: it starts where *state* is and
+    reports a change as the one patch that flag turns on, leaving the window
+    to re-read it and re-apply it.
+
+    *field* names the flag, because there is one per window — ``ui_compact``
+    for the tool column, ``ui_compact_settings`` for the Settings window. A
+    window shows its own switch once; :func:`sync_layout_switches` is there
+    for a host that mirrors one switch in more than one place.
+    """
+    seg = Segment(
+        [("compact", "Compact"), ("full", "Full")],
+        value="compact" if getattr(state, field) else "full",
+    )
+    seg.setToolTip("Compact hides advanced controls without resetting them")
+    seg.valueChanged.connect(
+        lambda v: on_patch({field: v == "compact"}))
+    return seg
+
+
+def sync_layout_switches(switches, compact: bool) -> None:
+    """Point every Compact/Full switch at *compact* without echoing a patch.
+
+    ``Segment.setValue`` moves the checked button and does NOT emit
+    ``valueChanged``, which is precisely what this needs: the host calls it
+    from the patch the other switch just sent, and an echo would loop.
+    """
+    value = "compact" if compact else "full"
+    for switch in switches:
+        switch.setValue(value)
 
 
 def build_sections(state, on_patch, log) -> Sections:
@@ -131,9 +186,54 @@ def build_sections(state, on_patch, log) -> Sections:
     )
 
 
+def apply_compact(secs: Sections, compact: bool, *,
+                  show_live_drive: bool) -> None:
+    """Put every card in Compact or Full, and settle Live Drive's visibility.
+
+    The window is never rebuilt for this: each card hides its own advanced
+    containers (the policy is ``layout_policy.hidden_parts``) and keeps every
+    value it holds, so switching back shows exactly what was there.
+
+    Live Drive is the one card with no interior to fold, so the whole card is
+    the unit — it shows only when the host allows it AND the column is Full.
+
+    Settings is skipped: it opens as a window of its own and follows its own
+    flag (``ui_compact_settings``, applied by :func:`apply_settings_compact`),
+    so folding the column no longer folds the Settings groups.
+
+    Compact is one thing: WHICH controls are on screen. The chrome around them
+    — header heights, body padding, the gaps between rows and cards — is one
+    size, the tight one, and this function never touches it.
+
+    ``set_compact`` is looked up with ``getattr``: a host vendoring an older
+    section set is missing a card's worth of folding, not a working window.
+    """
+    for section in secs:
+        if section is secs.settings:
+            continue
+        set_compact = getattr(section, "set_compact", None)
+        if set_compact is not None:
+            set_compact(compact)
+    secs.live.setVisible(bool(show_live_drive) and not compact)
+
+
+def apply_settings_compact(secs: Sections, compact: bool) -> None:
+    """Put the Settings card in Compact or Full — its own window, its own flag.
+
+    Separate from :func:`apply_compact` because the two switches are
+    independent: the operator folds the column without folding Settings, and
+    the other way round. The Settings window's chrome is the same tight chrome
+    as the tool column's, in either mode — only the groups fold.
+    """
+    set_compact = getattr(secs.settings, "set_compact", None)
+    if set_compact is not None:
+        set_compact(compact)
+
+
 def pack_sections(col: QtWidgets.QVBoxLayout, secs: Sections, *,
                   show_live_drive: bool,
-                  after_skeleton: "QtWidgets.QWidget | None" = None) -> None:
+                  after_skeleton: "QtWidgets.QWidget | None" = None,
+                  compact: bool = False) -> None:
     """Lay the cards into *col* in workflow order, then absorb the slack.
 
     Settings is not a card in this column — it opens as a window of its own.
@@ -165,8 +265,10 @@ def pack_sections(col: QtWidgets.QVBoxLayout, secs: Sections, *,
     col.addWidget(secs.live)
     # Live Drive is hidden by default; the Settings "Show Live Drive" toggle
     # reveals it. Hidden rather than removed: the section keeps owning its
-    # threads, and its shutdown() still runs on window close.
-    secs.live.setVisible(bool(show_live_drive))
+    # threads, and its shutdown() still runs on window close. *compact* rides
+    # along the same path the runtime switch takes, so a window built Compact
+    # and a window switched to Compact end up in the same place.
+    apply_compact(secs, compact, show_live_drive=show_live_drive)
     col.addStretch(1)
 
 

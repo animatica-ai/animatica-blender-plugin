@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from animatica_core.gui import layout_policy
+
 from ..qt_compat import QtWidgets, Signal
 from ..widgets import (
     CollapsibleSection, Pill, Field, Btn, TextInput, Check,
@@ -81,7 +83,8 @@ class SkeletonSection(QtWidgets.QWidget):
         ns = TextInput(state.namespace, placeholder="animatica", mono=True)
         ns.textChanged.connect(self.namespace_changed.emit)
         self._ns_input = ns
-        body.addWidget(Field("Namespace", ns))
+        ns_field = Field("Namespace", ns)
+        body.addWidget(ns_field)
 
         # -- Auto-create check ---------------------------------------------
         auto = Check("Create new skeleton on generate", checked=state.auto_create_skeleton)
@@ -128,6 +131,10 @@ class SkeletonSection(QtWidgets.QWidget):
         self._hik_status_lbl.setStyleSheet("color: #888; padding-left: 2px;")
         body.addWidget(self._hik_status_lbl)
         from ... import host
+        # Parts the host cannot support. Compact may hide them; Full is not
+        # allowed to bring them back, so set_compact subtracts this set from
+        # whatever the policy says is visible.
+        self._cap_hidden: set[str] = set()
         if not host.has(host.CHARACTER_SYSTEM):
             # No HIK on this host: the link button routes through HIK
             # retargeting and the badge reports HIK state, so both would
@@ -135,11 +142,35 @@ class SkeletonSection(QtWidgets.QWidget):
             # same need with the local retarget route.
             self._link_btn.setVisible(False)
             self._hik_status_lbl.setVisible(False)
+            self._cap_hidden = {"link_model_rig", "hik_status"}
+
+        # The containers Compact folds away, under the keys layout_policy
+        # names. The picker combo, Refresh/Create/Delete and the readiness
+        # pill are the workflow itself and are deliberately absent.
+        self._parts = {
+            "canonical_filter": canon,
+            "namespace": ns_field,
+            "auto_create": auto,
+            "adopt": adopt_btn,
+            "link_model_rig": self._link_btn,
+            "hik_status": self._hik_status_lbl,
+        }
 
         # Constraints moved to their own card under the Prompt Timeline group
         # (see gui/sections/constraints_section.py) — they're timeline markers.
 
         self.refresh()
+
+    def set_compact(self, compact: bool) -> None:
+        """Show or fold the registered parts. Values are never touched.
+
+        A part this host cannot support stays hidden in both modes —
+        ``set_compact(False)`` must not resurrect the HIK button and badge on
+        a host without a character system.
+        """
+        hidden = layout_policy.hidden_parts("skeleton", compact)
+        for key, widget in self._parts.items():
+            widget.setVisible(key not in hidden and key not in self._cap_hidden)
 
     def set_retargeting_capability(self, supported: bool) -> None:
         """No-op kept for call-site compatibility."""

@@ -52,6 +52,18 @@ ACCENT_SOFT          = ACTIVE["accent_soft"]
 ACCENT_SOFT_BORDER   = ACTIVE["accent_border"]
 ON_ACCENT            = ACTIVE["on_accent"]
 
+# ---- The mode controls ----------------------------------------------------
+#
+# The Compact/Full switch and the Advanced toggle mark a MODE, not an action,
+# so they do not wear the ember accent — a mode should not look like a button
+# you press. Neither hue read right on our panels (Matt tried both violets on
+# 2026-09-08), so the selected state is simply the UI's own white, which is
+# unmistakable at 6.3:1 against the groove it sits in and takes ink text at
+# 15:1.
+MODE_ON              = "#F2ECE4"
+MODE_ON_HOVER        = "#FFFFFF"
+ON_MODE_ON           = "#1E1B18"
+
 BORDER               = ACTIVE["border"]
 BORDER_LIGHT         = ACTIVE["border_s"]
 BORDER_FOCUS         = "rgba(237,142,92,0.5)"
@@ -347,11 +359,15 @@ def label_stylesheet():
         color: {TEXT_PRIMARY};
         background: transparent;
     }}
+    /* One size for everyone: 10px on tight tracking. Weight and colour are
+       the ones the title always had — only the metrics are tight, and the
+       tracking is what keeps a long card title on one line in a narrow dock
+       rather than eliding it. */
     QLabel#section_title {{
-        font-size: 11px;
+        font-size: 10px;
         font-weight: 600;
         color: {TEXT_SECONDARY};
-        letter-spacing: 1px;
+        letter-spacing: 0.6px;
         background: transparent;
     }}
     QLabel#section_step {{
@@ -556,12 +572,16 @@ def section_frame_stylesheet():
         border: 1px solid {BORDER};
         border-radius: 10px;
     }}
+    /* The header margins are (10, 5); this floor is what keeps the whole
+       header — it is the card's toggle, so the click target is the header,
+       not the chevron — at 24px however small the title gets. */
     QFrame#section_header {{
         background-color: rgba(255,255,255,0.02);
         border: none;
         border-bottom: 1px solid {BORDER};
         border-top-left-radius: 10px;
         border-top-right-radius: 10px;
+        min-height: 24px;
     }}
     QFrame#header_icon_chip {{
         background-color: {ACCENT_SOFT};
@@ -597,18 +617,20 @@ def section_frame_stylesheet():
         border: 1px solid {BORDER};
         border-radius: 8px;
     }}
+    /* Same floor, one step down: a nested group header stays at 22px. */
     QFrame#section_header_sub {{
         background-color: rgba(255,255,255,0.02);
         border: none;
         border-bottom: 1px solid {BORDER};
         border-top-left-radius: 8px;
         border-top-right-radius: 8px;
+        min-height: 22px;
     }}
     QLabel#section_title_sub {{
         font-size: 10px;
         font-weight: 600;
         color: {TEXT_SECONDARY};
-        letter-spacing: 1px;
+        letter-spacing: 0.6px;
         background: transparent;
     }}
     """
@@ -661,8 +683,8 @@ def toggle_stylesheet():
         border: 1px solid {BORDER};
     }}
     QCheckBox#toggle::indicator:checked {{
-        background-color: {ACCENT};
-        border-color: {ACCENT};
+        background-color: {MODE_ON};
+        border-color: {MODE_ON};
     }}
     """
 
@@ -673,14 +695,14 @@ def segment_stylesheet():
         background-color: {INPUT_BG};
         border: 1px solid {BORDER};
         border-radius: 6px;
-        padding: 2px;
+        padding: 1px;
     }}
     QPushButton#seg_btn {{
         background-color: transparent;
         color: {TEXT_SECONDARY};
         border: none;
-        padding: 4px 10px;
-        min-height: 22px;
+        padding: 0 10px;
+        min-height: 20px;
         border-radius: 4px;
         font-size: 11px;
         font-weight: 500;
@@ -689,8 +711,11 @@ def segment_stylesheet():
         color: {TEXT_PRIMARY};
     }}
     QPushButton#seg_btn:checked {{
-        background-color: {ACCENT};
-        color: {ON_ACCENT};
+        background-color: {MODE_ON};
+        color: {ON_MODE_ON};
+    }}
+    QPushButton#seg_btn:checked:hover {{
+        background-color: {MODE_ON_HOVER};
     }}
     """
 

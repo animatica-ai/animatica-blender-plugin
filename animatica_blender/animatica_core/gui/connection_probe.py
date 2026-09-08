@@ -193,6 +193,16 @@ class ConnectionProbeMixin:
             # Each entry is either a {"id": ...} dict (/capabilities models[]) or
             # a bare string (model_names fallback).
             self._refresh_model_choices(caps)
+            if is_cloud:
+                # The worker may have refreshed the session to get here;
+                # a refresh that could not be saved is a sign-out waiting
+                # for the next restart, so it is said now.
+                from animatica_core import animatica_auth as _auth_mod
+                _save_err = _auth_mod.get_auth().last_save_error
+                if _save_err:
+                    self._log("warn", "Session refreshed, but it could not"
+                              f" be saved to disk: {_save_err}. You will be"
+                              " signed out after restarting the host.")
             retarget_suffix = " — retargeting: yes" if supports_retargeting else ""
             self._log(
                 "ok",

@@ -148,7 +148,6 @@
   <a class="navlink" href="#s-console">05 · Console</a>
 
   <div class="navgroup">Windows</div>
-  <a class="navlink" href="#video">Video to Motion</a>
   <a class="navlink" href="#settings">Settings</a>
 
   <div class="navgroup">Reference</div>
@@ -186,7 +185,6 @@
     <a href="#s-skeleton">Creating a skeleton</a>
     <a href="#s-timeline">Writing prompts on the timeline</a>
     <a href="#s-constraints">Constraints: paths and pins</a>
-    <a href="#video">Video to Motion</a>
     <a href="#export">Exporting to FBX</a>
     <a href="#trouble">Troubleshooting</a>
   </div>
@@ -233,17 +231,16 @@ python scripts/install.py --uninstall  # remove the launcher again</code></pre>
 
   <!-- ===================== MENU ===================== -->
   <h2 id="menu">The Animatica menu</h2>
-  <p>Seven items, in the order they appear in the menu:</p>
+  <p>Six items, in the order they appear in the menu:</p>
 
   <table>
     <tr><th>#</th><th>Item</th><th>What it does</th></tr>
     <tr><td>1</td><td><strong>Open Animatica Tool…</strong></td><td>Shows the docked Animatica tool window — the main window, which owns all of the plugin's state.</td></tr>
-    <tr><td>2</td><td><strong>Video to Motion…</strong></td><td>Opens the Video to Motion window. It also brings up the main window first, because the rig the capture is applied to belongs to it.</td></tr>
-    <tr><td>3</td><td><strong>Console…</strong></td><td>Opens the Console in its own window. The main window is opened first, because the log lives on it.</td></tr>
-    <tr><td>4</td><td><strong>Settings…</strong></td><td>Opens the Settings window (backend, server URL, rig options, interface toggles).</td></tr>
-    <tr><td>5</td><td><strong>Load Example Prompt…</strong></td><td>Opens the example-prompt chooser. It is modeless, so you can keep it open while you work; picking it again focuses the existing chooser instead of stacking another one. If the tool window is still opening, the plugin says so and asks you to pick the item again.</td></tr>
-    <tr><td>6</td><td><strong>User Manual…</strong></td><td>Opens the hosted user manual in your web browser. If the browser cannot be launched, the address is shown in a message box so you can copy it.</td></tr>
-    <tr><td>7</td><td><strong>About Animatica</strong></td><td>A short message box naming the product and the MMCP server it talks to.</td></tr>
+    <tr><td>2</td><td><strong>Console…</strong></td><td>Opens the Console in its own window. The main window is opened first, because the log lives on it.</td></tr>
+    <tr><td>3</td><td><strong>Settings…</strong></td><td>Opens the Settings window (backend, server URL, rig options, interface toggles).</td></tr>
+    <tr><td>4</td><td><strong>Load Example Prompt…</strong></td><td>Opens the example-prompt chooser. It is modeless, so you can keep it open while you work; picking it again focuses the existing chooser instead of stacking another one. If the tool window is still opening, the plugin says so and asks you to pick the item again.</td></tr>
+    <tr><td>5</td><td><strong>User Manual…</strong></td><td>Opens the hosted user manual in your web browser. If the browser cannot be launched, the address is shown in a message box so you can copy it.</td></tr>
+    <tr><td>6</td><td><strong>About Animatica</strong></td><td>A short message box naming the product and the MMCP server it talks to.</td></tr>
   </table>
 
   <!-- ===================== LAYOUT ===================== -->
@@ -516,32 +513,6 @@ python scripts/install.py --uninstall  # remove the launcher again</code></pre>
   </ul>
 
   <p>The Console is also where the plugin announces itself at startup, printing which source folder this Max session loaded and when that source was last edited. Max keeps an imported module for the life of the process, so that line is how you tell whether the code you just edited is actually the code that is running.</p>
-
-  <!-- ===================== VIDEO ===================== -->
-  <h2 id="video">Video to Motion</h2>
-  <p>A clip goes in, motion lands on the rig. Open it from <em>Animatica ▸ Video to Motion…</em>; the window is titled <em>Animatica Video to Motion</em>.</p>
-
-  <figure class="shot">
-    <img src="max_video_to_motion.png" alt="The Video to Motion window">
-    <figcaption>Video to Motion: the video path with Browse, the collapsed Preview and More cameras groups, and the Camera, People and Sample rate dropdowns with their explanatory hints.</figcaption>
-  </figure>
-
-  <table>
-    <tr><th>Control</th><th>Meaning</th></tr>
-    <tr><td><strong>Video</strong></td><td>The clip — <code>.mp4</code> or <code>.mov</code>. One person, fixed camera gives the best result.</td></tr>
-    <tr><td><strong>Preview</strong></td><td>A collapsed frame preview of the selected clip.</td></tr>
-    <tr><td><strong>More cameras</strong></td><td>Add further angles of the same take. Start every phone, clap once above your head, and the clap is the sync point.</td></tr>
-    <tr><td><strong>Camera</strong></td><td><em>Static (tripod, phone on a shelf)</em> or moving. Moving estimates the camera's path from the video instead of assuming it is fixed — slower, and it depends on how much background stays visible.</td></tr>
-    <tr><td><strong>People</strong></td><td><em>One person</em>, or everyone — one rig per person, all keyed into one animation. Fixed camera only.</td></tr>
-    <tr><td><strong>Sample rate</strong></td><td>How densely the clip is sampled (e.g. <em>15 fps — half the wait</em>). Roughly a second of processing per sampled frame; it changes the wait, never the playback speed.</td></tr>
-    <tr><td><strong>Props</strong></td><td>Objects to track as animated nulls, named in plain words (“sports ball, chair”).</td></tr>
-    <tr><td><strong>Capture Motion</strong> / <strong>Reapply last</strong> / <strong>Cancel</strong></td><td>Run the capture, re-apply the previous result, or stop a running job.</td></tr>
-  </table>
-
-  <div class="note">
-    <span class="lab">Why capture is simpler than Generate</span>
-    A capture comes back on the same joints, in the same order, as the rig already in your scene — so applying it needs no retarget at all. And because Max holds one animation, a capture replaces the previous one rather than landing in a container of its own; there is no session-shot list here.
-  </div>
 
   <!-- ===================== SETTINGS ===================== -->
   <h2 id="settings">Settings</h2>

@@ -2,6 +2,7 @@
 
 from ..qt_compat import QtWidgets, Signal
 from ..widgets import CollapsibleSection, Field, Btn, TextInput, Check
+from animatica_core.gui import layout_policy
 
 
 class PoseSection(QtWidgets.QWidget):
@@ -43,6 +44,16 @@ class PoseSection(QtWidgets.QWidget):
         btn = Btn("Generate Pose at Current Frame", icon="wand", variant="soft")
         btn.clicked.connect(self.generate_pose_requested.emit)
         body.addWidget(btn)
+
+        self._parts = {
+            "pose_use_xz": c1,
+            "auto_constraint": c2,
+            "key_pose": c3,
+        }
+
+    def set_compact(self, compact: bool) -> None:
+        for key in layout_policy.COMPACT_HIDDEN["pose"]:
+            self._parts[key].setVisible(not compact)
 
     def set_prompt(self, text: str) -> None:
         """Reflect *text* in the prompt field without re-emitting a patch.

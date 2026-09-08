@@ -27,6 +27,8 @@ import time
 import urllib.error
 import urllib.request
 
+from .. import host
+
 CONTROL_RETRY_BACKOFF = 1.0  # s -- pause after a failed control post
 _HTTP_TIMEOUT = 30.0
 
@@ -135,10 +137,13 @@ class StreamClient:
             h["Authorization"] = f"Bearer {self.access_token}"
         return h
 
-    def _post(self, path, body, timeout=_HTTP_TIMEOUT):
+    def _post(self, path, body, timeout=_HTTP_TIMEOUT, extra_headers=None):
+        headers = self._headers(body=True)
+        if extra_headers:
+            headers.update(extra_headers)
         req = urllib.request.Request(
             self.server_url + path, data=json.dumps(body).encode("utf-8"),
-            headers=self._headers(body=True), method="POST")
+            headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read() or b"{}")
@@ -191,7 +196,8 @@ class StreamClient:
         if prompts:
             body["prompts"] = list(prompts)
         # first start may lazy-load the model server-side -- generous timeout
-        hs = self._post("/stream/ardy/start", body, timeout=120.0)
+        hs = self._post("/stream/ardy/start", body, timeout=120.0,
+                        extra_headers=host.client_headers())
         self.handshake = hs
         self.session_id = hs["session_id"]
         return hs

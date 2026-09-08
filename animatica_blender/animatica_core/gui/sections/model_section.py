@@ -128,3 +128,6 @@ class ModelSection(QtWidgets.QWidget):
 
         self._pill.set_text(model_id.split("-")[0] if model_id else "—")
         self._walk_row.setVisible(model_id in _TRAJECTORY_DRIVEN)
+
+    def set_compact(self, compact: bool) -> None:
+        """Compact hides nothing here (layout_policy.COMPACT_HIDDEN["model"] is empty)."""

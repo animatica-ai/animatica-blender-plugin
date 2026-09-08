@@ -13,10 +13,11 @@ connection, browse story path). The host wires these into the actual
 from ..qt_compat import QtCore, QtWidgets, Signal
 from ..widgets import (
     CollapsibleSection, SubSection, Pill, Field, Btn, TextInput, Check,
-    Combo, NumberInput, reset_button,
+    Combo, NumberInput, Segment, reset_button,
 )
 from ... import host
 from ...core.prompt_model import AppState
+from animatica_core.gui import layout_policy
 
 
 class SettingsSection(QtWidgets.QWidget):
@@ -33,9 +34,33 @@ class SettingsSection(QtWidgets.QWidget):
         self._on_patch = on_patch
 
         self._status_pill = Pill("idle", tone="muted", dot=True)
+
+        # This window's own Compact/Full switch, on its own persisted flag.
+        # It is NOT built through ``window_scaffold.build_layout_switch``:
+        # that module imports this package to construct the sections, so
+        # importing it back here would close an import cycle. The Segment is
+        # three lines, the helper stays the host-side one.
+        self.layout_switch = Segment(
+            [("compact", "Compact"), ("full", "Full")],
+            value="compact" if state.ui_compact_settings else "full",
+        )
+        self.layout_switch.setToolTip(
+            "Compact hides advanced controls without resetting them")
+        self.layout_switch.valueChanged.connect(
+            lambda v: on_patch({"ui_compact_settings": v == "compact"}))
+
+        # The card header's right slot takes one widget, and this header wants
+        # two — the status pill and the switch, in that reading order.
+        header_right = QtWidgets.QWidget()
+        hr = QtWidgets.QHBoxLayout(header_right)
+        hr.setContentsMargins(0, 0, 0, 0)
+        hr.setSpacing(6)
+        hr.addWidget(self._status_pill)
+        hr.addWidget(self.layout_switch)
+
         self._section = CollapsibleSection(
             "Settings", step=0, icon="gear",
-            right=self._status_pill, open=True,
+            right=header_right, open=True,
         )
 
         outer = QtWidgets.QVBoxLayout(self)
@@ -473,17 +498,21 @@ class SettingsSection(QtWidgets.QWidget):
         # -- Capture grounding (default ON) -------------------------------
         # Deliberately the opposite default to the checkbox above: a capture
         # has no pinned poses to shift, and a character floating above the
-        # floor is the bug users report about this feature.
-        capture_ground_chk = Check(
-            "Ground captured motion",
-            checked=getattr(state, "capture_ground_correction", True),
-            sublabel="Measure the planted foot on your rig from the service's "
-                     "foot contacts and seat the capture on the ground",
-        )
-        capture_ground_chk.toggled.connect(
-            lambda v: on_patch({"capture_ground_correction": v})
-        )
-        extra.body_layout.addWidget(capture_ground_chk)
+        # floor is the bug users report about this feature. Offered only
+        # where the host builds the Video to Motion window: a switch for a
+        # capture the user cannot make is a promise, not a preference.
+        if host.has(host.VIDEO_CAPTURE):
+            capture_ground_chk = Check(
+                "Ground captured motion",
+                checked=getattr(state, "capture_ground_correction", True),
+                sublabel="Measure the planted foot on your rig from the "
+                         "service's foot contacts and seat the capture on "
+                         "the ground",
+            )
+            capture_ground_chk.toggled.connect(
+                lambda v: on_patch({"capture_ground_correction": v})
+            )
+            extra.body_layout.addWidget(capture_ground_chk)
 
         # -- Auto take-name length ----------------------------------------
         # How many leading prompt chars seed the auto-generated take name
@@ -632,6 +661,9 @@ class SettingsSection(QtWidgets.QWidget):
             auto_open_chk.blockSignals(True)
             auto_open_chk.setChecked(d.auto_open_on_startup)
             auto_open_chk.blockSignals(False)
+            # Reset does not touch either layout flag: Compact/Full is a
+            # view the operator is currently looking through, not a setting
+            # this group owns, and its switch lives in the card header.
             self._on_patch({
                 "show_motion_import": d.show_motion_import,
                 "auto_open_on_startup": d.auto_open_on_startup,
@@ -647,7 +679,22 @@ class SettingsSection(QtWidgets.QWidget):
         # -- Keyboard shortcuts (read-only reference) ---------------------
         self._build_shortcuts_group(body)
 
+        # -- Compact-mode registry ----------------------------------------
+        # Connection, Interface and Keyboard Shortcuts are deliberately absent:
+        # the first two carry the controls Compact itself is reached through,
+        # and the shortcuts table stays on screen in Compact (Matt, 2026-09-08).
+        self._parts = {
+            "naming": naming,
+            "rigs": rigs,
+            "debug": debug_grp,
+            "extra": extra,
+        }
+
         self.refresh()
+
+    def set_compact(self, compact: bool) -> None:
+        for key in layout_policy.COMPACT_HIDDEN["settings"]:
+            self._parts[key].setVisible(not compact)
 
     # ------------------------------------------------------------------
     # Keyboard shortcuts reference
@@ -818,6 +865,11 @@ class SettingsSection(QtWidgets.QWidget):
 
     def refresh(self) -> None:
         s = self._state
+
+        # ``Segment.setValue`` moves the checked button without emitting
+        # ``valueChanged``, so reflecting the state here cannot re-patch it.
+        self.layout_switch.setValue(
+            "compact" if s.ui_compact_settings else "full")
 
         is_cloud = s.backend == "cloud"
         self._local_panel.setVisible(not is_cloud)

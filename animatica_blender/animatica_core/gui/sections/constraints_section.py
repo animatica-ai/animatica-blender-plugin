@@ -9,6 +9,8 @@ calls.
 
 from __future__ import annotations
 
+from animatica_core.gui import layout_policy
+
 from ..qt_compat import QtWidgets, Signal
 from ..widgets import SubSection, Pill, Field, Btn, Check, IconGrid
 
@@ -84,36 +86,55 @@ class ConstraintsSection(QtWidgets.QWidget):
         sub_btns.addWidget(fc_btn, 1)
         sub.body_layout.addLayout(sub_btns)
 
-        bottom = QtWidgets.QHBoxLayout()
+        keyframes_row_w = QtWidgets.QWidget()
+        bottom = QtWidgets.QHBoxLayout(keyframes_row_w)
+        bottom.setContentsMargins(0, 0, 0, 0)
         keep = Check("Keep constraint keyframes", checked=state.keep_keyframes)
         keep.toggled.connect(lambda v: on_patch({"keep_keyframes": v}))
         bottom.addWidget(keep, 1)
         clear_btn = Btn("Clear All Keyframes", icon="trash", variant="ghost", size="sm")
         clear_btn.clicked.connect(self.clear_keyframes_requested.emit)
         bottom.addWidget(clear_btn, 0)
-        sub.body_layout.addLayout(bottom)
+        sub.body_layout.addWidget(keyframes_row_w)
 
         # Path (root2d) marker display toggles. Viz-only -- they never touch the
         # wire; the host threads them to constraint_viz and re-draws on flip.
+        path_display_w = QtWidgets.QWidget()
+        path_display = QtWidgets.QVBoxLayout(path_display_w)
+        path_display.setContentsMargins(0, 0, 0, 0)
         show_len = Check("Show path length", checked=state.show_path_length)
         show_len.toggled.connect(lambda v: on_patch({"show_path_length": v}))
-        sub.body_layout.addWidget(show_len)
+        path_display.addWidget(show_len)
         show_lbl = Check("Show marker name", checked=state.show_marker_label)
         show_lbl.toggled.connect(lambda v: on_patch({"show_marker_label": v}))
-        sub.body_layout.addWidget(show_lbl)
+        path_display.addWidget(show_lbl)
+        sub.body_layout.addWidget(path_display_w)
 
         # Step 7e: prev/next constraint-frame nav. Jumps the playhead to the
         # adjacent authored frame (wraps around at the ends).
-        nav_row = QtWidgets.QHBoxLayout()
+        nav_w = QtWidgets.QWidget()
+        nav_row = QtWidgets.QHBoxLayout(nav_w)
+        nav_row.setContentsMargins(0, 0, 0, 0)
         prev_btn = Btn("◀ Prev", icon="chevronLeft",  variant="surface", size="sm")
         next_btn = Btn("Next ▶", icon="chevronRight", variant="surface", size="sm")
         prev_btn.clicked.connect(self.prev_constraint_frame_requested.emit)
         next_btn.clicked.connect(self.next_constraint_frame_requested.emit)
         nav_row.addWidget(prev_btn, 1)
         nav_row.addWidget(next_btn, 1)
-        sub.body_layout.addLayout(nav_row)
+        sub.body_layout.addWidget(nav_w)
+
+        self._parts = {
+            "convert_animkeys": fc_btn,
+            "keyframes_row": keyframes_row_w,
+            "path_display": path_display_w,
+            "nav": nav_w,
+        }
 
         self.refresh()
+
+    def set_compact(self, compact: bool) -> None:
+        for key in layout_policy.COMPACT_HIDDEN["constraints"]:
+            self._parts[key].setVisible(not compact)
 
     def refresh(self) -> None:
         s = self._state

@@ -538,6 +538,17 @@ class AppState:
     # removed — the feature is verified and returns behind this switch.
     show_live_drive: bool = False
 
+    # Compact layout of the shared tool window: hides the advanced controls
+    # without resetting their values (compact hides, never resets). Off by
+    # default so existing users keep the full layout; a fresh install is
+    # switched to compact in window_state, not here.
+    ui_compact: bool = False
+
+    # The Settings window's own layout flag (hides, never resets). Product
+    # decision 2026-09-08: each window carries its own Compact/Full switch,
+    # so folding the main column does not fold the Settings groups.
+    ui_compact_settings: bool = False
+
     # Auto-open the Animatica tool window once each MoBu launch. Opt-in
     # (default off); toggled from Settings and remembered across sessions.
     # Honoured by _startup.register via a deferred OnUIIdle one-shot.

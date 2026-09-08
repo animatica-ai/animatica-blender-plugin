@@ -3,6 +3,10 @@
 Header layout: chevron + zero-padded step (``01``) + icon + title + right
 widget. Click header to toggle. The body is a QWidget; consumers add
 children via ``section.body_layout``.
+
+The card has ONE presentation, and it is the tight one — Full and Compact
+differ in which controls are on screen, never in how much chrome surrounds
+them.
 """
 
 from __future__ import annotations
@@ -29,6 +33,10 @@ class CollapsibleSection(QFrame):
         inside a 26px badge); the legacy ``icon`` names an ``ICON_PATHS`` glyph.
         ``accent`` tints the badge with the ember accent (primary groups) instead
         of the neutral grey used by secondary groups.
+
+        The chrome below is tight for everyone: Compact hides controls, it does
+        not restyle them (Matt, 2026-09-08). The header keeps a 24px floor from
+        ``styles`` — it is the card's toggle, so it stays a click target.
         """
         super().__init__(parent)
         self.setObjectName("section_frame")
@@ -41,7 +49,7 @@ class CollapsibleSection(QFrame):
         self._header.setObjectName("section_header")
         self._header.setCursor(Qt.PointingHandCursor)
         hdr = QHBoxLayout(self._header)
-        hdr.setContentsMargins(12, 9, 12, 9)
+        hdr.setContentsMargins(10, 5, 10, 5)
         hdr.setSpacing(8)
 
         self._chevron = QLabel()
@@ -83,8 +91,8 @@ class CollapsibleSection(QFrame):
         self._body = QWidget()
         self._body.setObjectName("section_body")
         self.body_layout = QVBoxLayout(self._body)
-        self.body_layout.setContentsMargins(12, 11, 12, 11)
-        self.body_layout.setSpacing(8)
+        self.body_layout.setContentsMargins(10, 7, 10, 7)
+        self.body_layout.setSpacing(6)
         outer.addWidget(self._body)
 
         self._open = open

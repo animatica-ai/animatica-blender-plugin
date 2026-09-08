@@ -1,4 +1,11 @@
-"""SubSection — nested collapsible card, smaller chrome than ``CollapsibleSection``."""
+"""SubSection — nested collapsible card, smaller chrome than ``CollapsibleSection``.
+
+Like the card it nests in, it has ONE presentation and it is the tight one:
+Compact hides controls, it does not restyle them.
+
+This module must not import ``section``, and ``section`` no longer imports this
+one either — neither edge of that cycle is needed now that density is fixed.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +26,10 @@ class SubSection(QFrame):
 
     def __init__(self, title: str, right: QWidget | None = None,
                  open: bool = True, parent=None):
+        """The chrome is tight for everyone: Compact hides controls, it does not
+        restyle them (Matt, 2026-09-08). The header keeps a 22px floor from
+        ``styles`` — it is this group's toggle.
+        """
         super().__init__(parent)
         self.setObjectName("section_frame_sub")
         outer = QVBoxLayout(self)
@@ -29,7 +40,7 @@ class SubSection(QFrame):
         self._header.setObjectName("section_header_sub")
         self._header.setCursor(Qt.PointingHandCursor)
         hdr = QHBoxLayout(self._header)
-        hdr.setContentsMargins(10, 7, 10, 7)
+        hdr.setContentsMargins(8, 4, 8, 4)
         hdr.setSpacing(8)
 
         self._chevron = QLabel()
@@ -46,8 +57,8 @@ class SubSection(QFrame):
 
         self._body = QWidget()
         self.body_layout = QVBoxLayout(self._body)
-        self.body_layout.setContentsMargins(12, 10, 12, 12)
-        self.body_layout.setSpacing(8)
+        self.body_layout.setContentsMargins(10, 6, 10, 8)
+        self.body_layout.setSpacing(6)
         outer.addWidget(self._body)
 
         self._open = open

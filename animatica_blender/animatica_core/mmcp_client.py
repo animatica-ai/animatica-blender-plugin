@@ -14,6 +14,21 @@ Two endpoints are exercised:
   restart).
 * ``POST /generate`` — the main generation call. Returns a glTF 2.0 JSON
   document; parsing is done in :mod:`gltf_parser`.
+
+``generate()`` also attaches four identity headers -- ``X-Animatica-Client``,
+``X-Animatica-Client-Version``, ``X-Animatica-Host-Version`` and
+``X-Animatica-Session-Id`` -- built by
+:func:`animatica_core.host.client_headers`, whose values come from whatever
+the host passed to ``host.register(plugin_version=..., app_version=...)`` at
+startup. They ride on every request that STARTS a generation, and on nothing
+else: this module's ``generate()`` (``POST /generate``), ``capture_client``'s
+``_start()`` (``POST /capture/start``), ``live.stream_client.start()``
+(``POST /stream/ardy/start``), and ``gates.server_session.generate()``
+(``POST /generate``) -- never on ``/capabilities``, ``/health``, job polling,
+``/auth/*``, or the upload/frame/stream follow-up calls. This is the one
+place this module reaches outside the protocol client: it imports
+:mod:`animatica_core.host` for ``client_headers()`` alone, and host identity
+stays host.py's question to answer, not this module's.
 """
 
 import json
@@ -22,6 +37,8 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Literal, Optional
+
+from . import host
 
 
 _DEFAULT_TIMEOUT = 600.0  # cloud cold-start + inference can take up to ~5 min
@@ -334,6 +351,8 @@ def generate(server_url, request_body, timeout=_DEFAULT_TIMEOUT, access_token=No
         "Content-Type": "application/json",
         "Accept": "model/gltf+json, application/json",
     }
+    # identify the calling DCC to the server; {} when no host is registered
+    headers.update(host.client_headers())
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"
     req = urllib.request.Request(url, data=payload, method="POST", headers=headers)

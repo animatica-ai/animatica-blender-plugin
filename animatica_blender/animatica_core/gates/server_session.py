@@ -32,6 +32,8 @@ import json
 import urllib.error
 import urllib.request
 
+from .. import host
+
 
 def _headers(extra=None):
     """The product session's headers, plus *extra*. Empty when signed out —
@@ -53,8 +55,10 @@ def _refreshed() -> bool:
         return False
 
 
-def _call(url, data=None, timeout=60, content_type=None):
-    extra = {"Content-Type": content_type} if content_type else None
+def _call(url, data=None, timeout=60, content_type=None, headers=None):
+    extra = dict(headers or {})
+    if content_type:
+        extra["Content-Type"] = content_type
     for attempt in (0, 1):
         req = urllib.request.Request(url, data=data, headers=_headers(extra))
         try:
@@ -80,7 +84,8 @@ def health(server, timeout=15):
 
 def generate(server, body, timeout=600):
     return _call(f"{server}/generate", data=json.dumps(body).encode(),
-                 timeout=timeout, content_type="application/json")
+                 timeout=timeout, content_type="application/json",
+                 headers=host.client_headers())
 
 
 def health_line(health_doc):

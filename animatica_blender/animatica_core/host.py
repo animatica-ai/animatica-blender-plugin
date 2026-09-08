@@ -18,6 +18,7 @@ conservative path, not a crash in the middle of a generation.
 from __future__ import annotations
 
 import os
+import uuid
 
 # The capability vocabulary. Strings rather than an enum so a host can be
 # registered from a plugin that predates a new entry without an import error.
@@ -28,12 +29,16 @@ CONTROL_RIG = "control_rig"        # a bakeable control rig on top of a characte
 STORY = "story"                    # a Story/sequencer timeline
 LIVE_DRIVE = "live_drive"          # streaming apply implemented for this host
 ANIM_LAYERS = "anim_layers"        # native additive animation layers
+VIDEO_CAPTURE = "video_capture"    # the host builds the Video to Motion window
 
 _APP_FOLDER = "animatica"
 
 _key: str | None = None
 _product_name: str | None = None
 _capabilities: frozenset = frozenset()
+_plugin_version: str = ""
+_app_version: str = ""
+_session_id: str = ""
 
 _UNREGISTERED = (
     "no host is registered — animatica_core.host.register() must run at plugin "
@@ -50,28 +55,48 @@ _APP_NAMES = {
     "maya": "Maya",
 }
 
+# What the server is told this client is. Spelled out rather than reusing the
+# folder key: the key is ours and short, this one goes over the wire and into
+# server-side metrics, so it stays readable and stable independently. An
+# unmapped key travels as itself — a new host reports something rather than
+# nothing.
+_CLIENT_IDS = {
+    "mobu": "motionbuilder",
+    "max": "3dsmax",
+    "blender": "blender",
+    "maya": "maya",
+}
 
-def register(*, key: str, product_name: str, capabilities=()) -> None:
+
+def register(*, key: str, product_name: str, capabilities=(),
+             plugin_version: str = "", app_version: str = "") -> None:
     """Declare the host. Called once, at plugin startup.
 
     *key* is the short, stable, filesystem-safe identifier (``"mobu"``,
     ``"max"``, ``"maya"``, ``"blender"``) — it names the per-host settings
     folder, so changing it later strands a user's preferences.
+
+    *plugin_version* and *app_version* are optional: they only decorate the
+    request headers, so a plugin that predates them must keep working.
     """
-    global _key, _product_name, _capabilities
+    global _key, _product_name, _capabilities, _plugin_version, _app_version
     if not key or not str(key).isidentifier():
         raise ValueError(
             f"host key must be a plain identifier (it names a folder); got {key!r}")
     _key = str(key)
     _product_name = str(product_name)
     _capabilities = frozenset(capabilities or ())
+    _plugin_version = str(plugin_version or "").strip()
+    _app_version = str(app_version or "").strip()
 
 
 def unregister() -> None:
     """For tests and teardown."""
-    global _key, _product_name, _capabilities
+    global _key, _product_name, _capabilities, _plugin_version, _app_version
+    global _session_id
     _key = _product_name = None
     _capabilities = frozenset()
+    _plugin_version = _app_version = _session_id = ""
 
 
 def is_registered() -> bool:
@@ -112,6 +137,67 @@ def has(capability: str) -> bool:
 
 def capabilities() -> frozenset:
     return _capabilities
+
+
+# ---------------------------------------------------------------------------
+# who the server is talking to — headers on generation requests
+# ---------------------------------------------------------------------------
+
+def client_id() -> str | None:
+    """The wire name of this client, or ``None`` when nothing is registered."""
+    if _key is None:
+        return None
+    return _CLIENT_IDS.get(_key, _key)
+
+
+def plugin_version() -> str:
+    """Version of the Animatica plugin; ``""`` when it was not declared."""
+    return _plugin_version
+
+
+def app_version() -> str:
+    """Version of the host application; ``""`` when it was not declared."""
+    return _app_version
+
+
+def session_id() -> str:
+    """Stable id for this *plugin* session — one DCC process, one id.
+
+    Minted on first use and kept until :func:`unregister`, so every request
+    from one run of the plugin carries the same id. Unrelated to
+    ``stream_client.session_id``, which the streaming server hands out per
+    stream. ``""`` when no host is registered.
+    """
+    global _session_id
+    if _key is None:
+        return ""
+    if not _session_id:
+        _session_id = str(uuid.uuid4())
+    return _session_id
+
+
+def client_headers() -> dict:
+    """Identity headers for the requests that start a generation.
+
+    Empty when no host is registered — a caller outside a plugin sends
+    nothing rather than half an identity. Never raises: telling the server
+    who we are is not worth failing a generation over.
+    """
+    try:
+        cid = client_id()
+        if cid is None:
+            return {}
+        headers = {"X-Animatica-Client": cid,
+                   "X-Animatica-Session-Id": session_id()}
+        for name, value in (("X-Animatica-Client-Version", _plugin_version),
+                            ("X-Animatica-Host-Version", _app_version)):
+            # A newline in a header value makes http.client reject the whole
+            # request; dropping one version is cheaper than losing the call.
+            if value and "\r" not in value and "\n" not in value:
+                headers[name] = value
+        return headers
+    except Exception:
+        return {}
 
 
 # ---------------------------------------------------------------------------

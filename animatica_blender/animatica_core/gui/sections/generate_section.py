@@ -13,6 +13,7 @@ from ..widgets import (
     CollapsibleSection, SubSection, Field, Btn, TextInput, NumberInput,
     Check, Toggle, Segment, Combo, reset_button,
 )
+from animatica_core.gui import layout_policy
 from ... import host
 from ...core.prompt_model import (AppState, available_target_modes,
                                   coerce_animation_mode)
@@ -181,8 +182,13 @@ class GenerateSection(QtWidgets.QWidget):
         adv_inner.setContentsMargins(0, 0, 0, 0)
         adv_inner.setSpacing(8)
 
-        # Row: Num Samples + CFG Type
-        r1 = QtWidgets.QHBoxLayout()
+        # Row: Num Samples + CFG Type. The row carries a container widget of
+        # its own -- a bare QHBoxLayout has no ``setVisible``, and Compact
+        # folds this row away by name (``adv_samples_cfg``). Zero margins so
+        # Full mode looks exactly as it did while the row was a sub-layout.
+        samples_cfg_row = QtWidgets.QWidget()
+        r1 = QtWidgets.QHBoxLayout(samples_cfg_row)
+        r1.setContentsMargins(0, 0, 0, 0)
         ns = NumberInput(state.num_samples, minimum=1, maximum=8, mono=True)
         self._num_samples_input = ns
         ns.valueChanged.connect(lambda v: on_patch({"num_samples": int(v)}))
@@ -193,7 +199,7 @@ class GenerateSection(QtWidgets.QWidget):
         )
         cfg_seg.valueChanged.connect(lambda v: on_patch({"cfg_type": v}))
         r1.addWidget(Field("CFG type", cfg_seg), 1)
-        adv_inner.addLayout(r1)
+        adv_inner.addWidget(samples_cfg_row)
 
         # Row: CFG weights
         r2 = QtWidgets.QHBoxLayout()
@@ -212,7 +218,10 @@ class GenerateSection(QtWidgets.QWidget):
         r3.addWidget(Field("Transition frames", tf), 1)
         hd = NumberInput(state.heading_deg, minimum=0.0, maximum=360.0, step=15.0, mono=True)
         hd.valueChanged.connect(lambda v: on_patch({"heading_deg": float(v)}))
-        r3.addWidget(Field("Initial heading (deg)", hd), 1)
+        # Named because Compact folds the heading field alone (``adv_heading``)
+        # while Transition frames stays.
+        heading_field = Field("Initial heading (deg)", hd)
+        r3.addWidget(heading_field, 1)
         adv_inner.addLayout(r3)
 
         # ---- Server post-processing --------------------------------------
@@ -608,10 +617,33 @@ class GenerateSection(QtWidgets.QWidget):
         body.addWidget(target)
         self._refresh_target_rows()
 
+        # ---- Compact mode -------------------------------------------------
+        # The containers Compact folds away, under the keys layout_policy
+        # names for this section. Visibility only: nothing here writes state,
+        # so a hidden control keeps the value the user gave it.
+        self._compact = False
+        self._parts = {
+            "adv_samples_cfg": samples_cfg_row,
+            "adv_heading": heading_field,
+            "adv_root_margin": self._root_margin_row,
+            "output_target": target,
+        }
+
         # ---- Generate button ---------------------------------------------
         self._gen_btn = Btn("Generate Motion", icon="spark", variant="solid", size="lg")
         self._gen_btn.clicked.connect(self.generate_requested.emit)
         body.addWidget(self._gen_btn)
+
+        # Hidden is not gone: in Compact, one line naming the folded-away
+        # options that no longer sit at their defaults. Added AFTER the button
+        # on purpose — ``add_body_widget`` inserts the relocated Constraints
+        # card at ``indexOf(self._gen_btn)``, and a widget appended below the
+        # button leaves that index untouched.
+        self._hidden_hint = QtWidgets.QLabel()
+        self._hidden_hint.setObjectName("field_hint")
+        self._hidden_hint.setWordWrap(True)
+        self._hidden_hint.setVisible(False)
+        body.addWidget(self._hidden_hint)
 
         # ---- Generation progress row -------------------------------------
         # An indeterminate QProgressBar(range 0,0) as an honest spinner + a
@@ -679,6 +711,25 @@ class GenerateSection(QtWidgets.QWidget):
         else:
             body.insertWidget(idx, w)
 
+    def set_compact(self, compact: bool) -> None:
+        """Fold this card's rarely-touched containers away (Compact mode).
+
+        Visibility only — no patch, no reset: the values behind the hidden
+        controls still ship, which is why the hint below Generate names the
+        ones that differ from the defaults.
+        """
+        self._compact = compact
+        for key in layout_policy.COMPACT_HIDDEN["generate"]:
+            self._parts[key].setVisible(not compact)
+        self._refresh_hidden_hint()
+
+    def _refresh_hidden_hint(self) -> None:
+        """Re-read the hidden-options line. Silent in Full, and in Compact
+        whenever every hidden option still holds its default."""
+        text = layout_policy.hint_text(self._state)
+        self._hidden_hint.setText(text)
+        self._hidden_hint.setVisible(self._compact and bool(text))
+
     def refresh(self) -> None:
         s = self._state
         secs = s.duration / max(1.0, s.fps)
@@ -693,6 +744,7 @@ class GenerateSection(QtWidgets.QWidget):
         # Re-apply the last-known ground height so any refresh path keeps the
         # mirror field consistent with the plane's cached world-Y.
         self.set_ground_y(self._ground_y)
+        self._refresh_hidden_hint()
 
     # ------------------------------------------------------------------
     # Diffusion steps (preset)
