@@ -93,6 +93,29 @@ def human_size(num_bytes: int = ASSET_BYTES) -> str:
     return f"{num_bytes / 1048576:.0f} MB"
 
 
+def format_bytes(num_bytes: float) -> str:
+    """A transferred amount, at a precision that visibly moves while it runs."""
+    return f"{num_bytes / 1048576:.1f} MB"
+
+
+def format_rate(bytes_per_second: float) -> str:
+    if bytes_per_second <= 0:
+        return "—"
+    if bytes_per_second < 1048576:
+        return f"{bytes_per_second / 1024:.0f} KB/s"
+    return f"{bytes_per_second / 1048576:.1f} MB/s"
+
+
+def format_eta(seconds: float | None) -> str:
+    """Remaining time. ``None`` before there is enough to estimate from."""
+    if seconds is None or seconds != seconds or seconds in (float("inf"), float("-inf")):
+        return "estimating…"
+    total = max(0, int(round(seconds)))
+    if total < 60:
+        return f"{total}s left"
+    return f"{total // 60}m {total % 60:02d}s left"
+
+
 class DownloadError(RuntimeError):
     """Fetching the character failed. Message is fit to show a user."""
 

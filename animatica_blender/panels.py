@@ -177,7 +177,29 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
         # Import the canonical skeleton as a Blender armature (the
         # supported path when supports_retargeting=false). Always
         # available post-connect; prompt-style only when nothing's set.
-        if settings.target_armature is None:
+        from . import canonical_skeleton, remote_asset
+        fetching = canonical_skeleton.download_state()
+        if fetching["active"]:
+            # First run: the character is being downloaded on a worker thread.
+            # Drawn where the Import button sits, so the click the user just
+            # made visibly turned into something, and carrying the three
+            # numbers that answer "is this moving, and how long do I wait".
+            box = layout.box()
+            box.label(text="Fetching the character (first run only)", icon='IMPORT')
+            row = box.row()
+            row.enabled = False
+            row.progress(
+                factor=fetching["percent"] / 100.0,
+                type='BAR',
+                text=(f"{remote_asset.format_bytes(fetching['got'])}"
+                      f" / {remote_asset.format_bytes(fetching['total'])}"
+                      f"  ({fetching['percent']}%)"),
+            )
+            sub = box.row()
+            sub.active = False
+            sub.label(text=remote_asset.format_rate(fetching["speed"]))
+            sub.label(text=remote_asset.format_eta(fetching["eta"]))
+        elif settings.target_armature is None:
             box = layout.box()
             box.label(text="No armature — import a rig to animate on", icon='INFO')
             box.operator(

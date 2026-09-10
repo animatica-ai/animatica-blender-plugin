@@ -157,27 +157,63 @@ def load_character(context) -> tuple[bpy.types.Object, bpy.types.Object | None]:
     return arm_obj, mesh_obj
 
 
-def _ensure_character_downloaded(context, operator) -> bool:
-    """Fetch the character on first use. True when it is ready to import.
+# ---------------------------------------------------------------------------
+# First-run download progress
+#
+# The fetch cannot run inline in ``execute()``. Blocking the main thread in
+# Python starves Blender's event loop, so nothing repaints and operator
+# reports are not surfaced until the operator returns: the user would get a
+# frozen window with no indication, then "Downloading…" and "Imported…"
+# arriving together once it was already over. It runs on a worker thread with
+# a modal timer instead, and this dict is what the timer and the panel read.
+# ---------------------------------------------------------------------------
 
-    The fetch is synchronous, behind Blender's progress cursor. It blocks the
-    UI, which is the trade being made: it happens once per machine per pinned
-    build, it is one ~12 MB file, and the socket timeout bounds the worst
-    case. Threading it would mean turning this operator modal for a wait most
-    users see once, and the two other rig sources through the same operator
-    would have to grow the same machinery.
+_DOWNLOAD: dict = {
+    "active": False, "got": 0, "total": 0, "speed": 0.0,
+    "error": None, "done": False,
+}
+
+#: Weight of the newest sample in the transfer-rate average. Chunks arrive
+#: unevenly, so the raw per-chunk rate swings wildly; smoothing keeps the
+#: number readable without making it lag the truth.
+_RATE_SMOOTHING = 0.3
+
+#: ``(monotonic time, bytes)`` of the previous progress callback, for the rate.
+_RATE_SAMPLE: list = [0.0, 0]
+
+
+def download_state() -> dict:
+    """Snapshot of an in-flight character download, for the panel to draw.
+
+    ``percent`` and ``eta`` are derived here rather than stored, so the worker
+    thread only ever writes the two raw numbers it actually knows.
+    """
+    state = dict(_DOWNLOAD)
+    got, total, speed = state["got"], state["total"], state["speed"]
+    state["percent"] = int(100 * got / total) if total else 0
+    state["eta"] = (
+        (total - got) / speed
+        if total and speed > 0 and total > got
+        else None
+    )
+    return state
+
+
+def _asset_size() -> str:
+    from . import remote_asset
+    return remote_asset.human_size()
+
+
+def _download_blocking(context, operator) -> None:
+    """Fetch the character on the calling thread. Raises ``ValueError``.
+
+    Only for ``EXEC_DEFAULT`` callers — scripts, the agent skill, tests —
+    which have no event loop to keep alive anyway. Interactive clicks go
+    through the operator's modal path.
     """
     from . import remote_asset
 
-    if remote_asset.is_cached():
-        return True
-
     wm = context.window_manager
-    operator.report(
-        {'INFO'},
-        f"Downloading the {CHARACTER_NAME} character "
-        f"({remote_asset.human_size()}, once) …",
-    )
     wm.progress_begin(0, 100)
     try:
         remote_asset.download(
@@ -189,7 +225,6 @@ def _ensure_character_downloaded(context, operator) -> bool:
         raise ValueError(str(exc)) from exc
     finally:
         wm.progress_end()
-    return True
 
 
 def _normalise_transform(arm_obj, mesh_obj) -> None:
@@ -295,6 +330,135 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
         default=True,
     )
 
+    # ----- first-run download (interactive) --------------------------------
+
+    _timer = None
+    _thread = None
+    _download_attempted = False
+
+    def invoke(self, context, event):
+        """Fetch the character first, with a visible loader, then import.
+
+        Only the interactive path goes modal. ``EXEC_DEFAULT`` callers land in
+        ``execute`` and take the blocking fetch, which is what a script wants.
+        """
+        from . import remote_asset
+
+        if self.source != 'CHARACTER' or remote_asset.is_cached():
+            return self.execute(context)
+        return self._start_download(context)
+
+    def _start_download(self, context):
+        import threading
+        import time
+
+        from . import remote_asset
+
+        _DOWNLOAD.update(active=True, got=0, total=remote_asset.ASSET_BYTES,
+                         speed=0.0, error=None, done=False)
+        _RATE_SAMPLE[0], _RATE_SAMPLE[1] = 0.0, 0
+
+        def _progress(got, total):
+            # Worker thread. Writes raw counters only; the panel derives the
+            # percentage and the ETA from them on the main thread.
+            now = time.monotonic()
+            prev_time, prev_got = _RATE_SAMPLE
+            if prev_time and now > prev_time:
+                instant = (got - prev_got) / (now - prev_time)
+                previous = _DOWNLOAD["speed"]
+                _DOWNLOAD["speed"] = (
+                    instant if previous <= 0
+                    else previous + _RATE_SMOOTHING * (instant - previous)
+                )
+            _RATE_SAMPLE[0], _RATE_SAMPLE[1] = now, got
+            _DOWNLOAD["got"] = got
+            _DOWNLOAD["total"] = total or remote_asset.ASSET_BYTES
+
+        def _worker():
+            try:
+                remote_asset.download(progress=_progress)
+            except Exception as exc:                             # noqa: BLE001
+                _DOWNLOAD["error"] = str(exc)
+            finally:
+                _DOWNLOAD["done"] = True
+
+        self._thread = threading.Thread(target=_worker, daemon=True)
+        self._thread.start()
+
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.1, window=context.window)
+        wm.modal_handler_add(self)
+        wm.progress_begin(0, 100)
+        self._draw_progress(context)
+        return {'RUNNING_MODAL'}
+
+    def _draw_progress(self, context) -> None:
+        """Push the current figures everywhere the user might be looking."""
+        from . import remote_asset
+
+        state = download_state()
+        text = (
+            f"Downloading the {CHARACTER_NAME} character — "
+            f"{remote_asset.format_bytes(state['got'])} of "
+            f"{remote_asset.format_bytes(state['total'])} "
+            f"({state['percent']}%) · {remote_asset.format_rate(state['speed'])} · "
+            f"{remote_asset.format_eta(state['eta'])}"
+        )
+        try:
+            context.window_manager.progress_update(state["percent"])
+            context.workspace.status_text_set(text)
+        except (AttributeError, TypeError):
+            pass
+        # The sidebar draws the same state; without an explicit tag it would
+        # not repaint until the user moved the mouse over it.
+        for area in getattr(context.screen, "areas", ()):
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+
+    def _end_download(self, context) -> None:
+        wm = context.window_manager
+        if self._timer is not None:
+            wm.event_timer_remove(self._timer)
+            self._timer = None
+        wm.progress_end()
+        try:
+            context.workspace.status_text_set(None)
+        except (AttributeError, TypeError):
+            pass
+        _DOWNLOAD.update(active=False, got=0, total=0, speed=0.0)
+        for area in getattr(context.screen, "areas", ()):
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+
+    def modal(self, context, event):
+        if event.type != 'TIMER':
+            return {'PASS_THROUGH'}
+
+        if not _DOWNLOAD["done"]:
+            self._draw_progress(context)
+            return {'RUNNING_MODAL'}
+
+        error = _DOWNLOAD["error"]
+        self._end_download(context)
+        # Either way we now go through execute(), which must not start a
+        # second fetch: on success the cache is warm, on failure this flag
+        # sends it down the SOMA30 fallback instead of retrying.
+        self._download_attempted = True
+        if error:
+            self.report({'WARNING'}, error)
+        else:
+            self.report(
+                {'INFO'},
+                f"Downloaded the {CHARACTER_NAME} character ({_asset_size()})",
+            )
+        return self.execute(context)
+
+    def cancel(self, context):
+        # The worker is a daemon thread on a socket read; it cannot be
+        # interrupted from here, so it is left to finish into the cache (the
+        # download is atomic — a partial file is never left behind).
+        self._end_download(context)
+
     def execute(self, context):
         settings = context.scene.animatica
 
@@ -302,11 +466,16 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
         # short-circuits the builder (and the separate body-mesh import, since
         # it brings its own skinned mesh).
         if self.source == 'CHARACTER':
+            from . import remote_asset
             try:
-                fetched = _ensure_character_downloaded(context, self)
-                arm_obj, mesh_obj = (load_character(context) if fetched else (None, None))
-                if arm_obj is None:
+                if not remote_asset.is_cached() and not self._download_attempted:
+                    # EXEC_DEFAULT only — an interactive click has already
+                    # been through the modal fetch by the time it gets here.
+                    self._download_attempted = True
+                    _download_blocking(context, self)
+                if not remote_asset.is_cached():
                     raise ValueError("the Animatic character is not available")
+                arm_obj, mesh_obj = load_character(context)
             except ValueError as exc:
                 self.report({'WARNING'}, f"{exc}; falling back to the SOMA30 rig")
             else:
