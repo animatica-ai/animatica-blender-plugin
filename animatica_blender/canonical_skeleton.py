@@ -1,13 +1,14 @@
 """Get a rig into the scene to animate on.
 
-Three sources. The first is appended whole; the other two are built by the
-builder at the bottom of this module from a list of MMCP joints:
+Three sources. The first is imported from a downloaded FBX; the other two are
+built by the builder at the bottom of this module from a list of MMCP joints:
 
-* **The Animatic character (default)** — the rigged, textured hero body
-  bundled at ``assets/animatic_character.blend``, appended as-is with its
-  skinned mesh and material. This is what users animate on: a character
-  rather than a stick figure, and a 77-bone superset of SOMA30, so every
-  joint the server generates lands on it and the extra bones (finger
+* **The Animatic character (default)** — the rigged, textured hero body, with
+  its skinned mesh and embedded textures. It is fetched from the asset
+  repository on first use rather than shipped in the addon (see
+  ``remote_asset``) and normalised on import. This is what users animate on:
+  a character rather than a stick figure, and a 77-bone superset of SOMA30,
+  so every joint the server generates lands on it and the extra bones (finger
   segments, end bones, eyes, jaw) simply stay unanimated.
 * **The Animatica rig** — the 30-joint SOMA skeleton bundled at
   ``assets/soma30_rig.json``. One rig for every backbone: users animate on
@@ -60,9 +61,10 @@ LEAF_TAIL_LENGTH = 0.05   # metres, +Y in MMCP frame (= +Z in Blender)
 DEFAULT_RIG_PATH = Path(__file__).parent / "assets" / "soma30_rig.json"
 DEFAULT_RIG_NAME = "SOMA30"
 
-# The Animatic character: a rigged, textured hero body shipped as a partial
-# .blend that we append. Unlike the JSON rigs there is nothing to build — the
-# armature, the skinned mesh and the material come out of the file as-is.
+# The Animatic character: a rigged, textured hero body. It is not shipped in
+# the addon — ``remote_asset`` fetches the FBX from the asset repository on
+# first use and caches it per user; see that module for why, and for how the
+# pinned hash serves as both version and integrity check.
 #
 # Its bones carry the ``animatica:`` namespace from the Maya/MotionBuilder
 # pipeline it comes out of. That is kept, so the asset still round-trips to
@@ -71,17 +73,23 @@ DEFAULT_RIG_NAME = "SOMA30"
 # Renaming the bones here would also mean renaming all 77 vertex groups to
 # keep the skinning attached.
 #
-# Everything else about the Maya export IS normalised, because Blender's FBX
-# importer does not do it for you and the raw result is not an armature anyone
-# can work with. See ``docs/rebuilding-the-character.md`` for the procedure:
-# bones aimed at their children, and the importer's unit/axis transform baked
-# into the armature and mesh data so the object sits at identity and bone
-# lengths and root motion are in metres.
-CHARACTER_PATH = Path(__file__).parent / "assets" / "animatic_character.blend"
+# Everything else about the Maya export is normalised on the way in, because
+# Blender's FBX importer does not do it for you and the raw result is not an
+# armature anyone can work with. ``docs/rebuilding-the-character.md`` explains
+# the two halves: ``automatic_bone_orientation`` aims each bone at its child,
+# and the importer's unit/axis transform is baked into the armature and mesh
+# data so the object sits at identity with bone lengths and root motion in
+# metres.
 CHARACTER_NAME = "Animatic"
-# Object names inside the asset. The mesh is parented to the armature and its
-# armature modifier points at it, so appending both together is enough.
-_CHARACTER_OBJECTS = ("Animatic", "Animatic_body")
+
+#: The importer settings that make this a usable armature rather than a bundle
+#: of +Y sticks. ``ignore_leaf_bones`` stays off: the ``*End`` bones carry
+#: vertex groups, and dropping them detaches part of the skin.
+_FBX_IMPORT = {
+    "automatic_bone_orientation": True,
+    "ignore_leaf_bones": False,
+    "use_anim": False,
+}
 
 
 def default_rig_available() -> bool:
@@ -89,49 +97,126 @@ def default_rig_available() -> bool:
 
 
 def character_available() -> bool:
-    return CHARACTER_PATH.exists()
+    """True when the character is already downloaded and ready to import."""
+    from . import remote_asset
+    return remote_asset.is_cached()
 
 
 def load_character(context) -> tuple[bpy.types.Object, bpy.types.Object | None]:
-    """Append the Animatic character. Returns ``(armature, body_mesh)``.
+    """Import the cached Animatic character. Returns ``(armature, body_mesh)``.
 
-    Raises ``ValueError`` if the asset is missing or does not contain the
-    expected objects — the caller falls back to building a rig.
+    The download is the caller's job — this needs the file already in the
+    cache and raises ``ValueError`` if it is not, so the operator can offer to
+    fetch it rather than stalling the UI from in here.
     """
-    if not CHARACTER_PATH.exists():
-        raise ValueError(f"bundled character {CHARACTER_PATH.name} is missing")
+    from . import remote_asset
 
+    path = remote_asset.cache_path()
+    if not remote_asset.is_cached():
+        raise ValueError("the Animatic character has not been downloaded yet")
+
+    before = set(bpy.data.objects)
     try:
-        with bpy.data.libraries.load(str(CHARACTER_PATH), link=False) as (src, dst):
-            missing = [n for n in _CHARACTER_OBJECTS if n not in src.objects]
-            if missing:
-                raise ValueError(
-                    f"{CHARACTER_PATH.name} has no object(s) {missing!r}"
-                )
-            dst.objects = list(_CHARACTER_OBJECTS)
-        appended = list(dst.objects)
-    except ValueError:
-        raise
+        bpy.ops.import_scene.fbx(filepath=str(path), **_FBX_IMPORT)
     except Exception as exc:                                         # noqa: BLE001
-        raise ValueError(f"cannot append {CHARACTER_PATH.name}: {exc}") from exc
+        raise ValueError(f"cannot import {path.name}: {exc}") from exc
+    imported = [o for o in bpy.data.objects if o not in before]
 
-    arm_obj = next((o for o in appended if o and o.type == 'ARMATURE'), None)
+    arm_obj = next((o for o in imported if o.type == 'ARMATURE'), None)
     if arm_obj is None:
-        raise ValueError(f"{CHARACTER_PATH.name} contains no armature")
-    mesh_obj = next((o for o in appended if o and o.type == 'MESH'), None)
+        for obj in imported:
+            bpy.data.objects.remove(obj, do_unlink=True)
+        raise ValueError(f"{path.name} contains no armature")
+    mesh_obj = next((o for o in imported if o.type == 'MESH'), None)
+
+    # The published FBX carries only the character; anything else that turned
+    # up (a camera, a control rig) is not part of it and is dropped rather
+    # than left in the user's scene.
+    for obj in imported:
+        if obj not in (arm_obj, mesh_obj):
+            bpy.data.objects.remove(obj, do_unlink=True)
+
+    _normalise_transform(arm_obj, mesh_obj)
+    clear_pose(arm_obj)
+
+    arm_obj.name = CHARACTER_NAME
+    arm_obj.data.name = CHARACTER_NAME
+    if mesh_obj is not None:
+        mesh_obj.name = f"{CHARACTER_NAME}_body"
 
     coll = context.collection or context.scene.collection
-    for obj in appended:
+    for obj in (arm_obj, mesh_obj):
         if obj is None:
             continue
-        # Written with fake_user so the datablocks survive the partial-blend
-        # write; the appended copies are real scene objects and don't need it.
-        obj.use_fake_user = False
+        for other in list(obj.users_collection):
+            if other is not coll:
+                other.objects.unlink(obj)
         if obj.name not in coll.objects:
             coll.objects.link(obj)
 
-    clear_pose(arm_obj)
     return arm_obj, mesh_obj
+
+
+def _ensure_character_downloaded(context, operator) -> bool:
+    """Fetch the character on first use. True when it is ready to import.
+
+    The fetch is synchronous, behind Blender's progress cursor. It blocks the
+    UI, which is the trade being made: it happens once per machine per pinned
+    build, it is one ~12 MB file, and the socket timeout bounds the worst
+    case. Threading it would mean turning this operator modal for a wait most
+    users see once, and the two other rig sources through the same operator
+    would have to grow the same machinery.
+    """
+    from . import remote_asset
+
+    if remote_asset.is_cached():
+        return True
+
+    wm = context.window_manager
+    operator.report(
+        {'INFO'},
+        f"Downloading the {CHARACTER_NAME} character "
+        f"({remote_asset.human_size()}, once) …",
+    )
+    wm.progress_begin(0, 100)
+    try:
+        remote_asset.download(
+            progress=lambda got, total: wm.progress_update(
+                int(100 * got / total) if total else 0
+            ),
+        )
+    except remote_asset.DownloadError as exc:
+        raise ValueError(str(exc)) from exc
+    finally:
+        wm.progress_end()
+    return True
+
+
+def _normalise_transform(arm_obj, mesh_obj) -> None:
+    """Bake the FBX importer's unit/axis conversion into the datablocks.
+
+    The importer leaves it on the *object* — 0.01 scale and +90 degrees about
+    X — which puts bone lengths and root motion in Maya centimetres. Both
+    datablocks take the same matrix because the mesh's vertices are in
+    armature space, and it is the DATA that is transformed, not the objects:
+    ``transform_apply`` on a parented, skinned mesh misaligns it from its
+    armature.
+    """
+    from mathutils import Matrix
+
+    M = arm_obj.matrix_world.copy()
+    if M == Matrix.Identity(4):
+        return
+    arm_obj.data.transform(M)
+    arm_obj.matrix_world = Matrix.Identity(4)
+    if mesh_obj is not None:
+        mesh_obj.data.transform(M)
+        mesh_obj.matrix_world = Matrix.Identity(4)
+        mesh_obj.parent = arm_obj
+        mesh_obj.matrix_parent_inverse = Matrix.Identity(4)
+        for mod in mesh_obj.modifiers:
+            if mod.type == 'ARMATURE':
+                mod.object = arm_obj
 
 
 def clear_pose(arm_obj: bpy.types.Object) -> None:
@@ -218,7 +303,10 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
         # it brings its own skinned mesh).
         if self.source == 'CHARACTER':
             try:
-                arm_obj, mesh_obj = load_character(context)
+                fetched = _ensure_character_downloaded(context, self)
+                arm_obj, mesh_obj = (load_character(context) if fetched else (None, None))
+                if arm_obj is None:
+                    raise ValueError("the Animatic character is not available")
             except ValueError as exc:
                 self.report({'WARNING'}, f"{exc}; falling back to the SOMA30 rig")
             else:

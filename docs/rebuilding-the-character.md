@@ -1,101 +1,103 @@
-# Rebuilding the Animatic character asset
+# The Animatic character asset
 
-`animatica_blender/assets/animatic_character.blend` is derived from the Maya
-FBX export (`Animatica_hero_v02.fbx`). It is not a straight import: Blender's
-FBX importer leaves a Maya export in a state that is not usable as an
-armature, so the asset is normalised on the way in. This is the procedure to
-repeat when a new character version lands.
+The character is **not** shipped in the addon. It is fetched on first use from
+[`animatica-assets-public`][repo] and cached per user, and the addon
+normalises it on the way in. This page says why the normalisation exists and
+how to move to a new character version.
 
-## What is wrong with a default import
+[repo]: https://github.com/animatica-ai/animatica-assets-public/tree/main/assets/animatica-hero
 
-Import the FBX with default settings and the armature is unusable:
+## What is fetched, and what is not
 
-| | Default import | After this procedure |
+`assets/animatica-hero/source/animatica-hero.fbx` — one file, ~12 MB, with
+the textures embedded, no control rig and no animation.
+
+The sibling `blender/animatica-hero.blend` is deliberately **not** used, even
+though it is smaller and would need no import step. It is a default FBX import
+saved as-is, so it carries the defect below, and its textures are linked by
+relative path into `source/` — using it would mean downloading four files in a
+mirrored directory layout to get a worse armature.
+
+## Why the addon normalises it
+
+Maya joints carry no bone direction. Unless Blender's FBX importer is told to
+work one out, it gives every bone the same arbitrary axis, and the importer's
+unit and axis conversion is left sitting on the object:
+
+| | Default import | What the addon does |
 |---|---|---|
-| Mean angle between a bone and its child | **89.3°** | 7.6° |
-| Bones pointing >30° away from their child | **54 of 61** | 3 of 61 |
-| Connected bones | 0 | 16 |
+| Mean angle between a bone and its child | **89.9°** | 7.9° |
+| Bones pointing >30° away from their child | **54 of 61** | 4 of 61 |
+| Connected bones | 0 | 20 |
 | Object transform | **scale 0.01, rot X +90°** | identity |
 | Bone lengths | 1.5 – 43.4 (Maya cm) | 0.016 – 0.434 m |
 
-Every bone points along +Y in armature space regardless of where its child
-sits — Maya joints have no bone direction, and without being told to work it
-out, the importer gives each bone an arbitrary fixed axis. Legs come in
-pointing backwards (178.9° from their child). The rig is still riggable in the
-sense that the *joint positions* are right, which is why generated motion
-lands on it at all, but nobody can work with it and every rotation is
-expressed against a meaningless local frame.
+Legs come in pointing backwards. The joint *positions* are right either way,
+which is why generated motion lands on the raw rig at all — but every rotation
+is then expressed against a meaningless local frame, and nobody can pose it by
+hand.
 
-## Procedure
+`canonical_skeleton.load_character` fixes both halves, and the whole
+download-plus-import costs about a second on a cold cache and a tenth of a
+second on a warm one:
 
-Bone names keep the `animatica:` namespace: the addon resolves bare MMCP joint
-names through it (`gltf_to_blender.resolve_joint_bone`), and renaming would
+1. **Import with `automatic_bone_orientation=True`**, which aims each bone at
+   its child. `ignore_leaf_bones` stays off — the `*End` bones carry vertex
+   groups, and dropping them detaches part of the skin.
+2. **Bake the object transform into the datablocks** (`_normalise_transform`).
+   Both the armature and the mesh take the same matrix, because the mesh's
+   vertices are in armature space. Transform the **data**, not the objects:
+   `transform_apply()` on a parented, skinned mesh silently misaligns it.
+3. **Reset the pose** (`clear_pose`). Pose-bone transforms live in a file
+   independently of any action, so clearing `animation_data` does not unpose
+   a rig.
+
+Bone names keep their `animatica:` namespace so the asset still round-trips to
+the Maya/MotionBuilder pipeline; the bake resolves bare MMCP joint names
+through it (`gltf_to_blender.resolve_joint_bone`). Renaming the bones would
 also mean renaming all 77 vertex groups to keep the skinning attached.
 
-1. **Import, aiming bones at their children.**
+## Moving to a new character version
 
-   ```python
-   bpy.ops.import_scene.fbx(
-       filepath=FBX,
-       automatic_bone_orientation=True,  # THE fix — aim each bone at its child
-       ignore_leaf_bones=False,          # keep *End bones: the 77 vgroups need them
-       use_anim=False,
-   )
-   ```
+Everything that pins a version lives at the top of `animatica_blender/remote_asset.py`:
 
-   Then delete everything except the armature and its mesh. The FBX also
-   carries the HIK control rig (~106 empties), a camera and assorted helper
-   objects; none of it belongs in the asset, and nothing constrains the
-   character to it.
+```python
+ASSET_REF     = "df2d87cd76c9fb3d12b22d6c4541ddca4fdf1e1c"   # commit, not a branch
+ASSET_VERSION = "v003"
+ASSET_SHA256  = "631a8e3e…"    # == the Git LFS oid == the integrity check
+ASSET_BYTES   = 12610444
+```
 
-2. **Reset the pose.** The FBX's stored joint transforms are not the bind
-   pose — 25 bones import off-rest. Set every pose bone's location to zero,
-   rotation to identity and scale to one. The rest pose is the T-pose.
+The asset repository keeps these files in Git LFS, and an LFS pointer's `oid`
+*is* the sha256 of the content — so the pin and the integrity check are the
+same number, and no separate manifest is needed. To read it for a new version:
 
-3. **Bake the object transform into the data.** The importer's unit and axis
-   conversion lands on the *object* (scale 0.01, rot X +90°), which leaves
-   bone lengths and root motion in Maya centimetres.
+```bash
+curl -sL https://raw.githubusercontent.com/animatica-ai/animatica-assets-public/<ref>/assets/animatica-hero/source/animatica-hero.fbx
+```
 
-   ```python
-   M = arm.matrix_world.copy()
-   arm.data.transform(M)
-   mesh.data.transform(M)          # same matrix: the mesh's verts are in armature space
-   arm.matrix_world = Matrix.Identity(4)
-   mesh.matrix_world = Matrix.Identity(4)
-   mesh.parent = arm
-   mesh.matrix_parent_inverse = Matrix.Identity(4)
-   ```
+which returns the pointer, not the file. Fetching the actual bytes needs the
+media host (`media.githubusercontent.com/media/…`), which is what
+`ASSET_URL` is built from.
 
-   Transform the **datablocks**, not the objects. `transform_apply()` on a
-   parented, skinned mesh is fiddly to get right and silently misaligns the
-   mesh from the armature. Verify by comparing world-space Z extents: the
-   armature and the mesh must span the same range (~0 to 1.76 m).
+`ASSET_SHA256` is part of the cache filename, so bumping the pin makes a new
+cache entry rather than reusing the old download. Old entries are not cleaned
+up automatically; they live in Blender's per-user datafiles
+(`…/datafiles/animatica/assets/`) and are safe to delete by hand.
 
-4. **Name the datablocks** `Animatic` / `Animatic_body` /
-   `Animatic_v03M` / `Animatic_diffuse_AO` / `Animatic_specular` /
-   `Animatic_normal`, and pack every image. Do this in a file that does not
-   already hold those names, or Blender appends `.001` and every importing
-   file inherits the suffix.
-
-5. **Write the partial .blend.**
-
-   ```python
-   bpy.data.libraries.write(DEST, {arm, mesh}, fake_user=True, compress=True)
-   ```
-
-   `fake_user=True` guarantees the datablocks are written; `load_character`
-   clears the flag on the appended copies.
-
-## Verifying
+## Verifying a version bump
 
 Do not trust the import — check it:
 
 - Mean bone-to-child angle in single digits, and no bone off by ~90° or ~180°.
-- Armature and mesh both at identity transform, world Z spans matching.
-- Pose on rest (T-pose) with no action attached.
-- 77 vertex groups matching 77 bone names.
-- Then **generate onto it**. Bone rest orientations determine how the
-  server's rotations resolve, so a rig that imports cleanly can still bake
-  wrongly. A 40-frame "A person walks forward casually" should key 77
-  namespaced bones with nothing in `animatica_skipped_joints`, put the hips
-  near 0.95 m, and travel roughly 1.4 m/s.
+- Armature and mesh both at identity transform, world Z spans matching
+  (~0 to 1.76 m).
+- Pose on rest (T-pose), no action attached.
+- 77 vertex groups matching 77 bone names, and all 30 SOMA30 joint names
+  present once the `animatica:` namespace is stripped — otherwise generated
+  motion will not land.
+- Then **generate onto it**. Bone rest orientations decide how the server's
+  rotations resolve, so a rig that imports cleanly can still bake wrongly. A
+  40-frame "A person walks forward casually" should key 77 namespaced bones
+  with nothing in `animatica_skipped_joints`, put the hips near 0.95 m, and
+  travel roughly 1.4 m/s.

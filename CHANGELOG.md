@@ -20,10 +20,16 @@ Proscenium, and keep the identifiers those releases actually shipped.
   `202` poll follow-ups and `GET /capabilities` are deliberately not
   attributed; neither starts a generation.
 - **The Animatic character is what "Import rig" loads.** The rigged, textured
-  hero body ships at `assets/animatic_character.blend` and is appended whole —
-  armature, skinned mesh and material — instead of a bare skeleton being built
-  from joint data. The SOMA30 rig and the model's canonical skeleton remain
-  selectable on the import operator.
+  hero body — armature, skinned mesh and material — instead of a bare skeleton
+  built from joint data. The SOMA30 rig and the model's canonical skeleton
+  remain selectable on the import operator.
+- **The character is downloaded on first use, not shipped in the addon.** It
+  comes from `animatica-assets-public` (v003), pinned to a commit and to the
+  sha256 that Git LFS already records for it, and cached in Blender's per-user
+  datafiles so it survives addon upgrades. This takes ~12 MB out of the
+  repository and the release zip. First import costs about a second; every one
+  after that reads the cache. With no network the import says so and falls
+  back to the SOMA30 rig.
 
 ### Fixed
 
