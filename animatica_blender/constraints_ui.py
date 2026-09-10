@@ -105,16 +105,23 @@ def _iter_fcurve_collections(action):
                     yield cb.fcurves
 
 
-def strip_generated_keyframe_points(action) -> int:
+def strip_generated_keyframe_points(action, *, promote_unauthored: bool = False) -> int:
     """Remove ``GENERATED``-typed keyframe points from every F-curve on ``action``.
 
     Motion bakes tag constraint anchors as ``KEYFRAME`` and dense samples as
     ``GENERATED`` (see ``gltf_to_blender._tag_keyframe_types``). Reject should
     drop only the generated samples so keys added while previewing are kept.
-    When any channel has an authored key at a frame, generated samples on
-    other channels at that same frame are promoted to ``KEYFRAME`` too — that
-    preserves the full-body pose at the authored frame instead of leaving
-    unkeyed bones at rest.
+
+    ``promote_unauthored`` widens each authored FRAME to the whole body: generated
+    samples on every other channel at that frame become ``KEYFRAME`` too. That is
+    only right when this action is about to *become* the user's action and there is
+    nothing else holding the pose -- otherwise unkeyed bones would drop to rest.
+
+    It used to be unconditional, which undid partial keyframes: every caller here
+    merges the stripped preview back into the user's own action, so the promotion
+    turned a hips-only keyframe into a 77-bone one and the next generation pinned a
+    whole body at the rig's rest pose -- a T-pose. When there is a source action to
+    merge into, it already holds the user's authorship and nothing needs widening.
 
     Returns the number of keyframe points removed. F-curves left with no
     keys are removed.
@@ -127,7 +134,7 @@ def strip_generated_keyframe_points(action) -> int:
         for fc in iter_action_fcurves(action)
         for kp in fc.keyframe_points
         if kp.type != 'GENERATED'
-    }
+    } if promote_unauthored else set()
 
     removed = 0
     for fcurves in _iter_fcurve_collections(action):

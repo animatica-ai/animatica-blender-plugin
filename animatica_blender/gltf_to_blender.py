@@ -788,7 +788,11 @@ def bake_gltf_to_actions_per_block(
             _write_kps(_fc(data_path, 2), buf_f, buf_z)
 
         if anchor_frames is not None:
-            block_anchors = {f for f in anchor_frames if fs <= f <= fe}
+            block_anchors = (
+                {f: b for f, b in anchor_frames.items() if fs <= f <= fe}
+                if isinstance(anchor_frames, dict)
+                else {f for f in anchor_frames if fs <= f <= fe}
+            )
             _tag_keyframe_types(action, block_anchors)
 
         actions.append(action)
@@ -1619,17 +1623,46 @@ def _set_fcurve_keyframes(fcurves, data_path: str, axis: int, key_values: list[f
     fc.update()
 
 
-def _tag_keyframe_types(action: bpy.types.Action, anchor_frames: set[int]) -> None:
-    """Walk every fcurve on ``action`` and set each keyframe point's
-    ``type`` to ``'KEYFRAME'`` if its frame is in ``anchor_frames``, else
+def _tag_keyframe_types(
+    action: bpy.types.Action,
+    anchor_frames: "set[int] | dict[int, set[str]]",
+) -> None:
+    """Tag each keyframe point ``'KEYFRAME'`` where the user authored it, else
     ``'GENERATED'``. Makes the two kinds visually distinct in the dopesheet.
+
+    ``anchor_frames`` may be a plain set of frames -- every bone at those frames
+    counts as authored -- or a ``{frame: {bone, ...}}`` map, which is what a partial
+    keyframe needs.
+
+    This used to be frame-only, so a keyframe on one bone marked ALL of them as
+    authored at that frame: keying just the hips on a 77-bone rig produced 77 x 4 x 2
+    = 616 KEYFRAME points instead of 8. The next generation then read 77 user-edited
+    bones and widened the request back to a full-body pin -- the partial keyframe
+    survived the round trip as a complete one.
     """
-    anchors = {int(round(f)) for f in anchor_frames}
+    # Local import: constraints_ui <-> request_builder is circular at module load,
+    # and this module is pulled into that cycle (see _splice_fcurve below).
+    from .constraints_ui import _bone_name_from_data_path
+
+    if isinstance(anchor_frames, dict):
+        anchors: dict[int, set[str] | None] = {
+            int(round(f)): (set(b) if b is not None else None)
+            for f, b in anchor_frames.items()
+        }
+    else:
+        anchors = {int(round(f)): None for f in anchor_frames}
 
     def _tag(fcurves):
         for fc in fcurves:
+            bone = _bone_name_from_data_path(fc.data_path)
             for kp in fc.keyframe_points:
-                kp.type = 'KEYFRAME' if int(round(kp.co[0])) in anchors else 'GENERATED'
+                f = int(round(kp.co[0]))
+                if f in anchors:
+                    bones = anchors[f]
+                    authored = bones is None or (bone is not None and bone in bones)
+                else:
+                    authored = False
+                kp.type = 'KEYFRAME' if authored else 'GENERATED'
 
     flat = getattr(action, "fcurves", None)
     if flat is not None:
