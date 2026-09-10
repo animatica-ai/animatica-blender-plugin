@@ -619,14 +619,24 @@ class ANIMATICA_OT_generate(Operator):
         # (``Animatica_Pose`` / legacy ``Animatica_Poses``) is the user's
         # authored content (they chose to keep those poses as anchors), so
         # those keyframes should stay typed as ``KEYFRAME`` after the bake.
+        # Keep the BONE each key sits on, not just its frame. Tagging by frame
+        # alone marked every bone as authored wherever the user had keyed any one
+        # of them, so a hips-only keyframe came back from the bake looking like a
+        # full-body one and the next generation widened the request accordingly.
+        anchor_bones: dict[int, set[str]] = {}
         if src_action is not None and not _is_motion_bake_action(src_action):
             for fc in constraints_ui.iter_action_fcurves(src_action):
+                bone = constraints_ui._bone_name_from_data_path(fc.data_path)
                 for kp in fc.keyframe_points:
                     f = int(round(kp.co.x))
                     if gen_start <= f <= gen_end:
                         anchor_frames.add(f)
+                        if bone is not None:
+                            anchor_bones.setdefault(f, set()).add(bone)
 
-        self._anchor_frames = anchor_frames
+        # A dict iterates as its frames, so consumers that only want frames are
+        # unaffected; the tagger is the one that reads the bone sets.
+        self._anchor_frames = anchor_bones if anchor_bones else anchor_frames
 
         # Reset state and kick worker.
         settings.is_generating = True
