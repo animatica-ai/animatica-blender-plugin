@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [0.5.1] — 2026-09-11
+
+### Fixed
+
+- **A keyframe on one bone no longer poses the whole character.** Authorship was
+  tracked by frame rather than by bone, so keying a single bone marked every
+  bone at that frame as authored. On a 77-bone rig, two hips-only keys became
+  616 keyframe points where the user had made 8; the next generation then read
+  77 user-edited bones and pinned a whole body at the rig's rest pose, which
+  looks like the character snapping to a T-pose. Anchors now carry the bone each
+  key sits on, so a partial keyframe survives the bake as a partial keyframe.
+- **Reject keeps a partial keyframe partial.** Stripping the preview's generated
+  samples promoted every channel at an authored frame to a real key, and Reject
+  then merged all of them into the user's own action — turning a hips-only
+  keyframe into a 77-bone one. The promotion exists so unkeyed bones do not drop
+  to rest, which only matters when the preview becomes the user's action
+  outright; it is now asked for only in that case. This also fed the request
+  builder, so the widening reached the next generation as well.
+
 ## [0.5.0] — 2026-09-10
 
 ### Added
@@ -286,6 +305,7 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 - Initial public release.
 
+[0.5.1]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.5.1
 [0.5.0]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.5.0
 [0.4.0]: https://github.com/animatica-ai/proscenium-blender/releases/tag/v0.4.0
 [0.3.2]: https://github.com/animatica-ai/proscenium-blender/releases/tag/v0.3.2

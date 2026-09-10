@@ -13,7 +13,7 @@ optimisation runs on the backend server.
 bl_info = {
     "name": "Animatica — AI Motion Generation",
     "author": "Animatica",
-    "version": (0, 5, 0),
+    "version": (0, 5, 1),
     "blender": (5, 0, 0),
     "location": "View3D > Sidebar > Animatica",
     "description": "AI motion generation — select armature, set keyframes, generate",
