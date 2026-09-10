@@ -21,11 +21,15 @@ jobs:
           python-version: '3.12'
 
       - name: Verify tag matches bl_info version
+        id: version
         run: |
           TAG="${GITHUB_REF#refs/tags/v}"
           PKG=$(make -s info | awk '/^version:/ { print $2 }')
           echo "tag=$TAG  bl_info=$PKG"
           test "$TAG" = "$PKG"
+          # The zip is named from bl_info and carries no leading "v", so the
+          # notes cannot interpolate github.ref_name.
+          echo "version=$PKG" >> "$GITHUB_OUTPUT"
 
       - name: Build addon zip
         run: make zip
@@ -42,15 +46,15 @@ jobs:
           body: |
             **Install in Blender 5.0+:**
 
-            1. Download `proscenium-blender-${{ github.ref_name }}.zip` below
-            2. Edit → Preferences → Add-ons → Install…
+            1. Download `animatica-blender-${{ steps.version.outputs.version }}.zip` below
+            2. Edit → Preferences → Add-ons → Install from Disk…
             3. Pick the downloaded zip
-            4. Enable **Proscenium — AI Motion Generation**
+            4. Enable **Animatica — AI Motion Generation**
 
-            Sign in with your [Animatica](https://animatica.ai) account under **Preferences → Add-ons → Proscenium**.
+            Sign in with your [Animatica](https://animatica.ai) account under **Preferences → Add-ons → Animatica**.
 
-            **New to Proscenium?** Watch the [video tutorial playlist](https://www.youtube.com/watch?v=Wc349qOwjfM&list=PLAJ2UfUYhFQKZpFS8eh1eGUWJ0PAys1n1) on YouTube.
+            **New to Animatica?** Watch the [video tutorial playlist](https://www.youtube.com/watch?v=Wc349qOwjfM&list=PLAJ2UfUYhFQKZpFS8eh1eGUWJ0PAys1n1) on YouTube.
 
             **Need help?** Join the [Animatica Discord](https://discord.com/invite/A8CrURBewz).
 
-            Docs: [README](https://github.com/animatica-ai/proscenium-blender#readme) · [Using Proscenium](https://github.com/animatica-ai/proscenium-blender/blob/main/docs/usage.md)
+            Docs: [README](https://github.com/animatica-ai/animatica-blender-plugin#readme) · [Using Animatica](https://github.com/animatica-ai/animatica-blender-plugin/blob/main/docs/usage.md)
