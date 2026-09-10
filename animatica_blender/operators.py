@@ -1041,7 +1041,13 @@ class ANIMATICA_OT_reject(Operator):
 
         n_rm = 0
         if is_motion_preview:
-            n_rm = constraints_ui.strip_generated_keyframe_points(preview)
+            # Widen authored frames to the whole body only when the preview is
+            # about to become the action outright; when ``source`` is restored it
+            # already carries the user's keys, and promoting here would merge the
+            # generated pose into them.
+            n_rm = constraints_ui.strip_generated_keyframe_points(
+                preview, promote_unauthored=(source is None),
+            )
             if source is not None:
                 constraints_ui.merge_preview_keyframes_into_source(source, preview)
                 arm.animation_data.action = source
