@@ -1,8 +1,67 @@
 # Changelog
 
-All notable changes to the Proscenium for Blender addon are documented here.
+All notable changes to the Animatica for Blender addon are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+Entries for 0.4.0 and earlier describe the addon under its former name,
+Proscenium, and keep the identifiers those releases actually shipped.
+
+## [0.5.0] — 2026-09-10
+
+### Added
+
+- **Client attribution on generation requests.** The request that starts a
+  generation now carries `X-Animatica-Client: blender`, the addon build
+  (`X-Animatica-Client-Version`), the Blender it is running in
+  (`X-Animatica-Host-Version`) and a session id generated once per addon
+  launch, so the API can report DCC mix and failure rate per host version.
+  Attribution only — a missing or wrong value never affects a request. The
+  `202` poll follow-ups and `GET /capabilities` are deliberately not
+  attributed; neither starts a generation.
+- **The Animatic character is what "Import rig" loads.** The rigged, textured
+  hero body — armature, skinned mesh and material — instead of a bare skeleton
+  built from joint data. The SOMA30 rig and the model's canonical skeleton
+  remain selectable on the import operator.
+- **The character is downloaded on first use, not shipped in the addon.** It
+  comes from `animatica-assets-public` (v003), pinned to a commit and to the
+  sha256 that Git LFS already records for it, and cached in Blender's per-user
+  datafiles so it survives addon upgrades. This takes ~12 MB out of the
+  repository and the release zip. First import costs about a second; every one
+  after that reads the cache. With no network the import says so and falls
+  back to the SOMA30 rig.
+
+### Fixed
+
+- **Namespaced rigs are driven instead of silently skipped.** MMCP joint names
+  are bare (`Hips`); rigs exported from Maya / MotionBuilder carry the source
+  scene's namespace on every bone (`animatica:Hips`), so the bake's exact-name
+  lookup matched nothing and every channel was dropped without an error. The
+  bake now resolves through a whole-rig namespace when one is present
+  (`gltf_to_blender.resolve_joint_bone`), and the pose-bake selection filter
+  strips it on the way back out. Unprefixed rigs are unaffected.
+
+### Changed
+
+- **Renamed from Proscenium to Animatica.** The rename reaches every
+  identifier, not just the labels: the Python package is now
+  `animatica_blender`, operators are `bpy.ops.animatica.*`, scene settings
+  live on `bpy.context.scene.animatica`, panel classes are `ANIMATICA_PT_*`,
+  and the sidebar tab reads **Animatica**.
+
+  **Breaking for external scripts.** Anything calling `bpy.ops.proscenium.*`
+  or reading `scene.proscenium` must be updated; the old names are gone
+  rather than aliased.
+
+  **Existing .blend files keep working.** Blender treats the renamed package
+  as a new addon, so it needs enabling once and its preferences (server,
+  sign-in) re-entered. Scene data is carried forward by a new `migrate.py`,
+  which runs on file load and rewrites the `proscenium_*` custom properties
+  and the old scene-settings block to their new keys. Motion-bake actions
+  and NLA tracks are deliberately *not* renamed — the prefix filters accept
+  the old `Proscenium_` spellings alongside the new ones, so the datablocks
+  users can see in the outliner are left alone and action references by name
+  stay valid.
 
 ## [0.4.0] — 2026-05-31
 
@@ -227,6 +286,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial public release.
 
+[0.5.0]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.5.0
 [0.4.0]: https://github.com/animatica-ai/proscenium-blender/releases/tag/v0.4.0
 [0.3.2]: https://github.com/animatica-ai/proscenium-blender/releases/tag/v0.3.2
 [0.3.1]: https://github.com/animatica-ai/proscenium-blender/releases/tag/v0.3.1

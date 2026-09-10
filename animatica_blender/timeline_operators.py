@@ -1,14 +1,14 @@
-"""Timeline interaction operators for Proscenium prompt-block strips.
+"""Timeline interaction operators for Animatica prompt-block strips.
 
 Uses keymap-based approach: clicking on a strip automatically selects/drags
 it without needing to activate a modal operator first.
 
 Provides:
-- PROSCENIUM_OT_timeline_strip_action: click/drag on strips (keymap-driven)
-- PROSCENIUM_OT_timeline_strip_add_click: double-click empty area to add strip
-- PROSCENIUM_OT_timeline_strip_context_menu: right-click context menu
-- PROSCENIUM_OT_timeline_strip_delete: Delete/Backspace to remove active strip
-- PROSCENIUM_OT_edit_strip_prompt: popup dialog for editing a strip's prompt
+- ANIMATICA_OT_timeline_strip_action: click/drag on strips (keymap-driven)
+- ANIMATICA_OT_timeline_strip_add_click: double-click empty area to add strip
+- ANIMATICA_OT_timeline_strip_context_menu: right-click context menu
+- ANIMATICA_OT_timeline_strip_delete: Delete/Backspace to remove active strip
+- ANIMATICA_OT_edit_strip_prompt: popup dialog for editing a strip's prompt
 - draw_timeline_header(): appended to DOPESHEET_HT_header for + / - buttons
 - register_keymaps() / unregister_keymaps()
 """
@@ -46,7 +46,7 @@ _addon_keymaps = []
 
 
 def _is_in_lane(mouse_y):
-    """Check if mouse Y is within the Proscenium strip lane area."""
+    """Check if mouse Y is within the Animatica strip lane area."""
     lane_y0 = STRIP_Y_OFFSET - LANE_PADDING
     lane_y1 = STRIP_Y_OFFSET + get_strip_height() + LANE_PADDING
     return lane_y0 <= mouse_y <= lane_y1
@@ -60,7 +60,7 @@ def _timeline_poll(context):
         and hasattr(context, "space_data")
         and context.space_data is not None
         and context.space_data.mode == "TIMELINE"
-        and hasattr(context.scene, "proscenium")
+        and hasattr(context.scene, "animatica")
     )
 
 
@@ -68,16 +68,16 @@ def _timeline_poll(context):
 # Main strip interaction operator (triggered by keymap on LEFTMOUSE)
 # ---------------------------------------------------------------------------
 
-class PROSCENIUM_OT_timeline_strip_action(bpy.types.Operator):
-    """Click/drag Proscenium timeline strips.
+class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
+    """Click/drag Animatica timeline strips.
 
     Automatically invoked by keymap when clicking in the Timeline.
     If the click lands on a strip, the operator handles select + drag.
     If not, it returns PASS_THROUGH so normal timeline scrubbing works.
     """
 
-    bl_idname = "proscenium.timeline_strip_action"
-    bl_label = "Proscenium Strip Action"
+    bl_idname = "animatica.timeline_strip_action"
+    bl_label = "Animatica Strip Action"
     bl_options = {"REGISTER", "UNDO"}
 
     # State for the current drag
@@ -92,7 +92,7 @@ class PROSCENIUM_OT_timeline_strip_action(bpy.types.Operator):
     def poll(cls, context):
         return (
             _timeline_poll(context)
-            and len(context.scene.proscenium.prompt_blocks) > 0
+            and len(context.scene.animatica.prompt_blocks) > 0
         )
 
     def invoke(self, context, event):
@@ -118,7 +118,7 @@ class PROSCENIUM_OT_timeline_strip_action(bpy.types.Operator):
 
         idx = hit["index"]
         zone = hit["zone"]
-        props = context.scene.proscenium
+        props = context.scene.animatica
         fr = props.prompt_blocks[idx]
 
         # --- Double-click detection ---
@@ -131,7 +131,7 @@ class PROSCENIUM_OT_timeline_strip_action(bpy.types.Operator):
             props.active_block_index = idx
             _last_click_time = 0.0
             _last_click_idx = -1
-            bpy.ops.proscenium.timeline_strip_inline_edit(
+            bpy.ops.animatica.timeline_strip_inline_edit(
                 "INVOKE_DEFAULT", index=idx,
             )
             return {"FINISHED"}
@@ -164,7 +164,7 @@ class PROSCENIUM_OT_timeline_strip_action(bpy.types.Operator):
         if context.area is None:
             return {"CANCELLED"}
 
-        props = context.scene.proscenium
+        props = context.scene.animatica
 
         # Cancel drag
         if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
@@ -268,7 +268,7 @@ class PROSCENIUM_OT_timeline_strip_action(bpy.types.Operator):
             context.area.tag_redraw()
             return
 
-        props = context.scene.proscenium
+        props = context.scene.animatica
         if 0 <= self._active_idx < len(props.prompt_blocks):
             fr = props.prompt_blocks[self._active_idx]
             fr.frame_start = self._original_start
@@ -284,10 +284,10 @@ class PROSCENIUM_OT_timeline_strip_action(bpy.types.Operator):
 # Double-click on empty area to add strip at that position
 # ---------------------------------------------------------------------------
 
-class PROSCENIUM_OT_timeline_strip_add_click(bpy.types.Operator):
+class ANIMATICA_OT_timeline_strip_add_click(bpy.types.Operator):
     """Double-click on empty timeline area to add a new strip at that position."""
 
-    bl_idname = "proscenium.timeline_strip_add_click"
+    bl_idname = "animatica.timeline_strip_add_click"
     bl_label = "Add Strip at Click"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -321,7 +321,7 @@ class PROSCENIUM_OT_timeline_strip_add_click(bpy.types.Operator):
 
     def _add_strip_at(self, context, event):
         """Add a new strip at the click position, fitting into the available gap."""
-        props = context.scene.proscenium
+        props = context.scene.animatica
         click_frame = pixel_to_frame(context, event.mouse_region_x)
         scene_start = max(1, context.scene.frame_start)
         scene_end = context.scene.frame_end
@@ -364,7 +364,7 @@ class PROSCENIUM_OT_timeline_strip_add_click(bpy.types.Operator):
         context.area.tag_redraw()
 
         # Start inline editing on the new strip (same as double-click)
-        bpy.ops.proscenium.timeline_strip_inline_edit(
+        bpy.ops.animatica.timeline_strip_inline_edit(
             "INVOKE_DEFAULT", index=new_idx,
         )
 
@@ -401,11 +401,11 @@ def _get_armature_keyframes(armature):
     return sorted(frames)
 
 
-class PROSCENIUM_OT_add_strip_between_keyframes(bpy.types.Operator):
+class ANIMATICA_OT_add_strip_between_keyframes(bpy.types.Operator):
     """Add a new strip spanning between the two nearest keyframes around the
     click position on the source armature's timeline."""
 
-    bl_idname = "proscenium.add_strip_between_keyframes"
+    bl_idname = "animatica.add_strip_between_keyframes"
     bl_label = "Add Strip Between Keyframes"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -420,7 +420,7 @@ class PROSCENIUM_OT_add_strip_between_keyframes(bpy.types.Operator):
         return _timeline_poll(context)
 
     def execute(self, context):
-        props = context.scene.proscenium
+        props = context.scene.animatica
         armature = props.target_armature
 
         if not armature:
@@ -509,24 +509,24 @@ class PROSCENIUM_OT_add_strip_between_keyframes(bpy.types.Operator):
 # Delete strip (Backspace / Delete key)
 # ---------------------------------------------------------------------------
 
-class PROSCENIUM_OT_timeline_strip_delete(bpy.types.Operator):
-    """Delete a Proscenium strip (Backspace/Delete).
+class ANIMATICA_OT_timeline_strip_delete(bpy.types.Operator):
+    """Delete a Animatica strip (Backspace/Delete).
 
     Prefers the strip under the cursor; otherwise removes the active strip when
-    the cursor is in the Proscenium lane. Writes back to the target armature so
+    the cursor is in the Animatica lane. Writes back to the target armature so
     deleted strips do not reappear after switching rigs. Passes through outside
     the lane so Blender can handle keyframe deletion.
     """
 
-    bl_idname = "proscenium.timeline_strip_delete"
-    bl_label = "Delete Proscenium Strip"
+    bl_idname = "animatica.timeline_strip_delete"
+    bl_label = "Delete Animatica Strip"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
         return (
             _timeline_poll(context)
-            and len(context.scene.proscenium.prompt_blocks) > 0
+            and len(context.scene.animatica.prompt_blocks) > 0
         )
 
     def invoke(self, context, event):
@@ -534,7 +534,7 @@ class PROSCENIUM_OT_timeline_strip_delete(bpy.types.Operator):
         if not _is_in_lane(event.mouse_region_y):
             return {"PASS_THROUGH"}
 
-        props = context.scene.proscenium
+        props = context.scene.animatica
         hit = hit_test_strips(context, event.mouse_region_x, event.mouse_region_y)
         idx = hit["index"]
         if idx is None:
@@ -565,11 +565,11 @@ class PROSCENIUM_OT_timeline_strip_delete(bpy.types.Operator):
 # Right-click context menu
 # ---------------------------------------------------------------------------
 
-class PROSCENIUM_OT_timeline_strip_context_menu(bpy.types.Operator):
-    """Right-click context menu for Proscenium timeline strips."""
+class ANIMATICA_OT_timeline_strip_context_menu(bpy.types.Operator):
+    """Right-click context menu for Animatica timeline strips."""
 
-    bl_idname = "proscenium.timeline_strip_context_menu"
-    bl_label = "Proscenium Strip Menu"
+    bl_idname = "animatica.timeline_strip_context_menu"
+    bl_label = "Animatica Strip Menu"
 
     @classmethod
     def poll(cls, context):
@@ -585,19 +585,19 @@ class PROSCENIUM_OT_timeline_strip_context_menu(bpy.types.Operator):
 
         if hit["index"] is not None:
             # Select the strip
-            context.scene.proscenium.active_block_index = hit["index"]
+            context.scene.animatica.active_block_index = hit["index"]
 
         # Store click position for "Add Strip Here"
         self._click_frame = pixel_to_frame(context, event.mouse_region_x)
         self._hit_index = hit["index"]
 
         wm = context.window_manager
-        wm.popup_menu(self._draw_menu, title="Proscenium Strip")
+        wm.popup_menu(self._draw_menu, title="Animatica Strip")
         return {"FINISHED"}
 
     def _draw_menu(self, menu, context):
         layout = menu.layout
-        props = context.scene.proscenium
+        props = context.scene.animatica
 
         if self._hit_index is not None and 0 <= self._hit_index < len(props.prompt_blocks):
             fr = props.prompt_blocks[self._hit_index]
@@ -608,7 +608,7 @@ class PROSCENIUM_OT_timeline_strip_context_menu(bpy.types.Operator):
             if int(getattr(fr, "seed", 0)) > 0:
                 layout.label(text=f"Seed pinned: {fr.seed}")
                 op = layout.operator(
-                    "proscenium.clear_block_seed",
+                    "animatica.clear_block_seed",
                     text="Clear seed (follow global)",
                     icon="X",
                 )
@@ -616,7 +616,7 @@ class PROSCENIUM_OT_timeline_strip_context_menu(bpy.types.Operator):
             elif int(getattr(fr, "last_used_seed", 0)) > 0:
                 layout.label(text=f"Generated with seed: {fr.last_used_seed}")
                 op = layout.operator(
-                    "proscenium.reuse_block_seed",
+                    "animatica.reuse_block_seed",
                     text="Reuse seed (pin it)",
                     icon="LOCKED",
                 )
@@ -625,7 +625,7 @@ class PROSCENIUM_OT_timeline_strip_context_menu(bpy.types.Operator):
 
             # Edit prompt
             op = layout.operator(
-                "proscenium.edit_strip_prompt",
+                "animatica.edit_strip_prompt",
                 text="Edit Prompt",
                 icon="TEXT",
             )
@@ -635,7 +635,7 @@ class PROSCENIUM_OT_timeline_strip_context_menu(bpy.types.Operator):
             toggle_text = "Disable" if fr.enabled else "Enable"
             toggle_icon = "HIDE_ON" if fr.enabled else "HIDE_OFF"
             op = layout.operator(
-                "proscenium.timeline_strip_toggle_enabled",
+                "animatica.timeline_strip_toggle_enabled",
                 text=toggle_text,
                 icon=toggle_icon,
             )
@@ -647,7 +647,7 @@ class PROSCENIUM_OT_timeline_strip_context_menu(bpy.types.Operator):
             regen_row = layout.row()
             regen_row.enabled = bool(getattr(props, "is_previewing", False)) and not bool(getattr(props, "is_generating", False))
             op = regen_row.operator(
-                "proscenium.regenerate_block",
+                "animatica.regenerate_block",
                 text="Regenerate Range",
                 icon="FILE_REFRESH",
             )
@@ -657,7 +657,7 @@ class PROSCENIUM_OT_timeline_strip_context_menu(bpy.types.Operator):
 
             # Delete
             layout.operator(
-                "proscenium.timeline_strip_delete",
+                "animatica.timeline_strip_delete",
                 text="Delete Strip",
                 icon="TRASH",
             )
@@ -672,7 +672,7 @@ class PROSCENIUM_OT_timeline_strip_context_menu(bpy.types.Operator):
         kf_row = layout.row()
         kf_row.enabled = has_kf
         op = kf_row.operator(
-            "proscenium.add_strip_between_keyframes",
+            "animatica.add_strip_between_keyframes",
             text="Add Strip Between Keyframes",
             icon="KEYFRAME_HLT",
         )
@@ -680,7 +680,7 @@ class PROSCENIUM_OT_timeline_strip_context_menu(bpy.types.Operator):
 
         # Add strip in first available gap
         layout.operator(
-            "proscenium.add_prompt_block",
+            "animatica.add_prompt_block",
             text="Add Strip in Gap",
             icon="ADD",
         )
@@ -690,10 +690,10 @@ class PROSCENIUM_OT_timeline_strip_context_menu(bpy.types.Operator):
 # Toggle strip enabled (for context menu)
 # ---------------------------------------------------------------------------
 
-class PROSCENIUM_OT_timeline_strip_toggle_enabled(bpy.types.Operator):
+class ANIMATICA_OT_timeline_strip_toggle_enabled(bpy.types.Operator):
     """Toggle enabled state of a strip."""
 
-    bl_idname = "proscenium.timeline_strip_toggle_enabled"
+    bl_idname = "animatica.timeline_strip_toggle_enabled"
     bl_label = "Toggle Strip Enabled"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -704,7 +704,7 @@ class PROSCENIUM_OT_timeline_strip_toggle_enabled(bpy.types.Operator):
         return _timeline_poll(context)
 
     def execute(self, context):
-        props = context.scene.proscenium
+        props = context.scene.animatica
         if 0 <= self.index < len(props.prompt_blocks):
             fr = props.prompt_blocks[self.index]
             fr.enabled = not fr.enabled
@@ -723,14 +723,14 @@ class PROSCENIUM_OT_timeline_strip_toggle_enabled(bpy.types.Operator):
 # Reuse recorded seed (lock last_used_seed into seed)
 # ---------------------------------------------------------------------------
 
-class PROSCENIUM_OT_reuse_block_seed(bpy.types.Operator):
+class ANIMATICA_OT_reuse_block_seed(bpy.types.Operator):
     """Lock a block's last-generated seed into its Seed field.
 
     Copies ``last_used_seed`` into ``seed`` so the next generation reproduces
     this block's motion instead of rolling a fresh random seed.
     """
 
-    bl_idname = "proscenium.reuse_block_seed"
+    bl_idname = "animatica.reuse_block_seed"
     bl_label = "Reuse Seed"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -741,7 +741,7 @@ class PROSCENIUM_OT_reuse_block_seed(bpy.types.Operator):
         return _timeline_poll(context)
 
     def execute(self, context):
-        props = context.scene.proscenium
+        props = context.scene.animatica
         if not (0 <= self.index < len(props.prompt_blocks)):
             return {"CANCELLED"}
         block = props.prompt_blocks[self.index]
@@ -758,10 +758,10 @@ class PROSCENIUM_OT_reuse_block_seed(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class PROSCENIUM_OT_clear_block_seed(bpy.types.Operator):
+class ANIMATICA_OT_clear_block_seed(bpy.types.Operator):
     """Clear a block's pinned seed so it follows the global Seed again."""
 
-    bl_idname = "proscenium.clear_block_seed"
+    bl_idname = "animatica.clear_block_seed"
     bl_label = "Clear Seed"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -772,7 +772,7 @@ class PROSCENIUM_OT_clear_block_seed(bpy.types.Operator):
         return _timeline_poll(context)
 
     def execute(self, context):
-        props = context.scene.proscenium
+        props = context.scene.animatica
         if not (0 <= self.index < len(props.prompt_blocks)):
             return {"CANCELLED"}
         props.prompt_blocks[self.index].seed = 0
@@ -789,10 +789,10 @@ class PROSCENIUM_OT_clear_block_seed(bpy.types.Operator):
 # Inline prompt editing (triggered by double-click on strip)
 # ---------------------------------------------------------------------------
 
-class PROSCENIUM_OT_timeline_strip_inline_edit(bpy.types.Operator):
+class ANIMATICA_OT_timeline_strip_inline_edit(bpy.types.Operator):
     """Edit strip prompt text directly on the timeline strip."""
 
-    bl_idname = "proscenium.timeline_strip_inline_edit"
+    bl_idname = "animatica.timeline_strip_inline_edit"
     bl_label = "Inline Edit Strip Prompt"
     bl_options = {"REGISTER", "UNDO", "INTERNAL"}
 
@@ -803,7 +803,7 @@ class PROSCENIUM_OT_timeline_strip_inline_edit(bpy.types.Operator):
         return _timeline_poll(context)
 
     def invoke(self, context, event):
-        props = context.scene.proscenium
+        props = context.scene.animatica
         if not (0 <= self.index < len(props.prompt_blocks)):
             return {"CANCELLED"}
 
@@ -836,7 +836,7 @@ class PROSCENIUM_OT_timeline_strip_inline_edit(bpy.types.Operator):
     @staticmethod
     def _delete_selection():
         """Delete selected text, update cursor, clear selection. Returns new (text, pos)."""
-        lo, hi = PROSCENIUM_OT_timeline_strip_inline_edit._get_selection_range()
+        lo, hi = ANIMATICA_OT_timeline_strip_inline_edit._get_selection_range()
         text = inline_edit_state["text"]
         inline_edit_state["text"] = text[:lo] + text[hi:]
         inline_edit_state["cursor"] = lo
@@ -1019,7 +1019,7 @@ class PROSCENIUM_OT_timeline_strip_inline_edit(bpy.types.Operator):
 
     def _commit(self, context):
         """Save edited text to the frame range and exit edit mode."""
-        props = context.scene.proscenium
+        props = context.scene.animatica
         idx = inline_edit_state["index"]
         if 0 <= idx < len(props.prompt_blocks):
             props.prompt_blocks[idx].prompt = inline_edit_state["text"]
@@ -1039,10 +1039,10 @@ class PROSCENIUM_OT_timeline_strip_inline_edit(bpy.types.Operator):
 # Prompt editing popup (right-click menu → Edit Prompt)
 # ---------------------------------------------------------------------------
 
-class PROSCENIUM_OT_edit_strip_prompt(bpy.types.Operator):
+class ANIMATICA_OT_edit_strip_prompt(bpy.types.Operator):
     """Edit the prompt text for a frame range strip."""
 
-    bl_idname = "proscenium.edit_strip_prompt"
+    bl_idname = "animatica.edit_strip_prompt"
     bl_label = "Edit Strip Prompt"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -1050,7 +1050,7 @@ class PROSCENIUM_OT_edit_strip_prompt(bpy.types.Operator):
     prompt: StringProperty(name="Prompt", default="")
 
     def invoke(self, context, event):
-        props = context.scene.proscenium
+        props = context.scene.animatica
         if 0 <= self.index < len(props.prompt_blocks):
             self.prompt = props.prompt_blocks[self.index].prompt
         # Mark that we went through invoke (dialog will be shown)
@@ -1059,7 +1059,7 @@ class PROSCENIUM_OT_edit_strip_prompt(bpy.types.Operator):
 
     def draw(self, context):
         layout = self.layout
-        props = context.scene.proscenium
+        props = context.scene.animatica
 
         if 0 <= self.index < len(props.prompt_blocks):
             fr = props.prompt_blocks[self.index]
@@ -1078,7 +1078,7 @@ class PROSCENIUM_OT_edit_strip_prompt(bpy.types.Operator):
 
             def _open_dialog():
                 try:
-                    bpy.ops.proscenium.edit_strip_prompt(
+                    bpy.ops.animatica.edit_strip_prompt(
                         "INVOKE_DEFAULT", index=idx
                     )
                 except Exception:
@@ -1090,7 +1090,7 @@ class PROSCENIUM_OT_edit_strip_prompt(bpy.types.Operator):
 
         # Normal path — dialog was shown, save the prompt
         self._from_dialog = False
-        props = context.scene.proscenium
+        props = context.scene.animatica
         if 0 <= self.index < len(props.prompt_blocks):
             props.prompt_blocks[self.index].prompt = self.prompt
         return {"FINISHED"}
@@ -1100,15 +1100,15 @@ class PROSCENIUM_OT_edit_strip_prompt(bpy.types.Operator):
 # Add / remove / regenerate (hooked by header buttons and context menu)
 # ---------------------------------------------------------------------------
 
-class PROSCENIUM_OT_add_prompt_block(bpy.types.Operator):
+class ANIMATICA_OT_add_prompt_block(bpy.types.Operator):
     """Add a new prompt block in the first available gap."""
 
-    bl_idname = "proscenium.add_prompt_block"
+    bl_idname = "animatica.add_prompt_block"
     bl_label = "Add Prompt Block"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        props = context.scene.proscenium
+        props = context.scene.animatica
         scene_end = context.scene.frame_end or 250
         gap = find_gap(props.prompt_blocks, min_length=10, scene_end=scene_end)
         if gap is None:
@@ -1128,22 +1128,22 @@ class PROSCENIUM_OT_add_prompt_block(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class PROSCENIUM_OT_remove_prompt_block(bpy.types.Operator):
+class ANIMATICA_OT_remove_prompt_block(bpy.types.Operator):
     """Remove the active prompt block."""
 
-    bl_idname = "proscenium.remove_prompt_block"
+    bl_idname = "animatica.remove_prompt_block"
     bl_label = "Remove Prompt Block"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
         return (
-            hasattr(context.scene, "proscenium")
-            and len(context.scene.proscenium.prompt_blocks) > 0
+            hasattr(context.scene, "animatica")
+            and len(context.scene.animatica.prompt_blocks) > 0
         )
 
     def execute(self, context):
-        props = context.scene.proscenium
+        props = context.scene.animatica
         if 0 <= props.active_block_index < len(props.prompt_blocks):
             props.prompt_blocks.remove(props.active_block_index)
             props.active_block_index = max(0, min(
@@ -1154,7 +1154,7 @@ class PROSCENIUM_OT_remove_prompt_block(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
+class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
     """Regenerate just one prompt block while keeping the rest of the preview.
 
     Pre-Accept only — operates on the live preview action. The two frames
@@ -1164,7 +1164,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
     workflow is "bump seed, right-click block, regenerate".
     """
 
-    bl_idname = "proscenium.regenerate_block"
+    bl_idname = "animatica.regenerate_block"
     bl_label = "Regenerate Block"
 
     block_index: IntProperty(
@@ -1183,7 +1183,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
         default=0, min=0, max=999999,
     )
 
-    # Modal state — kept as plain class attributes; see PROSCENIUM_OT_generate_pose
+    # Modal state — kept as plain class attributes; see ANIMATICA_OT_generate_pose
     # for why annotations are off-limits here under from __future__ import annotations.
     _timer = None
     _thread = None
@@ -1196,7 +1196,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        s = getattr(context.scene, "proscenium", None)
+        s = getattr(context.scene, "animatica", None)
         if s is None:
             return False
         if not getattr(s, "is_previewing", False):
@@ -1206,7 +1206,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
         return len(s.prompt_blocks) > 0
 
     def _resolve_block_index(self, context) -> int:
-        s = context.scene.proscenium
+        s = context.scene.animatica
         idx = self.block_index if self.block_index >= 0 else s.active_block_index
         if 0 <= idx < len(s.prompt_blocks):
             return idx
@@ -1218,7 +1218,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
         #      case, "I just regenerated with 42, let me bump to 43";
         #   2. the global Seed setting — first regen on a fresh block, so
         #      we follow whatever seed the user has loaded for the next gen.
-        s = context.scene.proscenium
+        s = context.scene.animatica
         idx = self._resolve_block_index(context)
         if idx < 0:
             self.report({'ERROR'}, "No prompt block selected")
@@ -1231,7 +1231,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
         layout = self.layout
         idx = self._resolve_block_index(context)
         if idx >= 0:
-            block = context.scene.proscenium.prompt_blocks[idx]
+            block = context.scene.animatica.prompt_blocks[idx]
             label = (block.prompt or "(empty prompt)").strip() or "(empty prompt)"
             if len(label) > 48:
                 label = label[:47] + "…"
@@ -1247,7 +1247,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
         from . import constraints_ui, gltf_to_blender, mmcp_client, request_builder
         from .operators import _live_target_armature_or_clear
 
-        s = context.scene.proscenium
+        s = context.scene.animatica
 
         idx = self._resolve_block_index(context)
         if idx < 0:
@@ -1280,7 +1280,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
         if preview_action is None or not preview_action.name.startswith(
             request_builder._GENERATED_ACTION_PREFIXES
         ):
-            self.report({'ERROR'}, "Active action isn't a Proscenium preview — generate first")
+            self.report({'ERROR'}, "Active action isn't a Animatica preview — generate first")
             return {'CANCELLED'}
 
         source_action = (
@@ -1324,7 +1324,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
 
         # Frames sent as constraints become KEYFRAME-typed anchors after the
         # splice; everything else from the bake gets typed GENERATED. Same
-        # contract as PROSCENIUM_OT_generate uses for the full-bake path.
+        # contract as ANIMATICA_OT_generate uses for the full-bake path.
         anchor_frames: set[int] = set()
         for c in req.get("constraints", []):
             t = c.get("type")
@@ -1373,7 +1373,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
             _tick_generation_elapsed,
         )
 
-        s = context.scene.proscenium
+        s = context.scene.animatica
 
         if event.type == 'ESC' or s.cancel_requested:
             self._cleanup(context)
@@ -1438,7 +1438,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
         return {'FINISHED'}
 
     def _cleanup(self, context):
-        s = context.scene.proscenium
+        s = context.scene.animatica
         if self._timer is not None:
             try:
                 context.window_manager.event_timer_remove(self._timer)
@@ -1454,7 +1454,7 @@ class PROSCENIUM_OT_regenerate_block(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 
 def draw_timeline_header(self, context):
-    """Appended to DOPESHEET_HT_header — adds Proscenium strip controls."""
+    """Appended to DOPESHEET_HT_header — adds Animatica strip controls."""
     if not hasattr(context, "space_data") or context.space_data is None:
         return
     if context.space_data.mode != "TIMELINE":
@@ -1462,8 +1462,8 @@ def draw_timeline_header(self, context):
 
     layout = self.layout
     layout.separator()
-    layout.operator("proscenium.add_prompt_block", text="", icon="ADD")
-    layout.operator("proscenium.remove_prompt_block", text="", icon="REMOVE")
+    layout.operator("animatica.add_prompt_block", text="", icon="ADD")
+    layout.operator("animatica.remove_prompt_block", text="", icon="REMOVE")
 
 
 # ---------------------------------------------------------------------------
@@ -1482,7 +1482,7 @@ def register_keymaps():
 
     # Left-click — strip select/drag (also handles lane resize)
     kmi = km.keymap_items.new(
-        "proscenium.timeline_strip_action",
+        "animatica.timeline_strip_action",
         type="LEFTMOUSE",
         value="PRESS",
     )
@@ -1491,7 +1491,7 @@ def register_keymaps():
     # Double-click on empty — add strip (uses same LEFTMOUSE but the
     # operator internally tracks double-click timing)
     kmi = km.keymap_items.new(
-        "proscenium.timeline_strip_add_click",
+        "animatica.timeline_strip_add_click",
         type="LEFTMOUSE",
         value="PRESS",
     )
@@ -1499,7 +1499,7 @@ def register_keymaps():
 
     # Right-click — context menu
     kmi = km.keymap_items.new(
-        "proscenium.timeline_strip_context_menu",
+        "animatica.timeline_strip_context_menu",
         type="RIGHTMOUSE",
         value="PRESS",
     )
@@ -1507,7 +1507,7 @@ def register_keymaps():
 
     # Delete key — remove active strip
     kmi = km.keymap_items.new(
-        "proscenium.timeline_strip_delete",
+        "animatica.timeline_strip_delete",
         type="DEL",
         value="PRESS",
     )
@@ -1515,7 +1515,7 @@ def register_keymaps():
 
     # Backspace — remove active strip
     kmi = km.keymap_items.new(
-        "proscenium.timeline_strip_delete",
+        "animatica.timeline_strip_delete",
         type="BACK_SPACE",
         value="PRESS",
     )
@@ -1533,19 +1533,19 @@ def unregister_keymaps():
 # ---------------------------------------------------------------------------
 
 _classes = (
-    PROSCENIUM_OT_timeline_strip_action,
-    PROSCENIUM_OT_timeline_strip_add_click,
-    PROSCENIUM_OT_add_strip_between_keyframes,
-    PROSCENIUM_OT_timeline_strip_delete,
-    PROSCENIUM_OT_timeline_strip_context_menu,
-    PROSCENIUM_OT_timeline_strip_toggle_enabled,
-    PROSCENIUM_OT_reuse_block_seed,
-    PROSCENIUM_OT_clear_block_seed,
-    PROSCENIUM_OT_timeline_strip_inline_edit,
-    PROSCENIUM_OT_edit_strip_prompt,
-    PROSCENIUM_OT_add_prompt_block,
-    PROSCENIUM_OT_remove_prompt_block,
-    PROSCENIUM_OT_regenerate_block,
+    ANIMATICA_OT_timeline_strip_action,
+    ANIMATICA_OT_timeline_strip_add_click,
+    ANIMATICA_OT_add_strip_between_keyframes,
+    ANIMATICA_OT_timeline_strip_delete,
+    ANIMATICA_OT_timeline_strip_context_menu,
+    ANIMATICA_OT_timeline_strip_toggle_enabled,
+    ANIMATICA_OT_reuse_block_seed,
+    ANIMATICA_OT_clear_block_seed,
+    ANIMATICA_OT_timeline_strip_inline_edit,
+    ANIMATICA_OT_edit_strip_prompt,
+    ANIMATICA_OT_add_prompt_block,
+    ANIMATICA_OT_remove_prompt_block,
+    ANIMATICA_OT_regenerate_block,
 )
 
 

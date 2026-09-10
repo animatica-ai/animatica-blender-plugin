@@ -1,6 +1,6 @@
 # Sign in & setup
 
-Open **Edit → Preferences → Add-ons → Proscenium**.
+Open **Edit → Preferences → Add-ons → Animatica**.
 
 ## Animatica Cloud (recommended)
 
@@ -24,4 +24,4 @@ Only if you already run motion generation on your computer or local network:
 
 Most artists can skip this and stay on Animatica Cloud.
 
-Next: [Using Proscenium](usage.md)
+Next: [Using Animatica](usage.md)

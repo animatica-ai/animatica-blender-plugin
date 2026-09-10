@@ -22,17 +22,17 @@ machine instead; see [configuration](docs/configuration.md).
 
 ## Install
 
-1. Download the latest **proscenium-blender-….zip** from
+1. Download the latest **animatica-blender-….zip** from
    [GitHub Releases](https://github.com/animatica-ai/proscenium-blender/releases)
 2. In Blender: **Edit → Preferences → Add-ons → Install…** → choose the zip
-3. Enable **Proscenium — AI Motion Generation**
+3. Enable **Animatica — AI Motion Generation**
 
 You need **Blender 5.0+** and a free [Animatica](https://animatica.ai) account.
 
 ## Get started in Blender
 
-1. **Edit → Preferences → Add-ons → Proscenium** — sign in with your Animatica account
-2. Open the **N** panel in the 3D View (**Proscenium** tab) → **Connect** → choose a model
+1. **Edit → Preferences → Add-ons → Animatica** — sign in with your Animatica account
+2. Open the **N** panel in the 3D View (**Animatica** tab) → **Connect** → choose a model
 3. Pick your **target armature** (or **Import skeleton** if you're starting from ours)
 4. Add prompts and constraints, then **Generate Motion**
 5. **Accept** to keep the animation, or **Reject** to undo
@@ -47,7 +47,7 @@ Written guide: [docs/usage.md](docs/usage.md) · Sign-in and self-hosted: [docs/
 Stuck or want to share feedback?
 
 - **[Tutorial videos](https://www.youtube.com/watch?v=Wc349qOwjfM&list=PLAJ2UfUYhFQKZpFS8eh1eGUWJ0PAys1n1)** on YouTube
-- **[Animatica Discord](https://discord.com/invite/A8CrURBewz)** — or **Need help?** in the Proscenium sidebar
+- **[Animatica Discord](https://discord.com/invite/A8CrURBewz)** — or **Need help?** in the Animatica sidebar
 
 ## Documentation
 
@@ -56,7 +56,7 @@ Stuck or want to share feedback?
 | [Tutorial videos](https://www.youtube.com/watch?v=Wc349qOwjfM&list=PLAJ2UfUYhFQKZpFS8eh1eGUWJ0PAys1n1) | YouTube walkthrough playlist |
 | [Install](docs/installation.md) | Download and enable the addon |
 | [Sign in & setup](docs/configuration.md) | Animatica Cloud or self-hosted |
-| [Using Proscenium](docs/usage.md) | Full workflow in Blender |
+| [Using Animatica](docs/usage.md) | Full workflow in Blender |
 | [Tips & limits](docs/limitations.md) | What to expect |
 | [All guides](docs/README.md) | Documentation index |
 

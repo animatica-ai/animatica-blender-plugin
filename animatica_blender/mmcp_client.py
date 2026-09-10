@@ -10,6 +10,8 @@ Public surface:
   * ``MmcpClient.generate(req)`` — synchronous ``POST /generate`` returning a
     parsed glTF JSON document. Handles the optional ``202 Accepted`` async
     poll loop transparently when the model declares ``supports_async``.
+  * ``client_headers()`` — the ``X-Animatica-*`` attribution headers the API
+    buckets generations by.
 
 Threading: the addon calls these from a worker thread; nothing here touches
 ``bpy`` so it's safe.
@@ -18,12 +20,88 @@ Threading: the addon calls these from a worker thread; nothing here touches
 from __future__ import annotations
 
 import json
+import sys
 import time
+import uuid
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import bpy
+
+
+# ---------------------------------------------------------------------------
+# Client attribution
+#
+# The API records which DCC a generation came from, so that DCC mix and
+# failure rate per host version are answerable and a new addon build can be
+# watched against the old one. Sent on the request that STARTS a generation
+# and nowhere else: the ``202`` poll follow-ups and ``GET /capabilities`` are
+# not generations, and labelling them would skew whatever the buckets are
+# counted against.
+#
+# Attribution only, never auth: a wrong or missing value costs a row in a
+# dashboard, never a request, so every value below degrades to an omitted
+# header rather than raising.
+# ---------------------------------------------------------------------------
+
+#: Must be exactly one of the API's accepted values (``blender``, ``maya``,
+#: ``3dsmax``, ``motionbuilder``, ``desktop``, ``web``, ``cli``). Anything else
+#: is recorded as ``other``, which is indistinguishable from not reporting.
+CLIENT_NAME = "blender"
+
+#: The API drops any value longer than this.
+_MAX_HEADER_VALUE = 64
+
+#: One id per addon launch, shared by every generation fired from it. Module
+#: scope, so enabling the addon — or reloading it — starts a fresh session.
+SESSION_ID = str(uuid.uuid4())
+
+
+def _addon_version() -> str:
+    """The addon build, from ``bl_info``.
+
+    Read off the already-imported package rather than imported from it:
+    ``__init__`` imports this module, so a top-level import would be circular.
+    ``bl_info`` is assigned above those imports, so it is always in place by
+    the time this runs.
+    """
+    mod = sys.modules.get(__package__ or "")
+    version = (getattr(mod, "bl_info", None) or {}).get("version")
+    return ".".join(str(part) for part in version) if version else ""
+
+
+def _host_version() -> str:
+    """The Blender this is running in, as a bare numeric triple.
+
+    ``bpy.app.version_string`` carries build noise ("4.2.0 Alpha") that would
+    fragment the per-host-version view this attribution exists to feed, so the
+    numeric tuple is sent instead.
+    """
+    version = getattr(bpy.app, "version", None)
+    return ".".join(str(part) for part in version) if version else ""
+
+
+def _build_client_headers() -> dict[str, str]:
+    hdrs = {"X-Animatica-Client": CLIENT_NAME}
+    addon = _addon_version()
+    if addon:
+        hdrs["X-Animatica-Client-Version"] = addon[:_MAX_HEADER_VALUE]
+    host = _host_version()
+    if host:
+        hdrs["X-Animatica-Host-Version"] = host[:_MAX_HEADER_VALUE]
+    hdrs["X-Animatica-Session-Id"] = SESSION_ID
+    return hdrs
+
+
+# Computed once, at import, on the main thread: ``generate`` posts from a
+# worker thread and must not read ``bpy`` there.
+_CLIENT_HEADERS: dict[str, str] = _build_client_headers()
+
+
+def client_headers() -> dict[str, str]:
+    """The attribution headers for a generation request (a fresh copy)."""
+    return dict(_CLIENT_HEADERS)
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +431,9 @@ class MmcpClient:
                 headers=_auth_headers({
                     "Content-Type": "application/json; charset=utf-8",
                     "Accept":       "model/gltf+json",
+                    # This is the request that starts a generation — the one
+                    # place the API wants attributed.
+                    **client_headers(),
                 }),
             )
             return urlopen(req, timeout=self.timeout)

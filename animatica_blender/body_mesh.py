@@ -3,7 +3,7 @@
 The Kimodo training pipeline ships a SMPL-X-derived skinned mesh at
 ``kimodo/assets/skeletons/somaskel77/skin_standard.npz`` — 18 056 verts,
 36 108 tris, 77 joints with LBS weights. We bundle a copy under
-``proscenium_blender/assets/somaskel77_skin.npz`` so users can preview
+``animatica_blender/assets/somaskel77_skin.npz`` so users can preview
 their generation on a real body, not a stick figure.
 
 The mesh is rigged to SOMA77 (full skeleton), but the canonical
@@ -162,7 +162,7 @@ def load_body_mesh(
 
     # Tag for traceability — the panel can detect "this armature already
     # has a body" and skip re-import.
-    body["proscenium_body_for"] = arm_obj.name
+    body["animatica_body_for"] = arm_obj.name
 
     return body
 
@@ -290,10 +290,10 @@ def _repose_a_to_t(
 
 def has_body_mesh(arm_obj: bpy.types.Object) -> bool:
     """Cheap check: does any object in the same scene already claim
-    ``arm_obj`` as its proscenium-body parent?"""
+    ``arm_obj`` as its animatica-body parent?"""
     target = arm_obj.name
     for obj in bpy.data.objects:
-        if obj.get("proscenium_body_for") == target:
+        if obj.get("animatica_body_for") == target:
             return True
     return False
 

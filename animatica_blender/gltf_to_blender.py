@@ -62,6 +62,45 @@ def sample_frame_count(gltf: dict[str, Any], sample_index: int = 0) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Joint name -> bone resolution
+#
+# MMCP joint names are always bare (``Hips``, ``LeftForeArm``). Rigs that come
+# out of Maya / MotionBuilder — the bundled Animatic character among them —
+# carry the source scene's namespace on every bone (``animatica:Hips``), so an
+# exact lookup finds nothing and every channel would be silently skipped.
+# Resolving through the namespace drives those rigs without renaming the
+# user's bones, which would break their round-trip back to the DCC.
+# ---------------------------------------------------------------------------
+
+def bone_namespace(pose) -> str:
+    """The namespace prefix every bone of ``pose`` shares, else ``""``.
+
+    Only a prefix carried by the *whole* rig counts: one stray colon-bearing
+    bone on an otherwise bare rig is a bone name, not a namespace, and
+    guessing there would map joints onto the wrong bones.
+    """
+    prefixes = {pb.name.rsplit(":", 1)[0] + ":" for pb in pose.bones if ":" in pb.name}
+    if len(prefixes) != 1:
+        return ""
+    prefix = next(iter(prefixes))
+    return prefix if all(pb.name.startswith(prefix) for pb in pose.bones) else ""
+
+
+def resolve_joint_bone(pose, joint_name: str, namespace: str = ""):
+    """The pose bone an MMCP joint drives, or ``None``.
+
+    Exact name first so unprefixed rigs are untouched by this, then the
+    namespaced name. Callers must build data paths from the returned bone's
+    ``.name``, not from the joint name, or the fcurve will point at a bone
+    that does not exist.
+    """
+    bone = pose.bones.get(joint_name)
+    if bone is None and namespace:
+        bone = pose.bones.get(namespace + joint_name)
+    return bone
+
+
 def read_extension_metadata(gltf: dict[str, Any]) -> dict[str, Any]:
     return (gltf.get("extensions") or {}).get("MMCP_motion") or {}
 
@@ -71,7 +110,7 @@ def bake_gltf_to_armature(
     armature_obj: bpy.types.Object,
     *,
     sample_index: int = 0,
-    action_name: str = "Proscenium_Motion",
+    action_name: str = "Animatica_Motion",
     start_frame: int = 1,
     anchor_frames: set[int] | None = None,
 ) -> bpy.types.Action:
@@ -140,6 +179,7 @@ def bake_gltf_to_armature(
 
     # Make sure pose-bone rotation modes are quaternion (we're feeding quats).
     pose = armature_obj.pose
+    _ns = bone_namespace(pose)
     for pb in pose.bones:
         pb.rotation_mode = 'QUATERNION'
 
@@ -167,7 +207,7 @@ def bake_gltf_to_armature(
         if node_idx is None or node_idx >= len(nodes):
             continue
         joint_name = nodes[node_idx].get("name", "")
-        bone = pose.bones.get(joint_name)
+        bone = resolve_joint_bone(pose, joint_name, _ns)
         if bone is None:
             skipped.append(joint_name)
             continue
@@ -202,7 +242,7 @@ def bake_gltf_to_armature(
         if node_idx is None or node_idx >= len(nodes):
             continue
         joint_name = nodes[node_idx].get("name", "")
-        bone = pose.bones.get(joint_name)
+        bone = resolve_joint_bone(pose, joint_name, _ns)
         if bone is None:
             skipped.append(joint_name)
             continue
@@ -228,7 +268,7 @@ def bake_gltf_to_armature(
 
     if skipped:
         # Caller can decide whether to surface this as a report.
-        new_action["proscenium_skipped_joints"] = sorted(set(skipped))
+        new_action["animatica_skipped_joints"] = sorted(set(skipped))
 
     # If the rig is a Mixamo control rig, hand off to the Mixamo addon's
     # battle-tested "Apply Animation to Control Rig" operator — it knows
@@ -338,6 +378,8 @@ def splice_gltf_into_action(
         return decoded_outputs[out_idx]
 
     pose = armature_obj.pose
+    _ns = bone_namespace(pose)
+
     for pb in pose.bones:
         pb.rotation_mode = 'QUATERNION'
 
@@ -402,7 +444,7 @@ def splice_gltf_into_action(
         if node_idx is None or node_idx >= len(nodes):
             continue
         joint_name = nodes[node_idx].get("name", "")
-        bone = pose.bones.get(joint_name)
+        bone = resolve_joint_bone(pose, joint_name, _ns)
         if bone is None:
             continue
 
@@ -433,7 +475,7 @@ def splice_gltf_into_action(
         if node_idx is None or node_idx >= len(nodes):
             continue
         joint_name = nodes[node_idx].get("name", "")
-        bone = pose.bones.get(joint_name)
+        bone = resolve_joint_bone(pose, joint_name, _ns)
         if bone is None:
             continue
 
@@ -530,7 +572,7 @@ def bake_gltf_to_actions_per_block(
     Returns the new actions in input order. The armature's active action is
     cleared so the caller can NLA-push the strips and let the timeline
     drive playback. Joints that don't exist on the rig are silently
-    skipped (recorded on the first action's ``proscenium_skipped_joints``
+    skipped (recorded on the first action's ``animatica_skipped_joints``
     custom prop for the operator to surface).
 
     Control-rig handling is intentionally NOT applied here — this slice
@@ -588,6 +630,8 @@ def bake_gltf_to_actions_per_block(
         return decoded_outputs[oi]
 
     pose = armature_obj.pose
+    _ns = bone_namespace(pose)
+
     for pb in pose.bones:
         pb.rotation_mode = 'QUATERNION'
 
@@ -660,7 +704,7 @@ def bake_gltf_to_actions_per_block(
             if node_idx is None or node_idx >= len(nodes):
                 continue
             joint_name = nodes[node_idx].get("name", "")
-            bone = pose.bones.get(joint_name)
+            bone = resolve_joint_bone(pose, joint_name, _ns)
             if bone is None:
                 skipped.append(joint_name)
                 continue
@@ -671,7 +715,7 @@ def bake_gltf_to_actions_per_block(
             ML     = bone.bone.matrix_local.to_3x3()
             ML_inv = ML.transposed()
 
-            data_path = f'pose.bones["{joint_name}"].rotation_quaternion'
+            data_path = f'pose.bones["{bone.name}"].rotation_quaternion'
             buf_w: list[float] = []
             buf_x: list[float] = []
             buf_y: list[float] = []
@@ -708,7 +752,7 @@ def bake_gltf_to_actions_per_block(
             if node_idx is None or node_idx >= len(nodes):
                 continue
             joint_name = nodes[node_idx].get("name", "")
-            bone = pose.bones.get(joint_name)
+            bone = resolve_joint_bone(pose, joint_name, _ns)
             if bone is None:
                 skipped.append(joint_name)
                 continue
@@ -720,7 +764,7 @@ def bake_gltf_to_actions_per_block(
             ML        = bone.bone.matrix_local.to_3x3()
             ML_T      = ML.transposed()
 
-            data_path = f'pose.bones["{joint_name}"].location'
+            data_path = f'pose.bones["{bone.name}"].location'
             buf_x: list[float] = []
             buf_y: list[float] = []
             buf_z: list[float] = []
@@ -750,7 +794,7 @@ def bake_gltf_to_actions_per_block(
         actions.append(action)
 
     if skipped and actions:
-        actions[0]["proscenium_skipped_joints"] = sorted(set(skipped))
+        actions[0]["animatica_skipped_joints"] = sorted(set(skipped))
 
     # We never touched ``animation_data.action`` (we wrote fcurves directly
     # via the layered-Action API), so there's nothing to clear here. The
@@ -966,7 +1010,7 @@ def _desired_pose_matrix(armature_obj, ctrl_pb, spec) -> Matrix:
     return ctrl_pb.matrix.copy()
 
 
-_TEMP_TAG = "_proscenium_bake_"
+_TEMP_TAG = "_animatica_bake_"
 
 
 def _detect_control_rig_kind(armature_obj: bpy.types.Object) -> str | None:
@@ -1054,7 +1098,7 @@ def _bake_via_metarig_detour(
             new_fc.update()
             copied += 1
 
-    print(f"[proscenium] metarig detour: copied {copied} DEF-* fcurves to bare-name targets")
+    print(f"[animatica] metarig detour: copied {copied} DEF-* fcurves to bare-name targets")
 
     try:
         baked = rigify_bake.apply_anim_to_rigify(
@@ -1063,9 +1107,9 @@ def _bake_via_metarig_detour(
             frame_start=int(frame_start),
             frame_end=int(frame_end),
         )
-        print(f"[proscenium] baked rigify control bones (via metarig): {baked}")
+        print(f"[animatica] baked rigify control bones (via metarig): {baked}")
     except Exception as exc:  # noqa: BLE001
-        print(f"[proscenium] metarig-detour bake failed: {exc}")
+        print(f"[animatica] metarig-detour bake failed: {exc}")
         import traceback
         traceback.print_exc()
     finally:
@@ -1110,7 +1154,7 @@ def _bake_to_control_rig(
     """
     kind = _detect_control_rig_kind(armature_obj)
     if kind is None:
-        print("[proscenium] target armature is not a recognized control rig "
+        print("[animatica] target armature is not a recognized control rig "
               "(no mr_control_rig or rig_id marker) — leaving DEF-bone keys")
         return
 
@@ -1154,8 +1198,8 @@ def _bake_to_control_rig(
         bpy.context.view_layer.objects.active = armature_obj
         bpy.ops.object.duplicate(linked=False)
         src_arm = bpy.context.view_layer.objects.active
-        src_arm.name = f"{armature_obj.name}_proscenium_src"
-        src_arm["proscenium_temp_source"] = True
+        src_arm.name = f"{armature_obj.name}_animatica_src"
+        src_arm["animatica_temp_source"] = True
 
         # 2. Strip non-DEF bones from the source.
         #
@@ -1265,9 +1309,9 @@ def _bake_to_control_rig(
                 frame_start=int(frame_start),
                 frame_end=int(frame_end),
             )
-        print(f"[proscenium] baked {kind} control bones: {baked}")
+        print(f"[animatica] baked {kind} control bones: {baked}")
     except Exception as exc:  # noqa: BLE001 — best-effort delegate
-        print(f"[proscenium] control-rig bake failed: {exc}")
+        print(f"[animatica] control-rig bake failed: {exc}")
         import traceback
         traceback.print_exc()
     finally:
@@ -1275,7 +1319,7 @@ def _bake_to_control_rig(
         # tagged with ``mix_to_del`` for parity with the addon).
         for o in list(bpy.data.objects):
             try:
-                if o.get("mix_to_del") or o.get("proscenium_temp_source"):
+                if o.get("mix_to_del") or o.get("animatica_temp_source"):
                     bpy.data.objects.remove(o, do_unlink=True)
             except Exception:
                 pass
@@ -1642,10 +1686,20 @@ def resolve_pose_bake_joint_names(
     On a Mixamo-style control rig, selecting an IK handle or other control
     bone expands to the deform bone(s) that drive the channels the server
     returns (those constraints are discovered via ``_build_control_specs``).
+
+    On a namespaced rig the bone names carry a prefix the server's joint
+    names do not, so they are stripped on the way out — this is the inverse
+    of :func:`resolve_joint_bone`, which adds the prefix on the way in.
     """
+    def _bare(names: set[str]) -> set[str]:
+        ns = bone_namespace(armature_obj.pose)
+        if not ns:
+            return names
+        return {n[len(ns):] if n.startswith(ns) else n for n in names}
+
     out = set(selected_pose_bone_names)
     if not request_builder.is_control_rig(armature_obj):
-        return out
+        return _bare(out)
     specs = _build_control_specs(armature_obj)
     extras: set[str] = set()
     for name in selected_pose_bone_names:
@@ -1661,7 +1715,7 @@ def resolve_pose_bake_joint_names(
             extras.add(spec[1])
             extras.add(spec[2])
     out |= extras
-    return out
+    return _bare(out)
 
 
 def bake_single_pose(
@@ -1707,9 +1761,11 @@ def bake_single_pose(
     if armature_obj.animation_data is None:
         armature_obj.animation_data_create()
     if armature_obj.animation_data.action is None:
-        armature_obj.animation_data.action = bpy.data.actions.new("Proscenium_Pose")
+        armature_obj.animation_data.action = bpy.data.actions.new("Animatica_Pose")
 
     pose = armature_obj.pose
+    _ns = bone_namespace(pose)
+
     for pb in pose.bones:
         pb.rotation_mode = 'QUATERNION'
 
@@ -1737,7 +1793,7 @@ def bake_single_pose(
         if node_idx is None or node_idx >= len(nodes):
             continue
         joint_name = nodes[node_idx].get("name", "")
-        bone = pose.bones.get(joint_name)
+        bone = resolve_joint_bone(pose, joint_name, _ns)
         if bone is None:
             continue
         if joint_name_filter is not None and joint_name not in joint_name_filter:

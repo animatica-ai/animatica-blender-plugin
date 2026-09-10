@@ -3,9 +3,9 @@
 The MMCP protocol has three constraint primitives. Each one is exposed in the
 addon as a Blender object the artist can see and edit in the viewport:
 
-  root_path        →  a Bezier curve named ``Proscenium_RootPath_*`` with
-                      a custom prop ``proscenium_is_root_path = True``.
-  effector_target  →  an Empty with ``proscenium_target_joint = "<name>"``,
+  root_path        →  a Bezier curve named ``Animatica_RootPath_*`` with
+                      a custom prop ``animatica_is_root_path = True``.
+  effector_target  →  an Empty with ``animatica_target_joint = "<name>"``,
                       location-keyframed across the timeline.
   pose_keyframe    →  derived from the target armature's existing keyframes
                       in its source action; no dedicated object.
@@ -253,8 +253,8 @@ def walk_scene_constraints(scene: bpy.types.Scene) -> dict[str, list[bpy.types.O
 # Operators — Add / Remove / Focus
 # ---------------------------------------------------------------------------
 
-class PROSCENIUM_OT_add_root_path(Operator):
-    bl_idname = "proscenium.add_root_path"
+class ANIMATICA_OT_add_root_path(Operator):
+    bl_idname = "animatica.add_root_path"
     bl_label = "Add Root Path"
     bl_description = (
         "Create a Bezier curve on the floor plane that the character will follow. "
@@ -299,7 +299,7 @@ class PROSCENIUM_OT_add_root_path(Operator):
         # 2D curve: Blender stores only the XY plane (floor). That matches
         # MMCP's root_path primitive, which is a smooth_root xz trajectory —
         # the protocol has no notion of vertical root motion.
-        curve_data = bpy.data.curves.new("Proscenium_RootPath", type='CURVE')
+        curve_data = bpy.data.curves.new("Animatica_RootPath", type='CURVE')
         curve_data.dimensions = '2D'
         curve_data.resolution_u = 12
         spline = curve_data.splines.new('BEZIER')
@@ -310,7 +310,7 @@ class PROSCENIUM_OT_add_root_path(Operator):
             pt.handle_right_type = 'AUTO'
 
         existing = sum(1 for o in scene.objects if o.get(constants.PROP_IS_ROOT_PATH))
-        obj_name = f"Proscenium_RootPath_{existing + 1:02d}"
+        obj_name = f"Animatica_RootPath_{existing + 1:02d}"
         obj = bpy.data.objects.new(obj_name, curve_data)
         obj[constants.PROP_IS_ROOT_PATH]    = True
         obj[constants.PROP_MATCH_DIRECTION] = self.match_direction
@@ -353,7 +353,7 @@ def _root_keyframe_points(scene: bpy.types.Scene) -> list[Vector]:
     has no root location keys in the scene range — the operator then falls
     back to a default line.
     """
-    settings = scene.proscenium
+    settings = scene.animatica
     arm = settings.target_armature
     if arm is None or arm.type != 'ARMATURE':
         return []
@@ -403,7 +403,7 @@ def _joint_items_callback(self, context):
     over-constrains the IK solver. Joints absent from the armature are
     filtered out so the popup only offers what can actually be pinned.
     """
-    settings = context.scene.proscenium
+    settings = context.scene.animatica
     arm = settings.target_armature
     if arm is None or arm.type != 'ARMATURE':
         return [("", "(set a target armature first)", "")]
@@ -416,8 +416,8 @@ def _joint_items_callback(self, context):
     return items or [("", "(armature has no canonical end-effector joints)", "")]
 
 
-class PROSCENIUM_OT_add_effector_target(Operator):
-    bl_idname = "proscenium.add_effector_target"
+class ANIMATICA_OT_add_effector_target(Operator):
+    bl_idname = "animatica.add_effector_target"
     bl_label = "Add Effector Pin"
     bl_description = (
         "Pin a named joint to a moving Blender Empty. Each location keyframe "
@@ -442,7 +442,7 @@ class PROSCENIUM_OT_add_effector_target(Operator):
             self.report({'ERROR'}, "Pick a joint")
             return {'CANCELLED'}
 
-        settings = context.scene.proscenium
+        settings = context.scene.animatica
         arm = settings.target_armature
         if arm is None:
             self.report({'ERROR'}, "Set a target armature first")
@@ -459,7 +459,7 @@ class PROSCENIUM_OT_add_effector_target(Operator):
         else:
             start_pos = Vector((0.0, 1.0, 0.0))
 
-        empty = bpy.data.objects.new(f"Proscenium_{self.joint}_Target", None)
+        empty = bpy.data.objects.new(f"Animatica_{self.joint}_Target", None)
         empty.empty_display_type = 'SPHERE'
         empty.empty_display_size = constants.EFFECTOR_EMPTY_SIZE
         empty.location           = start_pos
@@ -479,8 +479,8 @@ class PROSCENIUM_OT_add_effector_target(Operator):
         return {'FINISHED'}
 
 
-class PROSCENIUM_OT_remove_constraint_object(Operator):
-    bl_idname = "proscenium.remove_constraint_object"
+class ANIMATICA_OT_remove_constraint_object(Operator):
+    bl_idname = "animatica.remove_constraint_object"
     bl_label = "Remove Constraint Object"
     bl_description = "Delete the named constraint object from the scene"
     bl_options = {'REGISTER', 'UNDO'}
@@ -497,8 +497,8 @@ class PROSCENIUM_OT_remove_constraint_object(Operator):
         return {'FINISHED'}
 
 
-class PROSCENIUM_OT_focus_constraint_object(Operator):
-    bl_idname = "proscenium.focus_constraint_object"
+class ANIMATICA_OT_focus_constraint_object(Operator):
+    bl_idname = "animatica.focus_constraint_object"
     bl_label = "Focus Constraint Object"
     bl_description = "Select and view-frame the named constraint object"
     bl_options = {'REGISTER', 'UNDO'}
@@ -870,7 +870,7 @@ def sample_pose_at_frame(
     """Sample one ``pose_keyframe`` constraint from any action at one frame.
 
     Unlike :func:`sample_pose_keyframes`, this does **not** consult the
-    feedback-loop guard that refuses to read from Proscenium-generated
+    feedback-loop guard that refuses to read from Animatica-generated
     actions. The caller decides which action to read — used by single-block
     regen to grab boundary observations from the preview bake, which is
     exactly the case ``sample_pose_keyframes`` is built to refuse.
@@ -1024,10 +1024,10 @@ def _bone_name_from_data_path(data_path: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 _classes = (
-    PROSCENIUM_OT_add_root_path,
-    PROSCENIUM_OT_add_effector_target,
-    PROSCENIUM_OT_remove_constraint_object,
-    PROSCENIUM_OT_focus_constraint_object,
+    ANIMATICA_OT_add_root_path,
+    ANIMATICA_OT_add_effector_target,
+    ANIMATICA_OT_remove_constraint_object,
+    ANIMATICA_OT_focus_constraint_object,
 )
 
 

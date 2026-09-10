@@ -7,7 +7,7 @@ own the action handling. The addon's operator always calls
 want and rules out single-frame use (the operator bakes the action's
 full frame range). Owning the bake lets us:
 
-  * Keep our action name (e.g. ``Proscenium_Motion: <prompt>``).
+  * Keep our action name (e.g. ``Animatica_Motion: <prompt>``).
   * Take an explicit ``frame_start``/``frame_end`` — works for the full
     multi-frame generate path *and* the single-frame text-to-pose path.
   * Skip the addon's ``redefine_source_rest_pose`` step. The addon needs
@@ -288,7 +288,7 @@ def apply_anim_to_control_rig(
     """
     use_prefix, prefix = _detect_mixamo_prefix(src_arm)
 
-    # Mark source for cleanup (callers also tag with "proscenium_temp_source",
+    # Mark source for cleanup (callers also tag with "animatica_temp_source",
     # but the cleanup loop tolerates either marker).
     src_arm["mix_to_del"] = True
 

@@ -59,7 +59,7 @@ def compute_frame_range(
       * Enabled ``PromptBlock`` ranges (the addon's "actions" — text segments
         drawn on the timeline strip).
       * The target armature's active source action keyframe span (skipping
-        Proscenium-generated bakes so a regenerate doesn't latch onto its
+        Animatica-generated bakes so a regenerate doesn't latch onto its
         own previous output).
 
     Falls back to ``scene.frame_start..scene.frame_end`` only when nothing's
@@ -591,7 +591,7 @@ def t_pose_q_matrix(armature_obj: bpy.types.Object, bone_name: str | None):
       Formula: ``R_A = Q[parent] · R_T · Q[child].T``.
 
     Mirrors the ``RestPoseAugmentor`` reference at
-    ``proscenium/retarget/augment.py`` — same per-bone change-of-rest math.
+    ``animatica/retarget/augment.py`` — same per-bone change-of-rest math.
     Returns identity for any bone whose request layout matches the actual
     armature (everything outside the arm chain).
     """
@@ -937,8 +937,9 @@ def build_segments(
 # ---------------------------------------------------------------------------
 
 _GENERATED_ACTION_PREFIXES: tuple[str, ...] = (
-    "Proscenium_Motion",     # current motion-bake naming
-    "Proscenium_Generated",  # legacy motion-bake naming
+    "Animatica_Motion",      # current motion-bake naming
+    "Proscenium_Motion",     # pre-rename motion-bake naming
+    "Proscenium_Generated",  # legacy pre-rename motion-bake naming
 )
 # Kept for back-compat in case anything imports it; ``str.startswith`` accepts
 # either a string or a tuple, so the change is transparent at call sites.

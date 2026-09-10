@@ -1,6 +1,6 @@
 """Root-path curve ↔ root-bone location keyframes.
 
-Mental model: each Bezier control point on a ``proscenium_is_root_path``
+Mental model: each Bezier control point on a ``animatica_is_root_path``
 curve is one keyframe on the target armature's **root pose bone**
 ``location`` fcurve. Add a control point → new keyframe. Drag a
 control point → the keyframe's value updates. Delete one → the
@@ -38,7 +38,7 @@ from mathutils import Vector
 from . import constants
 
 
-_ACTION_NAME = "Proscenium_Path"
+_ACTION_NAME = "Animatica_Path"
 _EPSILON     = 1e-4
 
 
@@ -188,7 +188,7 @@ def _snap_skips_target_during_generation_preview(
     obvious foot sliding. Skip sync while the target armature is mid-flight
     or showing a preview bake.
     """
-    s = getattr(scene, "proscenium", None)
+    s = getattr(scene, "animatica", None)
     if s is None:
         return False
     if arm != getattr(s, "target_armature", None):
@@ -273,7 +273,7 @@ def sync_path_to_armature(
 
 @persistent
 def _on_depsgraph_update(scene: bpy.types.Scene, depsgraph: bpy.types.Depsgraph) -> None:
-    settings = getattr(scene, "proscenium", None)
+    settings = getattr(scene, "animatica", None)
     if settings is None or not getattr(settings, "preview_path_snap", False):
         return
     arm = settings.target_armature

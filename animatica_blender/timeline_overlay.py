@@ -80,7 +80,7 @@ inline_edit_state = {
 # so the handle survives module reloads — otherwise a reload (sys.modules pop
 # + re-import) resets our local to None while Blender still holds the old
 # handle, and register_draw_handler() would add a second one → duplicate draw.
-_NS_KEY = "_proscenium_timeline_overlay_handle"
+_NS_KEY = "_animatica_timeline_overlay_handle"
 _draw_handle = None
 
 
@@ -197,10 +197,10 @@ def hit_test_strips(context, mouse_x, mouse_y):
         zone: 'body', 'edge_start', 'edge_end', or None
     """
     scene = context.scene
-    if not hasattr(scene, "proscenium"):
+    if not hasattr(scene, "animatica"):
         return {"index": None, "zone": None}
 
-    props = scene.proscenium
+    props = scene.animatica
     if len(props.prompt_blocks) == 0:
         return {"index": None, "zone": None}
 
@@ -306,10 +306,10 @@ def draw_timeline_strips():
         return
 
     scene = context.scene
-    if not hasattr(scene, "proscenium"):
+    if not hasattr(scene, "animatica"):
         return
 
-    props = scene.proscenium
+    props = scene.animatica
     from . import properties
 
     # Safety net: if the target rig vanished but the depsgraph handler has
@@ -360,7 +360,7 @@ def draw_timeline_strips():
     # Resize grip indicator (subtle dots at top border centre)
     _draw_resize_handle(shader, region.width, lane_y1)
 
-    # "PROSCENIUM" label on the left
+    # "ANIMATICA" label on the left
     _draw_lane_label(lane_y0, lane_y1)
 
     for i, fr in enumerate(props.prompt_blocks):
@@ -459,15 +459,15 @@ def draw_timeline_strips():
 
 
 def _draw_lane_label(lane_y0, lane_y1):
-    """Draw 'PROSCENIUM' label at the left edge of the lane."""
+    """Draw 'ANIMATICA' label at the left edge of the lane."""
     font_id = 0
     blf.size(font_id, _scaled_font_size(LABEL_SIZE))
-    tw, th = blf.dimensions(font_id, "PROSCENIUM")
+    tw, th = blf.dimensions(font_id, "ANIMATICA")
     label_x = 4
     label_y = lane_y0 + (lane_y1 - lane_y0 - th) / 2
     blf.position(font_id, label_x, label_y, 0)
     blf.color(font_id, *LABEL_COLOR)
-    blf.draw(font_id, "PROSCENIUM")
+    blf.draw(font_id, "ANIMATICA")
 
 
 def _draw_resize_handle(shader, region_width, lane_y1):

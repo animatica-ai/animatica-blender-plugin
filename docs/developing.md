@@ -7,7 +7,7 @@ For people working on the addon source or running a custom MMCP server.
 ```bash
 git clone https://github.com/animatica-ai/proscenium-blender
 cd proscenium-blender
-make zip          # → dist/proscenium-blender-X.Y.Z.zip
+make zip          # → dist/animatica-blender-X.Y.Z.zip
 make install      # symlink into Blender addons (reload addon after edits)
 make uninstall
 ```
@@ -19,7 +19,7 @@ Override: `make install BLENDER_ADDONS_DIR=/path/to/scripts/addons`
 
 ## Repository layout
 
-Python package: `proscenium_blender/` — operators in `operators.py`, UI in
+Python package: `animatica_blender/` — operators in `operators.py`, UI in
 `panels.py`, request assembly in `request_builder.py`, animation bake in
 `gltf_to_blender.py`.
 
@@ -32,7 +32,7 @@ The addon is an MMCP client (no ML in Blender). Generation runs on the server.
 - Reference self-hosted server: [motionmcp-kimodo](https://github.com/animatica-ai/motionmcp-kimodo)
 - Animatica Cloud endpoint: `https://api.animatica.ai`
 
-Releases: tag `vX.Y.Z` must match `bl_info["version"]` in `proscenium_blender/__init__.py`.
+Releases: tag `vX.Y.Z` must match `bl_info["version"]` in `animatica_blender/__init__.py`.
 
 ## Contributing
 

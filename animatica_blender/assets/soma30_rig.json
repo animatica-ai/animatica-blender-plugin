@@ -1,0 +1,458 @@
+{
+ "_comment": "Animatica default rig: the 30-joint SOMA skeleton, in MMCP wire form (right-handed Y-up, metres, identity rest rotations, root lifted so the lowest joint sits at y=0). Generated from ardy.skeleton.SOMASkeleton30 via ardy.mmcp.capabilities.skeleton_to_mmcp. This is the rig the addon imports by default, independent of whichever canonical a backbone publishes; the server retargets between this and its own skeleton.",
+ "name": "SOMA30",
+ "joints": [
+  {
+   "name": "Hips",
+   "parent": null,
+   "rest_translation": [
+    0.0,
+    0.98870849609375,
+    0.0
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Spine1",
+   "parent": "Hips",
+   "rest_translation": [
+    -0.0001372700062347576,
+    0.050037626177072525,
+    -0.0005372666637413204
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Spine2",
+   "parent": "Spine1",
+   "rest_translation": [
+    -1.862645149230957e-09,
+    0.07125301659107208,
+    -0.00029824854573234916
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Chest",
+   "parent": "Spine2",
+   "rest_translation": [
+    -5.7480065152049065e-09,
+    0.07550063729286194,
+    -0.00815970916301012
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Neck1",
+   "parent": "Chest",
+   "rest_translation": [
+    -0.001816765172407031,
+    0.26311296224594116,
+    -0.005533483810722828
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Neck2",
+   "parent": "Neck1",
+   "rest_translation": [
+    -2.8405338525772095e-08,
+    0.07709398865699768,
+    0.02302585542201996
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Head",
+   "parent": "Neck2",
+   "rest_translation": [
+    -4.6100467443466187e-08,
+    0.06128913164138794,
+    0.01953708566725254
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "Jaw",
+   "parent": "Head",
+   "rest_translation": [
+    2.6368885301053524e-05,
+    0.004755914211273193,
+    0.030949406325817108
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "LeftEye",
+   "parent": "Head",
+   "rest_translation": [
+    0.0320638082921505,
+    0.05380207300186157,
+    0.07586883008480072
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "RightEye",
+   "parent": "Head",
+   "rest_translation": [
+    -0.03222440183162689,
+    0.053618669509887695,
+    0.07558233290910721
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "LeftShoulder",
+   "parent": "Chest",
+   "rest_translation": [
+    0.016216516494750977,
+    0.23237164318561554,
+    0.0511341318488121
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "LeftArm",
+   "parent": "LeftShoulder",
+   "rest_translation": [
+    0.14919844269752502,
+    0.0,
+    -0.05502326041460037
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "LeftForeArm",
+   "parent": "LeftArm",
+   "rest_translation": [
+    0.28739309310913086,
+    2.9802322387695312e-08,
+    -2.58786603808403e-05
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "LeftHand",
+   "parent": "LeftForeArm",
+   "rest_translation": [
+    0.27093979716300964,
+    -2.9802322387695312e-08,
+    2.6090070605278015e-05
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "LeftHandThumbEnd",
+   "parent": "LeftHand",
+   "rest_translation": [
+    0.12268626689910889,
+    -0.03220173716545105,
+    0.04833068698644638
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "LeftHandMiddleEnd",
+   "parent": "LeftHand",
+   "rest_translation": [
+    0.19011962413787842,
+    -0.0031287670135498047,
+    -0.00033957045525312424
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "RightShoulder",
+   "parent": "Chest",
+   "rest_translation": [
+    -0.013801181688904762,
+    0.2318030744791031,
+    0.05214157700538635
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "RightArm",
+   "parent": "RightShoulder",
+   "rest_translation": [
+    -0.1503719687461853,
+    1.1920928955078125e-07,
+    -0.05545604228973389
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "RightForeArm",
+   "parent": "RightArm",
+   "rest_translation": [
+    -0.2873663902282715,
+    2.9802322387695312e-08,
+    -2.5970861315727234e-05
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "RightHand",
+   "parent": "RightForeArm",
+   "rest_translation": [
+    -0.271336168050766,
+    0.0,
+    2.612639218568802e-05
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "RightHandThumbEnd",
+   "parent": "RightHand",
+   "rest_translation": [
+    -0.12264251708984375,
+    -0.03211456537246704,
+    0.04804039001464844
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "RightHandMiddleEnd",
+   "parent": "RightHand",
+   "rest_translation": [
+    -0.19000595808029175,
+    -0.003066152334213257,
+    -0.0003157341852784157
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "LeftLeg",
+   "parent": "Hips",
+   "rest_translation": [
+    0.1004321426153183,
+    -0.0843452662229538,
+    0.025956546887755394
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "LeftShin",
+   "parent": "LeftLeg",
+   "rest_translation": [
+    -1.4901161193847656e-08,
+    -0.432217538356781,
+    -0.00802912749350071
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "LeftFoot",
+   "parent": "LeftShin",
+   "rest_translation": [
+    1.4901161193847656e-08,
+    -0.4215509295463562,
+    -0.0348152294754982
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "LeftToeBase",
+   "parent": "LeftFoot",
+   "rest_translation": [
+    0.0,
+    -0.0505947470664978,
+    0.13231529295444489
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "RightLeg",
+   "parent": "Hips",
+   "rest_translation": [
+    -0.10047277808189392,
+    -0.0829525962471962,
+    0.02620317041873932
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "RightShin",
+   "parent": "RightLeg",
+   "rest_translation": [
+    7.450580596923828e-09,
+    -0.4336220920085907,
+    -0.008055558428168297
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "RightFoot",
+   "parent": "RightShin",
+   "rest_translation": [
+    2.2351741790771484e-08,
+    -0.42117393016815186,
+    -0.0347839817404747
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  },
+  {
+   "name": "RightToeBase",
+   "parent": "RightFoot",
+   "rest_translation": [
+    -7.450580596923828e-09,
+    -0.05079609155654907,
+    0.13284195959568024
+   ],
+   "rest_rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  }
+ ],
+ "coordinate_system": "right_handed_y_up",
+ "units": "meters"
+}

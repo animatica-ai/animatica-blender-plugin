@@ -1,12 +1,12 @@
-# Using Proscenium
+# Using Animatica
 
 **Videos first?** [YouTube tutorial playlist](https://www.youtube.com/watch?v=Wc349qOwjfM&list=PLAJ2UfUYhFQKZpFS8eh1eGUWJ0PAys1n1)
 
 ## Before you generate
 
 1. [Install](installation.md) and [sign in](configuration.md)
-2. In the 3D View, open the **N** panel → **Proscenium** tab
-3. In the **Proscenium** panel, click **Connect**, then pick a model
+2. In the 3D View, open the **N** panel → **Animatica** tab
+3. In the **Animatica** panel, click **Connect**, then pick a model
 
 ## Choose your character
 
@@ -36,7 +36,7 @@ The more direction you give, the closer the result tends to match your intent.
 ### Prompt blocks on the timeline
 
 Prompt blocks live on Blender's **Timeline** as colored strips in the
-**Proscenium** lane:
+**Animatica** lane:
 
 - **Double-click** an empty part of the lane to add a block
 - **Double-click** a block to type its prompt (or right-click → **Edit Prompt**)
@@ -71,7 +71,7 @@ entire action the way **Generate Motion** does.
 
 ## Sidebar panels (quick reference)
 
-- **Proscenium** (main) — connect, pick a model, target armature, generate, accept / reject
+- **Animatica** (main) — connect, pick a model, target armature, generate, accept / reject
 - **Constraints** — root paths and pinned effectors
 - **Settings** — generation options for the current shot
 
@@ -79,6 +79,6 @@ entire action the way **Generate Motion** does.
 
 - [Tutorial videos](https://www.youtube.com/watch?v=Wc349qOwjfM&list=PLAJ2UfUYhFQKZpFS8eh1eGUWJ0PAys1n1)
 - [Discord community](https://discord.com/invite/A8CrURBewz)
-- **Need help?** at the top of the Proscenium sidebar
+- **Need help?** at the top of the Animatica sidebar
 
 See also: [Tips & limits](limitations.md)
