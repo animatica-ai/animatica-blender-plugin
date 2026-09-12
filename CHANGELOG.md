@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [Unreleased]
+
+### Fixed
+
+- **Effector pins work on rigs that don't use canonical bone names.** The pin
+  popup matched the canonical joint names (`LeftHand`) against the armature's
+  bone names, so on any rig that namespaces its bones — the bundled Animatic
+  character (`animatica:LeftHand`), anything out of Maya or MotionBuilder,
+  Mixamo — it offered nothing at all and a pin could not be created. The joint
+  a pin names now comes from the skeleton the request actually sends, which is
+  what the request builder validates against and what the server retargets
+  from, and the popup still labels it canonically. Rigs following other
+  conventions resolve too (`hand.L`, `hand_ik.L`, `DEF-hand.L`, `L_Hand`); on a
+  control rig only the deform bone is offered, since the control bone is never
+  part of the request.
+
 ## [0.5.1] — 2026-09-11
 
 ### Fixed

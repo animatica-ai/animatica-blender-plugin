@@ -402,25 +402,159 @@ def _root_keyframe_points(scene: bpy.types.Scene) -> list[Vector]:
         scene.frame_set(saved)
 
 
-def _joint_items_callback(self, context):
-    """End-effector joints from the target armature, for the pin popup.
+# ---------------------------------------------------------------------------
+# Canonical joint -> this rig's bone
+#
+# An effector pin is expressed in the MODEL's canonical joint names — that is
+# what ``_validate_constraint_joints`` checks against and what the server
+# retargets from. The rig's own bone names are a separate space: a Maya or
+# MotionBuilder export namespaces every bone (``animatica:LeftHand``,
+# ``mixamorig:LeftHand``), and a Rigify control rig calls the same joint
+# ``hand_ik.L``.
+#
+# So finding a local bone is a CONVENIENCE — it decides where the empty is
+# spawned — and must never decide whether a pin can be created. Requiring an
+# exact name match is what made the pin popup come up empty on every
+# namespaced rig, the bundled character included.
+# ---------------------------------------------------------------------------
 
-    Restricted to the four canonical limb tips
-    (``constants.END_EFFECTOR_JOINTS``); pinning interior chain joints
-    over-constrains the IK solver. Joints absent from the armature are
-    filtered out so the popup only offers what can actually be pinned.
+#: Naming conventions to try for a canonical ``<Side><Part>`` joint, beyond the
+#: namespace handling. Covers Blender/Rigify (``hand.L``, ``hand_ik.L``,
+#: ``DEF-hand.L``) and the common underscore spellings.
+#: Every pattern carries a side marker. A bare ``Hand`` is deliberately not
+#: tried: it would resolve both LeftHand and RightHand to the same bone, and
+#: two pins silently sharing one target is worse than one pin the user has to
+#: place by hand.
+_BONE_NAME_PATTERNS = (
+    "{part}.{s}", "{part}_ik.{s}", "DEF-{part}.{s}", "MCH-{part}.{s}",
+    "{s}_{part}", "{part}_{s}", "{side}{part}",
+)
+
+
+def _bone_name_candidates(joint: str) -> list[str]:
+    """Plausible spellings of a canonical ``LeftHand`` / ``RightFoot`` name."""
+    for side, short in (("Left", "L"), ("Right", "R")):
+        if joint.startswith(side):
+            part = joint[len(side):]
+            break
+    else:
+        return [joint]
+    out: list[str] = []
+    for pattern in _BONE_NAME_PATTERNS:
+        spelled = pattern.format(part=part, s=short, side=side)
+        out.append(spelled)
+        out.append(spelled.lower())
+    return out
+
+
+def resolve_effector_bone(arm, joint: str, allowed: set[str] | None = None):
+    """The pose bone a canonical end-effector joint names on *arm*, or ``None``.
+
+    Exact name first, so a rig that already uses canonical names is untouched.
+    Then the rig's namespace, then any bone whose name after the last ``:``
+    matches (a rig with mixed namespaces), then the naming conventions above,
+    case-insensitively.
+
+    *allowed* restricts the answer to bones the request will actually carry.
+    Without it a control rig resolves to the control bone the animator sees,
+    which the request never sends and the validator would reject.
+    """
+    if arm is None or arm.type != 'ARMATURE' or not joint:
+        return None
+    pose = arm.pose
+
+    def ok(pb):
+        return pb if (pb is not None and (allowed is None or pb.name in allowed)) else None
+
+    bone = ok(pose.bones.get(joint))
+    if bone is not None:
+        return bone
+
+    from .gltf_to_blender import bone_namespace
+    namespace = bone_namespace(pose)
+    if namespace:
+        bone = ok(pose.bones.get(namespace + joint))
+        if bone is not None:
+            return bone
+
+    for pb in pose.bones:
+        if pb.name.rsplit(":", 1)[-1] == joint and ok(pb) is not None:
+            return pb
+
+    by_lower = {pb.name.lower(): pb for pb in pose.bones}
+    for candidate in _bone_name_candidates(joint):
+        bone = ok(pose.bones.get(candidate)) or ok(by_lower.get(candidate.lower()))
+        if bone is not None:
+            return bone
+    return None
+
+
+def effector_joint_choices(arm) -> list[tuple[str, str]]:
+    """``(skeleton joint name, canonical label)`` for each pinnable end effector.
+
+    The joint a pin names has to appear in the skeleton the REQUEST SENDS —
+    that is the set ``request_builder._validate_constraint_joints`` checks
+    against, and the set the server retargets from. On a retargeting server
+    that skeleton is the user's own rig, so the legal name is
+    ``animatica:LeftHand``, not the canonical ``LeftHand``.
+
+    Deriving the list from the emitted skeleton also gets control rigs right
+    for free: ``armature_to_skeleton`` emits only deform bones there, so the
+    control an animator grabs (``hand_ik.L``) is not a legal pin target while
+    its deform bone is, and only the latter is offered.
+    """
+    if arm is None or arm.type != 'ARMATURE':
+        return []
+    from . import request_builder
+
+    try:
+        emitted = [j["name"] for j in request_builder.armature_to_skeleton(arm)["joints"]]
+    except Exception:                                        # noqa: BLE001 — never break a popup
+        emitted = [pb.name for pb in arm.pose.bones]
+    emitted_set = set(emitted)
+
+    choices: list[tuple[str, str]] = []
+    for label in constants.END_EFFECTOR_JOINTS:
+        bone = resolve_effector_bone(arm, label, allowed=emitted_set)
+        if bone is not None:
+            choices.append((bone.name, label))
+    return choices
+
+
+#: EnumProperty item callbacks must keep the strings they return alive, or
+#: Blender can read freed memory. Holding the last result is the documented
+#: workaround.
+_EFFECTOR_ITEMS_CACHE: list = []
+
+
+def _joint_items_callback(self, context):
+    """End-effector joints for the pin popup.
+
+    The identifier stored on the empty is the rig's own joint name; the label
+    the user reads is the canonical one, so the popup still says "LeftHand"
+    whatever the rig calls it.
     """
     settings = context.scene.animatica
     arm = settings.target_armature
     if arm is None or arm.type != 'ARMATURE':
-        return [("", "(set a target armature first)", "")]
-    pose_bones = {pb.name for pb in arm.pose.bones}
-    items = [
-        (name, name, "")
-        for name in constants.END_EFFECTOR_JOINTS
-        if name in pose_bones
-    ]
-    return items or [("", "(armature has no canonical end-effector joints)", "")]
+        items = [("", "(set a target armature first)", "")]
+    else:
+        choices = effector_joint_choices(arm)
+        items = [
+            (joint, label,
+             f"Pin {label}" + (f" ({joint})" if joint != label else ""))
+            for joint, label in choices
+        ] or [("", "(no end-effector joints found on this rig)", "")]
+    _EFFECTOR_ITEMS_CACHE[:] = items
+    return _EFFECTOR_ITEMS_CACHE
+
+
+def canonical_label_for(arm, joint: str) -> str:
+    """The canonical name behind a rig-specific pin joint, for labels."""
+    for rig_name, label in effector_joint_choices(arm):
+        if rig_name == joint:
+            return label
+    return joint.rsplit(":", 1)[-1]
 
 
 class ANIMATICA_OT_add_effector_target(Operator):
@@ -455,7 +589,11 @@ class ANIMATICA_OT_add_effector_target(Operator):
             self.report({'ERROR'}, "Set a target armature first")
             return {'CANCELLED'}
 
-        bone = arm.pose.bones.get(self.joint)
+        # ``self.joint`` is already the rig's own joint name (the popup stores
+        # the skeleton name and shows the canonical one), so this is a direct
+        # lookup; the resolver is only a fallback for a stale enum value.
+        label = canonical_label_for(arm, self.joint)
+        bone = arm.pose.bones.get(self.joint) or resolve_effector_bone(arm, self.joint)
         # bone.head is in armature-local space. Empties have no parent, so
         # empty.location is world-space — transform through the armature's
         # world matrix to keep the pin at the bone's actual viewport position
@@ -464,17 +602,22 @@ class ANIMATICA_OT_add_effector_target(Operator):
         if bone is not None:
             start_pos = arm.matrix_world @ bone.head
         else:
-            start_pos = Vector((0.0, 1.0, 0.0))
+            # Nothing on this rig answers to that joint. The pin is still
+            # valid — the server retargets it — so spawn it where the user is
+            # looking instead of refusing or dropping it at a fixed point.
+            start_pos = context.scene.cursor.location.copy()
 
-        empty = bpy.data.objects.new(f"Animatica_{self.joint}_Target", None)
+        # Named and coloured by the canonical label: the rig's own joint name
+        # can carry a namespace, and a colon in a datablock name is noise.
+        empty = bpy.data.objects.new(f"Animatica_{label}_Target", None)
         empty.empty_display_type = 'SPHERE'
         empty.empty_display_size = constants.EFFECTOR_EMPTY_SIZE
         empty.location           = start_pos
 
         empty[constants.PROP_TARGET_JOINT] = self.joint
         # Drop a colour swatch on Object so the user can spot it in viewport.
-        if self.joint in constants.EFFECTOR_COLORS:
-            empty.color = constants.EFFECTOR_COLORS[self.joint]
+        if label in constants.EFFECTOR_COLORS:
+            empty.color = constants.EFFECTOR_COLORS[label]
             empty.show_name = True
 
         context.scene.collection.objects.link(empty)
@@ -482,7 +625,7 @@ class ANIMATICA_OT_add_effector_target(Operator):
         empty.keyframe_insert(data_path="location", frame=context.scene.frame_current)
 
         _select_only(context, empty)
-        self.report({'INFO'}, f"Added effector pin for {self.joint}")
+        self.report({'INFO'}, f"Added effector pin for {label} ({self.joint})")
         return {'FINISHED'}
 
 
