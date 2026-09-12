@@ -489,6 +489,42 @@ def resolve_effector_bone(arm, joint: str, allowed: set[str] | None = None):
     return None
 
 
+def _request_joint_names(arm) -> set[str]:
+    """The joint names the request will carry for *arm*.
+
+    This is the set an effector pin must name: ``request_builder`` validates
+    against it, and anything outside it is a bone the server never sees. On a
+    control rig it is the deform bones only.
+    """
+    if arm is None or arm.type != 'ARMATURE':
+        return set()
+    from . import request_builder
+    try:
+        return {j["name"] for j in request_builder.armature_to_skeleton(arm)["joints"]}
+    except Exception:                                        # noqa: BLE001
+        return {pb.name for pb in arm.pose.bones}
+
+
+def _emitted_alternative(bone_name: str, emitted: set[str]) -> str | None:
+    """The emitted joint a rejected pick most likely meant.
+
+    Someone pinning on a control rig reaches for the control they can grab
+    (``hand_ik.L``); the request carries its deform bone. Rather than only
+    saying no, name the bone they wanted.
+    """
+    stem = bone_name
+    for prefix in ("DEF-", "ORG-", "MCH-", "CTRL-"):
+        if stem.startswith(prefix):
+            stem = stem[len(prefix):]
+    for suffix in ("_ik", "_fk", "_ctrl"):
+        stem = stem.replace(suffix, "")
+    for candidate in (f"DEF-{stem}", stem, f"ORG-{stem}"):
+        if candidate in emitted and candidate != bone_name:
+            return candidate
+    lowered = {name.lower(): name for name in emitted}
+    return lowered.get(f"def-{stem.lower()}") or lowered.get(stem.lower())
+
+
 def effector_joint_choices(arm) -> list[tuple[str, str]]:
     """``(skeleton joint name, canonical label)`` for each pinnable end effector.
 
@@ -505,13 +541,7 @@ def effector_joint_choices(arm) -> list[tuple[str, str]]:
     """
     if arm is None or arm.type != 'ARMATURE':
         return []
-    from . import request_builder
-
-    try:
-        emitted = [j["name"] for j in request_builder.armature_to_skeleton(arm)["joints"]]
-    except Exception:                                        # noqa: BLE001 — never break a popup
-        emitted = [pb.name for pb in arm.pose.bones]
-    emitted_set = set(emitted)
+    emitted_set = _request_joint_names(arm)
 
     choices: list[tuple[str, str]] = []
     for label in constants.END_EFFECTOR_JOINTS:
@@ -566,34 +596,84 @@ class ANIMATICA_OT_add_effector_target(Operator):
     )
     bl_options = {'REGISTER', 'UNDO'}
 
+    mode: EnumProperty(
+        name="Pin",
+        items=[
+            ('EFFECTOR', "End effector",
+             "The hand or foot joints the solver is meant to pin"),
+            ('BONE', "Any bone",
+             "Pick a bone yourself — for rigs whose naming the addon cannot "
+             "match, or to pin something other than a limb tip"),
+        ],
+        default='EFFECTOR',
+    )
+
     joint: EnumProperty(
         name="Joint",
         items=_joint_items_callback,
     )
 
+    bone: bpy.props.StringProperty(
+        name="Bone",
+        description="Bone this pin constrains. Must be one the request sends",
+    )
+
     def invoke(self, context, event):
-        return context.window_manager.invoke_props_dialog(self, width=240)
+        return context.window_manager.invoke_props_dialog(self, width=290)
 
     def draw(self, context):
         col = self.layout.column(align=True)
-        col.prop(self, "joint")
+        col.prop(self, "mode", expand=True)
+        arm = context.scene.animatica.target_armature
+        if self.mode == 'BONE':
+            if arm is None:
+                col.label(text="Set a target armature first", icon='ERROR')
+                return
+            col.prop_search(self, "bone", arm.pose, "bones", text="Bone")
+            # Say up front which bones are legal, rather than letting the
+            # user pick a control bone and meet a build error later.
+            if self.bone and self.bone not in _request_joint_names(arm):
+                col.label(text="Not sent in the request — see below", icon='ERROR')
+                col.label(text="control bones are not part of the skeleton")
+        else:
+            col.prop(self, "joint")
 
     def execute(self, context):
-        if not self.joint:
-            self.report({'ERROR'}, "Pick a joint")
-            return {'CANCELLED'}
-
         settings = context.scene.animatica
         arm = settings.target_armature
         if arm is None:
             self.report({'ERROR'}, "Set a target armature first")
             return {'CANCELLED'}
 
-        # ``self.joint`` is already the rig's own joint name (the popup stores
+        if self.mode == 'BONE':
+            chosen = (self.bone or "").strip()
+            if not chosen:
+                self.report({'ERROR'}, "Pick a bone")
+                return {'CANCELLED'}
+            emitted = _request_joint_names(arm)
+            if chosen not in emitted:
+                hint = _emitted_alternative(chosen, emitted)
+                self.report(
+                    {'ERROR'},
+                    f"{chosen!r} is not part of the skeleton this rig sends, so "
+                    f"the server would never see the pin"
+                    + (f" — try {hint!r}" if hint else
+                       " (control and helper bones are excluded; pin a deform bone)"),
+                )
+                return {'CANCELLED'}
+            joint_name = chosen
+        else:
+            joint_name = self.joint
+
+        if not joint_name:
+            self.report({'ERROR'}, "Pick a joint")
+            return {'CANCELLED'}
+
+        # ``joint_name`` is already the rig's own joint name (the popup stores
         # the skeleton name and shows the canonical one), so this is a direct
         # lookup; the resolver is only a fallback for a stale enum value.
-        label = canonical_label_for(arm, self.joint)
-        bone = arm.pose.bones.get(self.joint) or resolve_effector_bone(arm, self.joint)
+        label = canonical_label_for(arm, joint_name)
+        bone = arm.pose.bones.get(joint_name) or resolve_effector_bone(arm, joint_name)
         # bone.head is in armature-local space. Empties have no parent, so
         # empty.location is world-space — transform through the armature's
         # world matrix to keep the pin at the bone's actual viewport position
@@ -614,7 +694,7 @@ class ANIMATICA_OT_add_effector_target(Operator):
         empty.empty_display_size = constants.EFFECTOR_EMPTY_SIZE
         empty.location           = start_pos
 
-        empty[constants.PROP_TARGET_JOINT] = self.joint
+        empty[constants.PROP_TARGET_JOINT] = joint_name
         # Drop a colour swatch on Object so the user can spot it in viewport.
         if label in constants.EFFECTOR_COLORS:
             empty.color = constants.EFFECTOR_COLORS[label]
@@ -625,7 +705,7 @@ class ANIMATICA_OT_add_effector_target(Operator):
         empty.keyframe_insert(data_path="location", frame=context.scene.frame_current)
 
         _select_only(context, empty)
-        self.report({'INFO'}, f"Added effector pin for {label} ({self.joint})")
+        self.report({'INFO'}, f"Added effector pin for {label} ({joint_name})")
         return {'FINISHED'}
 
 

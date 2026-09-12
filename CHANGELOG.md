@@ -23,6 +23,16 @@ Proscenium, and keep the identifiers those releases actually shipped.
   control rig only the deform bone is offered, since the control bone is never
   part of the request.
 
+### Added
+
+- **Pin any bone, not just the four end effectors.** The effector-pin dialog
+  gains an *Any bone* mode with a bone picker, for rigs whose naming the addon
+  cannot match and for pinning something other than a limb tip. The pick is
+  checked against the skeleton the request sends, so a bone the server would
+  never see is refused at the dialog rather than at generation — and on a
+  control rig, picking the control the animator grabs (`hand_ik.L`) names the
+  deform bone it drives (`DEF-hand.L`) in the error.
+
 ## [0.5.1] — 2026-09-11
 
 ### Fixed
