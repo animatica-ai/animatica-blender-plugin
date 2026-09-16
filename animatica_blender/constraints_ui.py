@@ -210,6 +210,46 @@ def _copy_keyframe_point(src_kp, dest_fc) -> None:
     dst.type             = src_kp.type
 
 
+def carry_keyframes_outside_range(source_action, preview_action, frame_range) -> int:
+    """Copy ``source_action``'s keys from OUTSIDE ``frame_range`` onto the preview.
+
+    A generation covers only the stretch the prompt blocks asked for, and the
+    bake writes a fresh action holding just that stretch. Without this the
+    preview is the generated window and nothing else, so everything the user
+    authored before and after it vanishes the moment they hit Generate — which
+    reads as "it threw my keyframes away" even though the source action is
+    still safely stashed for Reject.
+
+    Splicing is the actual intent: keep what was there, replace the window.
+    The copied keys stay their original type (never ``GENERATED``), so Reject
+    still strips only what the bake produced, and Accept keeps the motion
+    either side of the new stretch.
+
+    Returns the number of keyframe points written.
+    """
+    if source_action is None or preview_action is None:
+        return 0
+    lo, hi = int(frame_range[0]), int(frame_range[1])
+
+    carried = 0
+    for src_fc in iter_action_fcurves(source_action):
+        outside = [
+            kp for kp in src_fc.keyframe_points
+            if not (lo <= int(round(kp.co.x)) <= hi)
+        ]
+        if not outside:
+            continue
+        dest_fc = _ensure_fcurve(preview_action, src_fc.data_path, src_fc.array_index)
+        if dest_fc is None:
+            continue
+        for kp in sorted(outside, key=lambda k: k.co.x):
+            _copy_keyframe_point(kp, dest_fc)
+            carried += 1
+        dest_fc.update()
+
+    return carried
+
+
 def merge_preview_keyframes_into_source(source_action, preview_action) -> int:
     """Copy keyframe points from ``preview_action`` onto matching F-curves
     on ``source_action``. Existing keys at the same frame are replaced.

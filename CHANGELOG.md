@@ -21,6 +21,15 @@ Proscenium, and keep the identifiers those releases actually shipped.
   their span widened by `transition_frames` on each side, which is the margin
   the server needs to blend the splice. With no blocks the old behaviour
   stands, since there is then no statement of intent to honour.
+- **Generating over a block keeps the motion either side of it.** The bake
+  writes an action covering only the generated window, so once that window was
+  correctly narrowed to the block, everything authored before and after it
+  vanished from the preview — the source action was safely stashed for Reject,
+  but on screen it read as the keyframes having been thrown away. Those keys
+  are now carried into the preview, so Generate splices rather than replaces:
+  the original motion outside, the new motion inside, in one action. They keep
+  their original keyframe type, so Reject still strips only what the bake
+  produced and restores the source exactly.
 
 ## [0.5.2] — 2026-09-12
 

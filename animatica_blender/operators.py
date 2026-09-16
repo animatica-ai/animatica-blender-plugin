@@ -753,6 +753,25 @@ class ANIMATICA_OT_generate(Operator):
             n_actions = 1
             skipped = list(action.get("animatica_skipped_joints") or [])
 
+            # Splice, don't replace. The bake covers only the window the
+            # prompt blocks asked for, so on its own the preview would be
+            # that window and nothing else — every pose authored before or
+            # after it gone from view. Carry those back in so Generate reads
+            # as "this stretch changed" rather than "everything else was
+            # thrown away". Reject is unaffected: these keep their original
+            # type, and it strips only GENERATED ones.
+            src_action = (
+                bpy.data.actions.get(settings.source_action_name)
+                if settings.source_action_name else None
+            )
+            if src_action is not None and src_action is not action:
+                carried = constraints_ui.carry_keyframes_outside_range(
+                    src_action, action, (gen_start, gen_end),
+                )
+                if carried:
+                    print(f"[animatica] carried {carried} authored key(s) from "
+                          f"outside {gen_start}..{gen_end} into the preview")
+
             # Fold preview-time edits onto the real source now that the bake
             # succeeded — deferred from execute so a failed POST/bake cannot
             # corrupt the user's action.
