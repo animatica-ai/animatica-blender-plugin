@@ -51,31 +51,54 @@ def compute_frame_range(
     prompt_blocks,
     armature_obj: bpy.types.Object | None,
     scene: bpy.types.Scene,
+    *,
+    transition_frames: int | None = None,
 ) -> tuple[int, int]:
-    """The generation window — union of every piece of user-authored timing
-    content on the timeline.
+    """The generation window.
 
-    Pulls from:
-      * Enabled ``PromptBlock`` ranges (the addon's "actions" — text segments
-        drawn on the timeline strip).
-      * The target armature's active source action keyframe span (skipping
-        Animatica-generated bakes so a regenerate doesn't latch onto its
-        own previous output).
+    **Prompt blocks win outright.** When the user has drawn any enabled block,
+    the window is that span widened by ``transition_frames`` on each side and
+    nothing else — the blocks *are* the statement of which stretch of the
+    timeline they are generating, and the margin is there so the server has
+    material either side to blend the splice into.
 
-    Falls back to ``scene.frame_start..scene.frame_end`` only when nothing's
-    been authored. Caller-side, this replaces the older "scene-range is the
-    request length" heuristic — generating only as far as the user actually
-    drew content keeps short-segment edits from paying for an empty 120-frame
-    tail.
+    This used to be a union with the source action's whole keyframe span,
+    which quietly defeated splicing: blocking out poses across 200 frames and
+    then asking for one 40-frame block generated all 200. The request paid for
+    ~160 frames of ``unconditioned`` segment, every authored keyframe outside
+    the block was sent as a pose constraint, and the bake overwrote the work
+    the user had deliberately left alone.
+
+    With no blocks there is no such statement, so the old behaviour stands:
+    the union of the armature's source-action keyframe span (skipping
+    Animatica bakes, so a regenerate does not latch onto its own output),
+    falling back to the scene range when nothing has been authored at all.
+
+    ``transition_frames`` defaults to the scene's own setting; pass it
+    explicitly only to ask "what would this be if…".
     """
-    starts: list[int] = []
-    ends: list[int] = []
+    if transition_frames is None:
+        settings = getattr(scene, "animatica", None)
+        transition_frames = int(getattr(settings, "num_transition_frames", 0) or 0)
+    margin = max(0, int(transition_frames))
 
-    for b in prompt_blocks or ():
-        if not getattr(b, "enabled", True):
-            continue
-        starts.append(int(b.frame_start))
-        ends.append(int(b.frame_end))
+    block_starts = [
+        int(b.frame_start) for b in prompt_blocks or ()
+        if getattr(b, "enabled", True)
+    ]
+    block_ends = [
+        int(b.frame_end) for b in prompt_blocks or ()
+        if getattr(b, "enabled", True)
+    ]
+    if block_starts and block_ends:
+        lo, hi = min(block_starts), max(block_ends)
+        # Widen by the blend margin, but never past the scene the user set up
+        # — unless a block already reaches beyond it, in which case the block
+        # is the authority and must not be clipped.
+        return (
+            max(lo - margin, min(lo, int(scene.frame_start))),
+            min(hi + margin, max(hi, int(scene.frame_end))),
+        )
 
     src = (
         armature_obj.animation_data.action
@@ -90,11 +113,8 @@ def compute_frame_range(
             for kp in fc.keyframe_points:
                 kfs.add(int(round(kp.co.x)))
         if kfs:
-            starts.append(min(kfs))
-            ends.append(max(kfs))
+            return (min(kfs), max(kfs))
 
-    if starts and ends:
-        return (min(starts), max(ends))
     return (int(scene.frame_start), int(scene.frame_end))
 
 

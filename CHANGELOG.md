@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [Unreleased]
+
+### Fixed
+
+- **A prompt block now generates only its own stretch of the timeline.** The
+  generation window was the union of the enabled blocks *and* the source
+  action's entire keyframe span, so blocking out poses across 200 frames and
+  then asking for one 40-frame block generated all 200: the request carried
+  ~160 frames of `unconditioned` segment, every authored keyframe outside the
+  block was sent as a pose constraint, and the bake overwrote the work the
+  user had deliberately left alone. Blocks now win outright — the window is
+  their span widened by `transition_frames` on each side, which is the margin
+  the server needs to blend the splice. With no blocks the old behaviour
+  stands, since there is then no statement of intent to honour.
+
 ## [0.5.2] — 2026-09-12
 
 ### Fixed
