@@ -75,6 +75,22 @@ def _stash_source_action_name(settings, arm) -> None:
     settings.source_action_name = act.name
 
 
+def _action_has_keys_outside(action, lo: int, hi: int) -> bool:
+    """True when ``action`` holds keys beyond ``[lo, hi]``.
+
+    That is what makes a generation a splice rather than a fresh bake: there
+    is motion either side of the window which must survive untouched.
+    """
+    if action is None:
+        return False
+    for fc in constraints_ui.iter_action_fcurves(action):
+        for kp in fc.keyframe_points:
+            f = int(round(kp.co.x))
+            if f < lo or f > hi:
+                return True
+    return False
+
+
 def _build_regen_request_action(
     src: bpy.types.Action,
     preview: bpy.types.Action,
@@ -510,6 +526,16 @@ class ANIMATICA_OT_generate(Operator):
 
     def execute(self, context):
         settings = context.scene.animatica
+        # The action on the rig when Generate was pressed. If it already holds
+        # motion either side of the window, the generation is a splice and the
+        # frames go back into THIS action rather than a new one — captured
+        # before any regen bookkeeping swaps the active action out.
+        _arm0 = settings.target_armature
+        self._splice_target = (
+            _arm0.animation_data.action
+            if _arm0 is not None and _arm0.animation_data and _arm0.animation_data.action
+            else None
+        )
 
         if settings.is_generating:
             self.report({'WARNING'}, "Already generating — wait or click Cancel")
@@ -742,14 +768,48 @@ class ANIMATICA_OT_generate(Operator):
                 if block_ranges
                 else _build_motion_action_name(settings.prompt_blocks)
             )
-            action = gltf_to_blender.bake_gltf_to_armature(
-                self._result,
-                arm,
-                sample_index=0,
-                action_name=preview_name,
-                start_frame=gen_start,
-                anchor_frames=getattr(self, "_anchor_frames", None),
+            # Splice in place when the rig already carries motion either side
+            # of the window. Generating over a gap is an edit to an existing
+            # animation, not a new take: the frames belong in the action the
+            # user is working in, so the walk and the sit stay exactly where
+            # they are and nothing has to be reassembled afterwards. A fresh
+            # bake is still right when there is nothing to preserve.
+            #
+            # Not routed through here for control rigs: splice_gltf_into_action
+            # has no control-rig hand-off, only bake_gltf_to_armature does.
+            splice_target = getattr(self, "_splice_target", None)
+            spliced = (
+                splice_target is not None
+                and not block_ranges
+                and not request_builder.is_control_rig(arm)
+                and _action_has_keys_outside(splice_target, gen_start, gen_end)
             )
+            if spliced:
+                # keyframe writes go through animation_data.action, so the
+                # target has to be the active one.
+                arm.animation_data.action = splice_target
+                gltf_to_blender.splice_gltf_into_action(
+                    self._result,
+                    arm,
+                    splice_target,
+                    sample_index=0,
+                    request_start_frame=gen_start,
+                    target_range=(gen_start, gen_end),
+                    anchor_frames=getattr(self, "_anchor_frames", None),
+                )
+                action = splice_target
+                # Accept and Reject both need to know this was an in-place
+                # edit: there is nothing to push, and nothing to restore from.
+                arm["animatica_spliced_in_place"] = True
+            else:
+                action = gltf_to_blender.bake_gltf_to_armature(
+                    self._result,
+                    arm,
+                    sample_index=0,
+                    action_name=preview_name,
+                    start_frame=gen_start,
+                    anchor_frames=getattr(self, "_anchor_frames", None),
+                )
             n_actions = 1
             skipped = list(action.get("animatica_skipped_joints") or [])
 
@@ -764,7 +824,7 @@ class ANIMATICA_OT_generate(Operator):
                 bpy.data.actions.get(settings.source_action_name)
                 if settings.source_action_name else None
             )
-            if src_action is not None and src_action is not action:
+            if not spliced and src_action is not None and src_action is not action:
                 carried = constraints_ui.carry_keyframes_outside_range(
                     src_action, action, (gen_start, gen_end),
                 )
@@ -934,6 +994,22 @@ class ANIMATICA_OT_accept(Operator):
 
         if arm is not None:
             import json as _json
+            if arm.get("animatica_spliced_in_place"):
+                # The frames went straight into the user's own action, so
+                # there is nothing to assemble: accepting just means keeping
+                # it. Pushing to NLA here would detach the action they are
+                # working in and hand back a strip instead.
+                del arm["animatica_spliced_in_place"]
+                _apply_inplace_constraint(arm, enabled=False)
+                if "animatica_pending_block_ranges" in arm:
+                    del arm["animatica_pending_block_ranges"]
+                s.source_action_name = ""
+                s.is_previewing = False
+                _clear_quota_state(s)
+                self.report({'INFO'}, "Kept the generated frames in "
+                                      f"'{arm.animation_data.action.name}'")
+                return {'FINISHED'}
+
             pending_raw = arm.get("animatica_pending_block_ranges")
             try:
                 pending = _json.loads(pending_raw) if pending_raw else []
@@ -1057,6 +1133,22 @@ class ANIMATICA_OT_reject(Operator):
         # Pending-block-ranges stash is only meaningful for Accept.
         if "animatica_pending_block_ranges" in arm:
             del arm["animatica_pending_block_ranges"]
+
+        if arm.get("animatica_spliced_in_place"):
+            # The generated frames were written into the user's action; undo
+            # is simply removing them again. They are tagged GENERATED and the
+            # surrounding keys are not, so the gap comes back exactly.
+            del arm["animatica_spliced_in_place"]
+            removed = constraints_ui.strip_generated_keyframe_points(
+                preview, promote_unauthored=False,
+            )
+            s.source_action_name = ""
+            s.is_previewing = False
+            _clear_quota_state(s)
+            self.report({'INFO'},
+                        f"Removed {removed} generated sample(s); "
+                        f"'{preview.name}' is back as it was")
+            return {'FINISHED'}
 
         n_rm = 0
         if is_motion_preview:

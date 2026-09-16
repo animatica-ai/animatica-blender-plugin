@@ -995,7 +995,14 @@ def _collect_constraints(
         if armature_obj.animation_data and armature_obj.animation_data.action
         else None
     )
-    if src is not None and not src.name.startswith(_GENERATED_ACTION_PREFIX):
+    # Deliberately no name check. This used to skip the action outright when it
+    # was called ``Animatica_Motion: …``, to avoid feeding a previous bake back
+    # in — but it also silenced every pose a user had authored in an action that
+    # merely carries that name, which is exactly what a spliced or hand-edited
+    # take looks like: the result was a generation with nothing anchoring it.
+    # ``sample_pose_keyframes`` filters by keyframe TYPE instead, which answers
+    # the same question precisely and per-key rather than per-action.
+    if src is not None:
         out.extend(
             constraints_ui.sample_pose_keyframes(
                 armature_obj,

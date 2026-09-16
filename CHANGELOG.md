@@ -31,6 +31,28 @@ Proscenium, and keep the identifiers those releases actually shipped.
   their original keyframe type, so Reject still strips only what the bake
   produced and restores the source exactly.
 
+## [Unreleased]
+
+### Fixed
+
+- **Generating over a gap fills it in place, in the action you are working
+  in.** It used to bake a new action and, on Accept, push it to an NLA strip
+  while detaching yours — so a splice handed back a differently-named strip
+  instead of the animation you were editing. When the rig already carries
+  motion either side of the window, the frames are now spliced straight into
+  that action: Accept keeps it, Reject removes the generated samples and the
+  gap comes back exactly. A fresh bake is still what happens when there is
+  nothing to preserve, and control rigs keep the old path, which is the only
+  one that does the control-rig hand-off.
+- **Poses in an edited generated take anchor the next generation.** Both the
+  pose-keyframe sampler and the frame-range fallback skipped an action whose
+  *name* began with `Animatica_Motion:`, to avoid feeding a previous bake back
+  in. That silenced every pose a user had authored in such an action — the
+  normal state of a spliced or hand-edited take — so a generation went out
+  with nothing anchoring it and wandered metres away from where it had to end
+  up. The sampler now filters by keyframe *type*, which is the precise signal:
+  bakes tag their dense samples `GENERATED` and leave authored keys alone.
+
 ## [0.5.2] — 2026-09-12
 
 ### Fixed

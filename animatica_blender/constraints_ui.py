@@ -1014,6 +1014,13 @@ def sample_pose_keyframes(
             continue
         keyed_bones.add(bone_name)
         for kp in fc.keyframe_points:
+            # Never pin the model's own output back at it. A bake tags its
+            # dense samples GENERATED and leaves the user's anchors as real
+            # keys, so the type is the exact signal for "did a human put this
+            # here" — which the action's NAME is not: an action can hold both
+            # once a generated take has been edited or spliced into.
+            if kp.type == 'GENERATED':
+                continue
             f = int(round(kp.co.x))
             if frame_range[0] <= f <= frame_range[1]:
                 interesting_frames.add(f)
