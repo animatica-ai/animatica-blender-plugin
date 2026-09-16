@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
-## [0.6.0] — 2026-09-16
+## [0.5.3] — 2026-09-16
 
 ### Fixed
 
@@ -373,7 +373,7 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 - Initial public release.
 
-[0.6.0]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.0
+[0.5.3]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.5.3
 [0.5.2]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.5.2
 [0.5.1]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.5.1
 [0.5.0]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.5.0
