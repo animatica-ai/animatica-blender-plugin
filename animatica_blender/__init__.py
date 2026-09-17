@@ -29,6 +29,7 @@ from . import operators
 from . import canonical_skeleton
 from . import constraints_ui
 from . import panels
+from . import key_poses
 from . import path_follow
 from . import timeline_overlay
 from . import timeline_operators
@@ -65,6 +66,11 @@ def _animatica_load_post(dummy):
     # under the old keys. Migrate first: the hydration below reads the new
     # ones, so it would find nothing on an unmigrated file.
     migrate.run()
+
+    # Ghosts baked from the previous file's rig would otherwise hang in the
+    # viewport until something else invalidated them.
+    key_poses.clear()
+    key_poses.invalidate_plan()
 
     for scene in bpy.data.scenes:
         settings = getattr(scene, "animatica", None)
@@ -130,6 +136,7 @@ def register():
     constraints_ui.register()
     panels.register()
     path_follow.register()
+    key_poses.register()
     timeline_operators.register()
     timeline_overlay.register_draw_handler()
 
@@ -148,6 +155,7 @@ def unregister():
 
     timeline_overlay.unregister_draw_handler()
     timeline_operators.unregister()
+    key_poses.unregister()
     path_follow.unregister()
     panels.unregister()
     constraints_ui.unregister()

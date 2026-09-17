@@ -12,6 +12,7 @@ armature. Not happy? **Reject** and try again.
 - **Full clips** — generate motion across a frame range from text prompts and key poses
 - **Single poses** — **Generate Pose @ Frame** for one frame without replacing your whole action
 - **Direct the performance** — prompt blocks on the timeline, floor paths, pinned hands/feet
+- **See the plan** — your key poses ghosted in the viewport, colour-matched to their prompt blocks
 - **Your character** — work on your own armature, or import our reference skeleton to start fast
 - **Preview before committing** — review the result, then **Accept** or **Reject**
 

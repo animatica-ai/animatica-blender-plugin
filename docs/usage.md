@@ -52,6 +52,47 @@ fills that span on its own. A *disabled* block is skipped entirely.
 > Non-Latin text (e.g. CJK) can't be typed through the on-strip editor — use
 > right-click → **Edit Prompt** for those.
 
+## See the plan — ghosts
+
+Your key poses *are* the plan: each one becomes a full-body constraint the
+motion has to pass through. Open **Ghosts** in the sidebar and tick its
+checkbox to see them.
+
+In the viewport, each pose you keyed appears as a ghost where it sits in the
+scene — tinted with the colour of the **prompt block** it falls under and
+labelled with its **frame number**. On the timeline, a diamond marks each pose
+in the **Animatica** lane, so you can see which block each one lands in.
+
+Running through them is the **motion trail**: the path the animation actually
+takes, frame by frame. It carries the same colours, so the curve changes colour
+where the prompt blocks change — you can see which stretch of the motion belongs
+to which instruction. The dots are one per frame, so their spacing is the timing
+(bunched is slow, spread is fast); the larger diamonds are your key poses, and
+the white one is the playhead. It traces the joints the model is steered by —
+**hands, feet, root and head** — so the foot lines tell you about sliding and
+footfalls, the hand lines about arcs, and the root line about the trajectory.
+
+A pose **outside the generating range is not sent** at all — those are greyed
+out in the viewport, red on the timeline, and named in the panel. Widen a prompt
+block to bring one back into the plan, or move the pose.
+
+> **If a pose you just keyed doesn't appear**, you keyed it over a generated
+> take. Blender keeps a keyframe's existing type when you key over one, so
+> pressing `I` on a frame a previous generation baked leaves a key the addon
+> reads as the model's own output, and it is left out of the next request.
+> Press `F3` and run **Add Key Pose** to mark that pose as yours.
+
+The posed bodies and the trail are independent — show either on its own:
+
+| Setting | What it does |
+|---|---|
+| **Poses** | Draw the body at each pose you keyed |
+| **Show As** | *Auto* uses the skinned character if the rig has one, the skeleton otherwise. Force either with *Mesh* / *Bones* |
+| **Frame Numbers** | Label each pose with the frame it sits on |
+| **Motion Trail** | Trace the path the motion takes, through the hands, feet, root and head |
+| **X-Ray** | Draw poses through the character instead of behind it |
+| **Auto Refresh** | Re-read the plan when you key a pose or move the rig. Turn off on a heavy character and use **Refresh** |
+
 ## Generate a full clip
 
 1. Set your frame range on the timeline
@@ -73,6 +114,7 @@ entire action the way **Generate Motion** does.
 
 - **Animatica** (main) — connect, pick a model, target armature, generate, accept / reject
 - **Constraints** — root paths and pinned effectors
+- **Ghosts** — the poses you keyed and the motion trail, drawn in the viewport
 - **Settings** — generation options for the current shot
 
 ## Help

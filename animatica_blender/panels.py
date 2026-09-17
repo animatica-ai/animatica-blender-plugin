@@ -3,6 +3,7 @@
 Sidebar panels in View3D > Sidebar > Animatica:
   - Main: connect, model picker, armature, seed, generate buttons, preview
   - Constraints: root path / effector / pose-keyframe controls
+  - Ghosts: the poses you keyed and the motion trail, in the viewport
   - Settings: quality / CFG / post-processing
 
 Server URL + auth live in Edit > Preferences > Add-ons > Animatica.
@@ -383,11 +384,12 @@ class ANIMATICA_PT_constraints(AnimaticaPanelBase, Panel):
         arm = settings.target_armature
         if arm is not None and arm.animation_data and arm.animation_data.action:
             ac = arm.animation_data.action
-            n = sum(
-                1 for fc in constraints_ui.iter_action_fcurves(ac)
-                if "rotation" in fc.data_path
-                for _ in fc.keyframe_points
-            )
+            # Authored frames, not raw keyframe points: a generated take
+            # carries a GENERATED sample on every channel of every frame, and
+            # counting those said "Pose keyframes: 14,000" for an action that
+            # pins four poses. One line here per constraint actually sent.
+            frames, _ = constraints_ui.authored_pose_frames(ac)
+            n = len(frames)
             layout.label(text=f"Pose keyframes: {n}  (sampled from {ac.name})", icon='KEYFRAME_HLT')
         else:
             layout.label(text="Pose keyframes: 0  (set a target armature)", icon='KEYFRAME')
@@ -401,6 +403,75 @@ def _count_location_keyframes(obj: bpy.types.Object) -> int:
         for fc in constraints_ui.iter_action_fcurves(obj.animation_data.action)
         if fc.data_path == "location"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Ghosts panel — the key poses and the motion drawn in the viewport
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Dropped frames named inline before the list turns into "+N more". Past this
+# the row stops being readable at sidebar width.
+_MAX_NAMED_DROPPED = 3
+
+
+class ANIMATICA_PT_ghosts(AnimaticaPanelBase, Panel):
+    bl_label = "Ghosts"
+    bl_idname = "ANIMATICA_PT_ghosts"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw_header(self, context):
+        self.layout.prop(context.scene.animatica, "show_key_poses", text="")
+
+    def draw(self, context):
+        from . import key_poses
+
+        layout = self.layout
+        settings = context.scene.animatica
+
+        if settings.target_armature is None:
+            layout.label(text="Set a target armature first", icon='INFO')
+            return
+
+        # The one thing worth interrupting for: poses outside the generating
+        # range are dropped from the request, which is otherwise invisible
+        # until the result comes back. Drawn above the settings and outside
+        # the property-split column so it reads as an alert, not a field.
+        plan = key_poses.plan(context.scene)
+        dropped = [f for f in plan["frames"] if not plan["entries"][f]["in_range"]]
+        if dropped:
+            shown = ", ".join(str(f) for f in dropped[:_MAX_NAMED_DROPPED])
+            if len(dropped) > _MAX_NAMED_DROPPED:
+                shown += f" +{len(dropped) - _MAX_NAMED_DROPPED}"
+            warn = layout.row()
+            warn.alert = True
+            warn.label(text=f"Not sent: {shown}", icon='ERROR')
+
+        body = layout.column()
+        body.active = settings.show_key_poses
+        body.use_property_split = True
+        body.use_property_decorate = False
+
+        # Two independent overlays: the posed bodies, and the trail of the
+        # motion that answers them. Either can be shown on its own.
+        col = body.column(align=True)
+        col.prop(settings, "key_pose_ghosts")
+        sub = col.column(align=True)
+        sub.active = settings.key_pose_ghosts
+        sub.prop(settings, "key_pose_display")
+        sub.prop(settings, "key_pose_labels")
+
+        body.prop(settings, "key_pose_trail")
+
+        body.separator()
+        body.prop(settings, "key_pose_xray")
+
+        body.separator()
+        col = body.column(align=True)
+        col.prop(settings, "key_pose_auto_refresh")
+        col.operator("animatica.key_poses_refresh", text="Refresh", icon='FILE_REFRESH')
+
+        if settings.show_key_poses and key_poses.state()["clamped"]:
+            body.label(text=f"First {key_poses.MAX_GHOSTS} shown", icon='INFO')
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -446,6 +517,7 @@ class ANIMATICA_PT_settings(AnimaticaPanelBase, Panel):
 _classes = (
     ANIMATICA_PT_main,
     ANIMATICA_PT_constraints,
+    ANIMATICA_PT_ghosts,
     ANIMATICA_PT_settings,
 )
 

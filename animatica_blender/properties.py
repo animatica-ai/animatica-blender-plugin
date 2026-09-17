@@ -301,6 +301,34 @@ def _inplace_update(self, context):
 
 
 # ---------------------------------------------------------------------------
+# Key-pose overlay update callbacks
+# ---------------------------------------------------------------------------
+#
+# Split by what each setting invalidates: the toggle owns the baked geometry,
+# the display mode changes what gets captured and needs a re-bake, and the
+# rest only change how the plan is drawn and need nothing but a redraw.
+# Baking from an update callback would be unsafe (it moves the playhead) —
+# ``key_poses`` defers onto a timer.
+
+def _key_poses_toggle_update(self, context):
+    from . import key_poses  # noqa: PLC0415 — lazy to avoid circular import
+
+    key_poses.on_toggle(self)
+
+
+def _key_poses_rebake_update(self, context):
+    from . import key_poses  # noqa: PLC0415 — lazy to avoid circular import
+
+    key_poses.on_rebake_setting(self)
+
+
+def _key_poses_redraw_update(self, context):
+    from . import key_poses  # noqa: PLC0415 — lazy to avoid circular import
+
+    key_poses.on_redraw_setting(self)
+
+
+# ---------------------------------------------------------------------------
 # Classes
 # ---------------------------------------------------------------------------
 
@@ -649,6 +677,78 @@ class AnimaticaSettings(PropertyGroup):
             "0 = hard cut between blocks"
         ),
         default=5, min=0, max=30,
+    )
+
+    # -- Key-pose overlay --
+    #
+    # Each pose the artist keys becomes one full-body ``pose_keyframe``
+    # constraint in the request. These settings control the viewport view of
+    # that plan — which poses exist, where, and which the request will carry.
+    # See ``key_poses.py``.
+    show_key_poses: BoolProperty(
+        name="Show Key Poses",
+        description=(
+            "Show the poses you keyed as ghosts in the viewport, each tinted "
+            "with its prompt block's colour and labelled with its frame. "
+            "These are the full-body constraints the model is asked to hit; "
+            "poses outside the generation range are greyed out because the "
+            "request leaves them out"
+        ),
+        default=False,
+        update=_key_poses_toggle_update,
+    )
+    key_pose_ghosts: BoolProperty(
+        # Named "Poses" in the UI: the panel it lives in is already called
+        # Ghosts, and this picks which part of that overlay draws.
+        name="Poses",
+        description=(
+            "Draw the body at each pose you keyed. Independent of the motion "
+            "trail — either can be shown on its own"
+        ),
+        default=True,
+        update=_key_poses_redraw_update,
+    )
+    key_pose_display: EnumProperty(
+        name="Show As",
+        description="What each key pose is drawn as",
+        items=[
+            ("AUTO", "Auto", "Skinned mesh if the rig has one, bones otherwise"),
+            ("MESH", "Mesh", "Meshes deformed by the rig, as a translucent body"),
+            ("BONES", "Bones", "The skeleton as sticks — clearer on a dense character"),
+        ],
+        default="AUTO",
+        update=_key_poses_rebake_update,
+    )
+    key_pose_labels: BoolProperty(
+        name="Frame Numbers",
+        description="Label each key pose with the frame it sits on",
+        default=True,
+        update=_key_poses_redraw_update,
+    )
+    key_pose_trail: BoolProperty(
+        name="Motion Trail",
+        description=(
+            "Trace the path the motion actually takes, frame by frame, "
+            "coloured by the prompt block driving each stretch and marked at "
+            "every pose you keyed. Follows the joints the model is steered "
+            "by: the hands and feet, the root, and the head"
+        ),
+        default=True,
+        update=_key_poses_redraw_update,
+    )
+    key_pose_xray: BoolProperty(
+        name="X-Ray",
+        description="Draw the key poses through the character instead of behind it",
+        default=False,
+        update=_key_poses_redraw_update,
+    )
+    key_pose_auto_refresh: BoolProperty(
+        name="Auto Refresh",
+        description=(
+            "Re-bake the ghosts when you key a pose or move the rig. Turn off "
+            "on a heavy character and refresh by hand instead"
+        ),
+        default=True,
     )
 
     default_prompt: StringProperty(

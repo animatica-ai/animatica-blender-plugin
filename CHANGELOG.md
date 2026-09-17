@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [Unreleased]
+
+### Added
+
+- **See the plan before you generate.** The poses you key are the direction the
+  model is given — each one becomes a full-body `pose_keyframe` constraint the
+  motion has to pass through — and they were the one part of that direction you
+  could not see. Scrub away from a key and nothing remained of it; nothing said
+  which prompt block a pose belonged to; and a pose outside the generating range
+  was dropped from the request in silence. The new **Ghosts** panel and viewport
+  overlay show the plan itself: every key pose ghosted where it sits in
+  the scene, **tinted with the colour of the prompt block it falls under** so the
+  viewport and the timeline agree about which pose belongs to which instruction,
+  **labelled with its frame**, and **greyed out and flagged when the request will
+  not carry it**. The panel itself is just the switches for what to draw, plus
+  the one thing worth interrupting for: the frames that will not be sent.
+
+- **Motion trails, coloured by the plan.** The path the animation actually takes
+  is drawn through the key poses that asked for it, sampled frame by frame and
+  carrying the same colours — so the curve changes colour where the prompt blocks
+  change, and you can see which stretch of motion belongs to which instruction. A
+  dot per frame makes the timing readable at a glance (bunched is slow, spread is
+  fast), larger diamonds mark your key poses on the curve, and a white one marks
+  the playhead. It traces the joints the model is steered by — hands, feet, root
+  and head — resolved through the same name matching effector pins use, so a
+  namespaced, Mixamo or differently-spelled rig all land on the right bones, and
+  a control rig is traced on its deform skeleton. Frames
+  outside the generating range are drawn dim, like the poses there. The ghosts
+  and the trail are independent — each has its own switch and its own cache, so
+  showing one on its own costs nothing and switching one never disturbs or
+  re-bakes the other.
+
+- **Key poses are marked on the Animatica timeline lane.** A diamond per
+  authored pose, drawn over the prompt strips, so you can see at a glance which
+  block each pose lands in — and in red when it falls outside the generating
+  range. Blender's own keyframe row cannot show this: after a generation it is a
+  solid band of baked samples, one per frame.
+
+- **Add Key Pose** (`F3` search, no button). Keys the current pose and marks it
+  as yours, so the next generation is asked to hit it. This is not a shortcut
+  for pressing `I`:
+  Blender keeps a keyframe's existing type when you key over an existing one, so
+  posing on a frame a previous generation baked leaves a `GENERATED`-typed key —
+  and the addon reads that type as "the model produced this" and leaves the pose
+  out of the request. Poses added this way are typed as authored, so they
+  survive **Reject** and are sent as constraints. Keys the selected bones, or
+  the whole body when nothing is selected. **Jump to Key Pose** is there too,
+  stepping the playhead between your own poses — which Blender's keyframe jump
+  cannot do once a generated take has put a key on every frame.
+
+### Fixed
+
+- **The pose-keyframe count in Constraints counts poses, not curve points.** It
+  summed every keyframe point on every rotation channel, so a rig carrying a
+  generated take reported tens of thousands of "pose keyframes" — one per bone
+  per channel per frame — where the request sends one constraint per authored
+  frame. It now reads the authored frames, so the number matches what goes out.
+
 ## [0.5.3] — 2026-09-16
 
 ### Fixed
