@@ -409,10 +409,17 @@ def _register_keymap() -> None:
     if config is None:
         return
     km = config.keymaps.new(name="3D View", space_type='VIEW_3D')
-    kmi = km.keymap_items.new(
-        ANIMATICA_OT_pick_ghost.bl_idname, 'LEFTMOUSE', 'PRESS',
-    )
-    _keymaps.append((km, kmi))
+    # Three items, not one with modifiers read off the event: Blender matches a
+    # keymap item on the exact modifier state, so an item registered plain is
+    # never reached while Shift or Ctrl is held — which silently cost us the
+    # Shift variant until it was checked. The operator reads the modifiers from
+    # the event; these entries only get it invoked at all.
+    for shift, ctrl in ((False, False), (True, False), (False, True)):
+        kmi = km.keymap_items.new(
+            ANIMATICA_OT_pick_ghost.bl_idname, 'LEFTMOUSE', 'PRESS',
+            shift=shift, ctrl=ctrl,
+        )
+        _keymaps.append((km, kmi))
 
 
 def _unregister_keymap() -> None:

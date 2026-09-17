@@ -62,9 +62,12 @@ Proscenium, and keep the identifiers those releases actually shipped.
   **The root curve moves the whole pose**, and Shift does the same from any
   handle: every effector shifts by one delta, so the character is carried
   bodily to a new place with its shape intact (measured: 0.00 cm of distortion
-  under an 0.85 m move). Re-solving a moved pelvis against pinned hands and
-  feet is a weight shift, not a move, and there was no way to simply relocate
-  a pose without it.
+  under an 0.85 m move). **Ctrl** asks for the other thing the hips are for —
+  the pelvis alone, hands and feet staying where they are, which is a weight
+  shift rather than a move (measured: dropping the hips moves the pelvis and
+  the spine above it, both feet within a millimetre). The modifiers are read
+  on every mouse move, not latched at the press, so either can be held or
+  released mid-drag; the header names them while dragging.
 
   **A click reaches for a key pose first.** The points are a dot per frame and
   at a normal zoom the neighbours sit less than a pixel apart — measured 0.6 px

@@ -89,7 +89,10 @@ generation. It solves at about 100 Hz, so the body follows the cursor.
 
 **Dragging the root curve moves the whole pose** — every joint travels
 together, so the character is carried to a new place with its shape intact.
-Hold **Shift** to do the same from any other handle.
+Hold **Ctrl** to move the hips alone instead: the feet and hands stay where
+they are and the body shifts its weight over them. **Shift** asks for the
+opposite from any other handle — carry everything. Either can be held or let
+go mid-drag; the header names both while you are dragging.
 
 Your key poses are the big diamonds on the curve, and they are what a click
 reaches for: a key pose wins over the frames either side of it even when they

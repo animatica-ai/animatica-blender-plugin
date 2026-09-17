@@ -407,7 +407,9 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
     bl_description = (
         "Drag a point on a motion trail: that end effector moves at that "
         "frame, the Autoposer solves the body around it, and releasing keys "
-        "the pose. The playhead does not move"
+        "the pose. The playhead does not move. The root curve carries the "
+        "whole pose — hold Ctrl to move the hips alone, or Shift to carry the "
+        "whole pose from any other handle"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -436,9 +438,7 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             return {'CANCELLED'}
 
         origin = Vector(points[self._index])
-        # The root is the body's placement, so its curve moves the body. Shift
-        # says the same thing from any other handle.
-        self._whole = bool(self.whole_pose) or is_root(self.bone) or event.shift
+        self._whole = self._mode(event)
         _drag.update({
             "whole_pose": self._whole,
             "active": True, "bone": self.bone, "joint": _canonical(self.bone),
@@ -450,8 +450,31 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         # by accident.
         self._plane_no = context.region_data.view_rotation @ Vector((0.0, 0.0, 1.0))
         self._solve(context, event)
+        context.area.header_text_set(
+            "Drag a motion curve   |   Shift: whole pose   |   Ctrl: hips only   "
+            "|   Esc: cancel")
         context.window_manager.modal_handler_add(self)
         return {'RUNNING_MODAL'}
+
+    def _mode(self, event) -> bool:
+        """Whether this drag carries the whole pose, read from the modifiers.
+
+        The root is the body's placement, so its curve carries the body — that
+        is what a root curve means, and what relocating a pose needs. But the
+        hips are also a joint you pose: shifting weight over a foot moves the
+        pelvis and nothing else. **Ctrl** asks for that, treating the root like
+        any other effector; **Shift** asks for the opposite from any other
+        handle, carrying everything.
+
+        Read on every mouse move rather than latched at the press, the way
+        Blender's own transforms read theirs — changing your mind mid-drag is
+        what modifiers are for.
+        """
+        if bool(self.whole_pose):
+            return True
+        if event.ctrl:
+            return False
+        return bool(event.shift) or is_root(self.bone)
 
     def _mouse_world(self, context, event):
         region, rv3d = context.region, context.region_data
@@ -467,6 +490,8 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         from . import key_poses
         from .autoposer import engine
 
+        self._whole = self._mode(event)
+        _drag["whole_pose"] = self._whole
         _drag["target"] = self._mouse_world(context, event)
         try:
             out = solve_drag(self._arm, self._index, self.bone, _drag["target"],
@@ -486,13 +511,17 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         return True
 
     def modal(self, context, event):
-        if event.type == 'MOUSEMOVE':
+        # Modifier presses and releases arrive as their own events; re-solving
+        # on them is what makes holding Shift mid-drag do something.
+        if event.type in {'MOUSEMOVE', 'LEFT_SHIFT', 'RIGHT_SHIFT',
+                          'LEFT_CTRL', 'RIGHT_CTRL'}:
             self._solve(context, event)
             context.area.tag_redraw()
             return {'RUNNING_MODAL'}
 
         if event.type in {'RIGHTMOUSE', 'ESC'}:
             _clear()
+            context.area.header_text_set(None)
             context.area.tag_redraw()
             return {'CANCELLED'}
 
@@ -502,7 +531,9 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             out = _drag["solve"]
             error = _drag["error"]
             frame = int(_drag["frame"])
+            whole = bool(_drag["whole_pose"])
             _clear()
+            context.area.header_text_set(None)
             context.area.tag_redraw()
             if out is None:
                 self.report({'WARNING'}, error or "nothing to key")
@@ -510,8 +541,7 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             written = commit(self._arm, frame, out)
             key_poses.invalidate_plan()
             key_poses.request_rebuild()
-            what = ("whole pose moved" if self._whole
-                    else f"{_canonical(self.bone)} moved")
+            what = "whole pose moved" if whole else f"{_canonical(self.bone)} moved"
             self.report({'INFO'}, f"{what} at frame {frame} — keyed ({written} channels)")
             return {'FINISHED'}
 
