@@ -60,6 +60,13 @@ MAX_GHOSTS = 64
 # depsgraph updates continuously.
 REBUILD_DEBOUNCE = 0.35
 
+# ...but no burst may hold the bake off forever. Waiting for quiet assumes the
+# noise stops; during playback the depsgraph reports the action updated on
+# every frame, which re-armed the wait sixty times a second and meant the
+# ghosts never refreshed at all while the animation ran. After this long since
+# the first request, the bake happens whatever is still arriving.
+REBUILD_MAX_WAIT = 1.2
+
 # Ghost opacity by how many key poses away it is from the playhead. A blockout
 # with eight keys drew eight bodies at nearly one weight and read as a crowd;
 # the pose you are working between has to come forward and the rest has to
@@ -186,6 +193,9 @@ _flash: dict = {"frame": -1, "at": 0.0}
 
 # Time of the most recent rebuild request; the timer waits for quiet.
 _rebuild_requested_at: float | None = None
+#: ...and of the first request in the burst, which the ceiling is measured
+#: from, so a stream of requests cannot hold the bake off indefinitely.
+_rebuild_first_at: float | None = None
 
 # Draw handles are mirrored onto driver_namespace so a module reload finds the
 # ones Blender still holds instead of stacking a second pair on top.
@@ -940,27 +950,34 @@ def request_rebuild(*, coalesce: bool = False) -> None:
     never ran at all. Edits want the opposite — dragging a bone should keep
     pushing the bake out until the drag ends — so they restart it.
     """
-    global _rebuild_requested_at
+    global _rebuild_requested_at, _rebuild_first_at
     # A request means "what was baked may no longer be true". Only the caller
     # knows that; the caches cannot tell from the rig's name.
     _ghosts["dirty"] = True
     _trail["dirty"] = True
+    now = time.monotonic()
+    if _rebuild_first_at is None:
+        _rebuild_first_at = now
     if not (coalesce and _rebuild_requested_at is not None):
-        _rebuild_requested_at = time.monotonic()
+        _rebuild_requested_at = now
     if not bpy.app.timers.is_registered(_rebuild_timer):
         bpy.app.timers.register(_rebuild_timer, first_interval=REBUILD_DEBOUNCE)
 
 
 def _rebuild_timer():
-    global _rebuild_requested_at
+    global _rebuild_requested_at, _rebuild_first_at
 
     requested = _rebuild_requested_at
     if requested is None:
         return None
-    waited = time.monotonic() - requested
-    if waited < REBUILD_DEBOUNCE:
-        # Asked again while we waited — sit out the rest of the window.
-        return REBUILD_DEBOUNCE - waited
+    now = time.monotonic()
+    waited = now - requested
+    pending = now - (_rebuild_first_at or requested)
+    if waited < REBUILD_DEBOUNCE and pending < REBUILD_MAX_WAIT:
+        # Asked again while we waited — sit out the rest of the window, unless
+        # the whole burst has gone on long enough that waiting for quiet has
+        # become waiting forever.
+        return min(REBUILD_DEBOUNCE - waited, max(0.05, REBUILD_MAX_WAIT - pending))
 
     # Held only for a generation, which owns the playhead and the action while
     # it samples frame by frame — stepping the frame under it would corrupt
@@ -976,6 +993,7 @@ def _rebuild_timer():
         return REBUILD_DEBOUNCE
 
     _rebuild_requested_at = None
+    _rebuild_first_at = None
     try:
         rebuild()
     except Exception as exc:                # noqa: BLE001 — a timer must not raise
@@ -1052,6 +1070,16 @@ def _on_depsgraph(scene, depsgraph) -> None:
     arm = _target(settings)
     if arm is None:
         return
+    # Playback reports the action updated on every frame — animation
+    # evaluation touches it — and that is not an edit. Taking it for one meant
+    # a rebuild request sixty times a second, each pushing the wait out, so
+    # nothing ever refreshed while the animation ran. Playback cannot change a
+    # key; the paths that do (keying a pose, dragging a curve) ask for a
+    # rebuild themselves and do not come through here.
+    screen = getattr(bpy.context, "screen", None)
+    if screen is not None and getattr(screen, "is_animation_playing", False):
+        return
+
     action = _action(arm)
     for update in depsgraph.updates:
         source = getattr(update.id, "original", update.id)

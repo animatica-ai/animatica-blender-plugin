@@ -257,6 +257,17 @@ Proscenium, and keep the identifiers those releases actually shipped.
   110-frame trail, mid-playback, frame 28 in and frame 28 out. Only a running
   generation still waits, because it owns the playhead while it samples.
 
+  Playback was still blocking them by another route, which the hold had been
+  hiding. Animation evaluation touches the action every frame, and the
+  depsgraph duly reports the action as updated — measured at 141 updates over
+  a couple of seconds, every one of them read as "the keys changed". Each
+  re-armed the wait-for-quiet, so the bake was pushed out sixty times a second
+  and never ran. Playback cannot change a key, so it is no longer taken for an
+  edit; the paths that genuinely change one ask for a rebuild themselves. And
+  no burst can hold a bake off indefinitely now: waiting for quiet gives up
+  after 1.2 seconds from the first request and bakes anyway. Verified while
+  playing: a refresh requested mid-playback lands, both caches clean.
+
 - **The pose-keyframe count in Constraints counts poses, not curve points.** It
   summed every keyframe point on every rotation channel, so a rig carrying a
   generated take reported tens of thousands of "pose keyframes" — one per bone
