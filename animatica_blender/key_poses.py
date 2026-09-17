@@ -60,7 +60,13 @@ MAX_GHOSTS = 64
 # depsgraph updates continuously.
 REBUILD_DEBOUNCE = 0.35
 
-GHOST_ALPHA          = 0.28   # a pose in the plan
+# Ghost opacity by how many key poses away it is from the playhead. A blockout
+# with eight keys drew eight bodies at nearly one weight and read as a crowd;
+# the pose you are working between has to come forward and the rest has to
+# fall back to context. Beyond the third it is a silhouette saying "there is
+# more plan over there", which is all it needs to say.
+GHOST_ALPHA_BY_RANK  = (0.42, 0.22, 0.12)
+GHOST_ALPHA_FAR      = 0.07
 GHOST_ALPHA_ADJACENT = 0.42   # the poses either side of the playhead
 GHOST_ALPHA_DROPPED  = 0.13   # a pose the request will not carry
 GHOST_ALPHA_EDITING  = 0.60   # the pose currently open for editing
@@ -87,7 +93,13 @@ TRAIL_DOT_RADIUS = 1.8            # one per frame: spacing is speed
 TRAIL_KEY_RADIUS = 4.5            # the frames you keyed, on the curve
 TRAIL_CURRENT_RADIUS = 3.5
 TRAIL_NEUTRAL_COLOR = (0.80, 0.82, 0.88)   # frames under no prompt block
-TRAIL_ALPHA = 0.85
+TRAIL_ALPHA = 0.80
+# Frames either side of the playhead the trail is drawn at full strength, and
+# how faint it goes beyond that. Six curves across a hundred frames at one
+# weight is a thicket you cannot read the near motion through; the far parts
+# are context, and context belongs in the background.
+TRAIL_NEAR_FRAMES = 12
+TRAIL_FAR_FACTOR = 0.18
 TRAIL_ALPHA_DROPPED = 0.28        # frames the next generation will not touch
 TRAIL_CURRENT_COLOR = (1.0, 1.0, 1.0, 0.95)
 
@@ -95,6 +107,11 @@ LABEL_SIZE         = 11
 LABEL_COLOR        = (0.92, 0.93, 0.96, 0.95)
 LABEL_DROPPED      = (1.00, 0.55, 0.42, 0.95)
 LABEL_OFFSET_PX    = 6
+
+# How long "keyed" stays beside a pose that was just committed. Long enough to
+# be read after letting go of the mouse, short enough not to become furniture.
+FLASH_SECONDS = 2.0
+FLASH_COLOR   = (0.55, 1.0, 0.55, 1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +177,12 @@ _trail_colors: dict = {"signature": None, "frames": None, "colors": []}
 # Set while a bake owns the playhead, so our own frame_set calls don't look
 # like user edits to the depsgraph handler.
 _baking = False
+
+#: The frame most recently keyed, and when. Both ways of editing a pose — a
+#: control dragged at the playhead, a motion curve dragged at any frame — say
+#: so the same way, because they are the same act: this frame is now one of
+#: yours.
+_flash: dict = {"frame": -1, "at": 0.0}
 
 # Time of the most recent rebuild request; the timer waits for quiet.
 _rebuild_requested_at: float | None = None
@@ -412,33 +435,64 @@ def _frame_color(frame: int, settings, p) -> tuple[float, float, float, float]:
     return (*rgb, TRAIL_ALPHA if inside else TRAIL_ALPHA_DROPPED)
 
 
-def _trail_color_list(settings, p, frames):
-    """One colour per sampled frame, cached against the plan.
+def _trail_fade(frame: int, current: int) -> float:
+    """How strongly this frame of the trail is drawn, by distance from the
+    playhead. Near motion is what is being worked on; the rest is context."""
+    d = abs(frame - current)
+    if d <= TRAIL_NEAR_FRAMES:
+        return 1.0
+    t = min(1.0, (d - TRAIL_NEAR_FRAMES) / float(TRAIL_NEAR_FRAMES * 2))
+    return 1.0 + (TRAIL_FAR_FACTOR - 1.0) * t
+
+
+def _trail_color_list(settings, p, frames, current: int):
+    """One colour per sampled frame, cached against the plan and the playhead.
 
     The colour is what makes the trail a *plan* view rather than a motion
     path: the curve changes colour where the prompt blocks change, so you can
-    see which stretch of the motion belongs to which instruction.
+    see which stretch of the motion belongs to which instruction. The alpha is
+    what makes it readable: it falls away from the playhead, so the passage
+    being worked on is the one that reads.
     """
-    if (
-        _trail_colors["signature"] == p["signature"]
-        and _trail_colors["frames"] == len(frames)
-    ):
+    key = (p["signature"], len(frames), current)
+    if _trail_colors["signature"] == key:
         return _trail_colors["colors"]
-    colors = [_frame_color(f, settings, p) for f in frames]
-    _trail_colors["signature"] = p["signature"]
-    _trail_colors["frames"] = len(frames)
+    colors = []
+    for f in frames:
+        r, g, b, a = _frame_color(f, settings, p)
+        colors.append((r, g, b, a * _trail_fade(f, current)))
+    _trail_colors["signature"] = key
     _trail_colors["colors"] = colors
     return colors
 
 
-def _pose_alpha(frame: int, entry: dict, adjacent: set[int], editing: int = -1) -> float:
+def _rank_from_playhead(frames, current: int) -> dict:
+    """How many key poses each one is from the playhead, either way.
+
+    Rank 1 is the pose immediately before or after, which is what an artist is
+    working between. Distance in *keys*, not in frames: two keys forty frames
+    apart are still neighbours, and a dense passage is not eight times more
+    important for being dense.
+    """
+    ranks = {}
+    for i, f in enumerate(reversed([x for x in frames if x < current]), start=1):
+        ranks[f] = i
+    for i, f in enumerate([x for x in frames if x > current], start=1):
+        ranks[f] = i
+    return ranks
+
+
+def _pose_alpha(frame: int, entry: dict, ranks: dict, editing: int = -1) -> float:
     if frame == editing:
         # An open edit session has to be unmissable: clicking a ghost and
         # seeing nothing change is the failure this guards against.
         return GHOST_ALPHA_EDITING
     if not entry["in_range"]:
         return GHOST_ALPHA_DROPPED
-    return GHOST_ALPHA_ADJACENT if frame in adjacent else GHOST_ALPHA
+    rank = ranks.get(frame, 1)
+    if rank <= len(GHOST_ALPHA_BY_RANK):
+        return GHOST_ALPHA_BY_RANK[rank - 1]
+    return GHOST_ALPHA_FAR
 
 
 def _editing_frame(settings) -> int:
@@ -451,26 +505,6 @@ def _editing_frame(settings) -> int:
         return -1
     return -1 if session is None else int(session)
 
-
-def _adjacent_frames(frames, current: int) -> set[int]:
-    """The key pose just behind and just ahead of the playhead.
-
-    Those two are the ones the artist is working between, so they carry a
-    little more weight than the rest of the plan.
-    """
-    past = [f for f in frames if f < current]
-    future = [f for f in frames if f > current]
-    out = set()
-    if past:
-        out.add(past[-1])
-    if future:
-        out.add(future[0])
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Capture
-# ---------------------------------------------------------------------------
 
 def _skinned_meshes(arm, context) -> list[bpy.types.Object]:
     """Visible meshes this armature deforms — by modifier or by parenting."""
@@ -950,6 +984,18 @@ def _rebuild_timer():
     return None
 
 
+def flash_keyed(frame: int) -> None:
+    """Say that this frame has just become a key pose."""
+    _flash["frame"] = int(frame)
+    _flash["at"] = time.monotonic()
+    tag_redraw()
+
+
+def _flashing(frame: int) -> bool:
+    return (_flash["frame"] == frame
+            and time.monotonic() - _flash["at"] < FLASH_SECONDS)
+
+
 def tag_redraw() -> None:
     """Redraw the viewports and timelines that show the plan."""
     wm = getattr(bpy.context, "window_manager", None)
@@ -1305,7 +1351,7 @@ def _draw_geometry():
         return
 
     visible = _visible_poses(context.scene, p) if ghosts_ready else []
-    adjacent = _adjacent_frames(_ghosts["frames"], context.scene.frame_current)
+    ranks = _rank_from_playhead(_ghosts["frames"], context.scene.frame_current)
     editing = _editing_frame(settings)
     shader = _shader()
     ghosts = _ghosts["ghosts"]
@@ -1320,13 +1366,13 @@ def _draw_geometry():
             _draw_trail(settings, p)
 
         # Faintest first, so the poses nearest the playhead land on top.
-        order = sorted(visible, key=lambda item: _pose_alpha(item[0], item[1], adjacent, editing))
+        order = sorted(visible, key=lambda item: _pose_alpha(item[0], item[1], ranks, editing))
         for frame, entry in order:
             batches = ghosts.get(frame)
             if batches is None:
                 continue
             rgb = _pose_color(frame, entry, settings)
-            alpha = _pose_alpha(frame, entry, adjacent, editing)
+            alpha = _pose_alpha(frame, entry, ranks, editing)
             shader.bind()
             shader.uniform_float("color", (*rgb, alpha))
             if batches["tris"] is not None:
@@ -1366,7 +1412,7 @@ def _draw_trail(settings, p) -> None:
     if not trail["bones"] or len(frames) < 2:
         return
 
-    colors = _trail_color_list(settings, p, frames)
+    colors = _trail_color_list(settings, p, frames, int(bpy.context.scene.frame_current))
     px = _px()
     viewport = _viewport_size()
     line = _line_shader()
@@ -1406,7 +1452,7 @@ def _draw_trail_markers(settings, p, region, rv3d, current: int) -> None:
     if not trail["bones"] or len(frames) < 2:
         return
 
-    colors = _trail_color_list(settings, p, frames)
+    colors = _trail_color_list(settings, p, frames, current)
     key_frames = set(p["frames"])
     px = _px()
 
@@ -1485,7 +1531,9 @@ def _draw_screen():
             co = view3d_utils.location_3d_to_region_2d(region, rv3d, anchor[1])
             if co is None:
                 continue        # behind the viewer
-            if frame == editing:
+            if _flashing(frame):
+                text = f"{frame} · keyed"
+            elif frame == editing:
                 text = f"{frame} · editing"
             elif entry["in_range"]:
                 text = str(frame)
@@ -1493,7 +1541,9 @@ def _draw_screen():
                 text = f"{frame} ✕"
             width, _height = blf.dimensions(font_id, text)
             blf.position(font_id, co.x - width * 0.5, co.y + LABEL_OFFSET_PX * px, 0)
-            blf.color(font_id, *(LABEL_COLOR if entry["in_range"] else LABEL_DROPPED))
+            blf.color(font_id, *(
+                FLASH_COLOR if _flashing(frame)
+                else LABEL_COLOR if entry["in_range"] else LABEL_DROPPED))
             blf.draw(font_id, text)
     finally:
         gpu.state.blend_set('NONE')

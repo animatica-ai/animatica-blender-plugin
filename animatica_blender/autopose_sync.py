@@ -115,6 +115,12 @@ def write_captured(context) -> int:
 
     written = pose_edit.write_channels(action, frame, channels)
     if written:
+        # The same thing the motion-curve drag says, in the same place: posing
+        # a frame makes it one of yours, however you posed it. Without this a
+        # control drag committed in silence and the only way to know was to
+        # scrub off and back.
+        key_poses.flash_keyed(frame)
+        scene.ap_status = f"keyed at frame {frame}"
         key_poses.invalidate_plan()
         key_poses.request_rebuild()
     return written

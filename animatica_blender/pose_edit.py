@@ -474,6 +474,7 @@ class ANIMATICA_OT_set_key_pose(Operator):
             arm.animation_data.action = action
 
         written = _write_pose_to_action(arm, action, frame)
+        key_poses.flash_keyed(frame)
         settings.editing_key_pose_frame = -1
         context.scene.frame_set(frame)
         key_poses.invalidate_plan()

@@ -526,6 +526,7 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
                 self.report({'WARNING'}, error or "nothing to key")
                 return {'CANCELLED'}
             written = commit(self._arm, frame, out)
+            key_poses.flash_keyed(frame)
             key_poses.invalidate_plan()
             key_poses.request_rebuild()
             what = "whole pose moved" if whole else f"{_canonical(self.bone)} moved"
