@@ -63,6 +63,7 @@ REBUILD_DEBOUNCE = 0.35
 GHOST_ALPHA          = 0.28   # a pose in the plan
 GHOST_ALPHA_ADJACENT = 0.42   # the poses either side of the playhead
 GHOST_ALPHA_DROPPED  = 0.13   # a pose the request will not carry
+GHOST_ALPHA_EDITING  = 0.60   # the pose currently open for editing
 
 # Bone sticks cover a fraction of the pixels a body does, so the alpha that
 # reads as a translucent character leaves a skeleton nearly invisible.
@@ -423,10 +424,25 @@ def _trail_color_list(settings, p, frames):
     return colors
 
 
-def _pose_alpha(frame: int, entry: dict, adjacent: set[int]) -> float:
+def _pose_alpha(frame: int, entry: dict, adjacent: set[int], editing: int = -1) -> float:
+    if frame == editing:
+        # An open edit session has to be unmissable: clicking a ghost and
+        # seeing nothing change is the failure this guards against.
+        return GHOST_ALPHA_EDITING
     if not entry["in_range"]:
         return GHOST_ALPHA_DROPPED
     return GHOST_ALPHA_ADJACENT if frame in adjacent else GHOST_ALPHA
+
+
+def _editing_frame(settings) -> int:
+    """Frame of the open edit session, or -1. Never raises in a draw."""
+    from . import pose_edit
+
+    try:
+        session = pose_edit.active_session(settings, _target(settings))
+    except Exception:                       # noqa: BLE001 — never break a draw
+        return -1
+    return -1 if session is None else int(session)
 
 
 def _adjacent_frames(frames, current: int) -> set[int]:
@@ -1211,6 +1227,7 @@ def _draw_geometry():
 
     visible = _visible_poses(context.scene, p) if ghosts_ready else []
     adjacent = _adjacent_frames(_ghosts["frames"], context.scene.frame_current)
+    editing = _editing_frame(settings)
     shader = _shader()
     ghosts = _ghosts["ghosts"]
 
@@ -1224,13 +1241,13 @@ def _draw_geometry():
             _draw_trail(settings, p)
 
         # Faintest first, so the poses nearest the playhead land on top.
-        order = sorted(visible, key=lambda item: _pose_alpha(item[0], item[1], adjacent))
+        order = sorted(visible, key=lambda item: _pose_alpha(item[0], item[1], adjacent, editing))
         for frame, entry in order:
             batches = ghosts.get(frame)
             if batches is None:
                 continue
             rgb = _pose_color(frame, entry, settings)
-            alpha = _pose_alpha(frame, entry, adjacent)
+            alpha = _pose_alpha(frame, entry, adjacent, editing)
             shader.bind()
             shader.uniform_float("color", (*rgb, alpha))
             if batches["tris"] is not None:
@@ -1378,6 +1395,7 @@ def _draw_screen():
             return
 
         roots = _ghosts["roots"]
+        editing = _editing_frame(settings)
         font_id = 0
         px = _px()
         blf.size(font_id, int(LABEL_SIZE * px))
@@ -1388,7 +1406,12 @@ def _draw_screen():
             co = view3d_utils.location_3d_to_region_2d(region, rv3d, anchor[1])
             if co is None:
                 continue        # behind the viewer
-            text = str(frame) if entry["in_range"] else f"{frame} ✕"
+            if frame == editing:
+                text = f"{frame} · editing"
+            elif entry["in_range"]:
+                text = str(frame)
+            else:
+                text = f"{frame} ✕"
             width, _height = blf.dimensions(font_id, text)
             blf.position(font_id, co.x - width * 0.5, co.y + LABEL_OFFSET_PX * px, 0)
             blf.color(font_id, *(LABEL_COLOR if entry["in_range"] else LABEL_DROPPED))

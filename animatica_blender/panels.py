@@ -449,14 +449,12 @@ class ANIMATICA_PT_ghosts(AnimaticaPanelBase, Panel):
         # An edit session owns the panel while it runs: the rig may be
         # detached from its action, and Apply is what puts the pose back onto
         # the keyframe, so it has to be the obvious thing on screen.
-        if settings.editing_key_pose_frame >= 0:
-            from . import pose_edit
+        from . import pose_edit
 
+        session = pose_edit.active_session(settings, settings.target_armature)
+        if session is not None:
             box = layout.box()
-            box.label(
-                text=f"Editing pose at frame {settings.editing_key_pose_frame}",
-                icon='KEYFRAME_HLT',
-            )
+            box.label(text=f"Editing pose at frame {session}", icon='KEYFRAME_HLT')
             if pose_edit.autoposer_holds(settings.target_armature):
                 note = box.row()
                 note.active = False

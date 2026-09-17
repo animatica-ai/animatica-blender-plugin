@@ -65,6 +65,28 @@ def autoposer_holds(arm) -> bool:
     return arm is not None and bool(arm.get(_AP_STASHED_ACTION))
 
 
+def active_session(settings, arm) -> int | None:
+    """The frame actually being edited, or None.
+
+    A recorded frame is only a live session while the playhead is still on it,
+    or while the Autoposer is holding the rig for it. Anything else is a
+    leftover — the artist scrubbed away, an undo restored an old value, a file
+    was loaded — and a leftover must never block a click or offer an Apply
+    that would write somewhere the artist is not looking.
+
+    Read-only: the panel calls this from ``draw``.
+    """
+    frame = int(getattr(settings, "editing_key_pose_frame", -1))
+    if frame < 0:
+        return None
+    if autoposer_holds(arm):
+        return frame
+    scene = getattr(bpy.context, "scene", None)
+    if scene is not None and frame == int(scene.frame_current):
+        return frame
+    return None
+
+
 def _editing_action(arm):
     """The action an edit must be written into.
 
@@ -261,11 +283,27 @@ class ANIMATICA_OT_pick_ghost(Operator):
             settings = _settings(context)
             if settings is None or not settings.show_key_poses:
                 return {'PASS_THROUGH'}
-            if settings.editing_key_pose_frame >= 0:
-                return {'PASS_THROUGH'}     # already editing one; let the artist work
             frame = key_poses.pick_frame(
                 context, event.mouse_region_x, event.mouse_region_y,
             )
+            # Leave a trace of what the last click decided. Clicking a ghost
+            # and getting nothing is indistinguishable from the binding never
+            # firing, and this is the only way to tell them apart afterwards.
+            bpy.app.driver_namespace["animatica_last_ghost_pick"] = {
+                "xy": (event.mouse_region_x, event.mouse_region_y),
+                "hit": frame,
+            }
+            if frame is not None:
+                # Switching poses mid-hand-over would strand the edit inside
+                # the Autoposer, so that one case is refused — out loud, and
+                # still passing the click on so selection behaves normally.
+                held = active_session(settings, _target(context))
+                if held is not None and held != frame and autoposer_holds(_target(context)):
+                    self.report(
+                        {'WARNING'},
+                        f"Apply or Cancel the pose at frame {held} first",
+                    )
+                    return {'PASS_THROUGH'}
         except Exception as exc:            # noqa: BLE001 — never eat a click
             print(f"[Animatica] ghost pick failed: {exc}")
             return {'PASS_THROUGH'}
@@ -285,7 +323,9 @@ class ANIMATICA_OT_apply_key_pose_edit(Operator):
     @classmethod
     def poll(cls, context):
         settings = _settings(context)
-        return settings is not None and settings.editing_key_pose_frame >= 0
+        if settings is None:
+            return False
+        return active_session(settings, _target(context)) is not None
 
     def execute(self, context):
         from . import key_poses
@@ -296,7 +336,11 @@ class ANIMATICA_OT_apply_key_pose_edit(Operator):
             settings.editing_key_pose_frame = -1
             return {'CANCELLED'}
 
-        frame = int(settings.editing_key_pose_frame)
+        session = active_session(settings, arm)
+        if session is None:
+            settings.editing_key_pose_frame = -1
+            return {'CANCELLED'}
+        frame = int(session)
         action = _editing_action(arm)
         if action is None:
             self.report({'WARNING'}, "This rig has no action to write into")
@@ -329,7 +373,9 @@ class ANIMATICA_OT_cancel_key_pose_edit(Operator):
     @classmethod
     def poll(cls, context):
         settings = _settings(context)
-        return settings is not None and settings.editing_key_pose_frame >= 0
+        if settings is None:
+            return False
+        return active_session(settings, _target(context)) is not None
 
     def execute(self, context):
         from . import key_poses
