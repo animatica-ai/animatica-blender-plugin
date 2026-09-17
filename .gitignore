@@ -12,3 +12,6 @@ dist/
 .idea/
 *.swp
 .DS_Store
+
+# Weights staged into a test build; never committed
+animatica_blender/autoposer/model/

@@ -117,6 +117,13 @@ Proscenium, and keep the identifiers those releases actually shipped.
   machine that should not fetch it. The model is still explicit: it is
   account-gated, and only the artist has the token.
 
+- **A build can carry the model.** `make zip-with-model MODEL_DIR=<bundle>`
+  stages the weights into `autoposer/model/` inside the zip, and a model that
+  ships with the addon is used ahead of fetching one — so a test build needs no
+  Hugging Face account, no token and no download. A release carries none and
+  behaves exactly as before. The weights are staged in a temp tree, never in
+  the working copy, and the path is in `.gitignore` besides.
+
 - **The Autoposer can always be given the rig back.** Taking over detaches the
   action — that is how a solved pose survives a frame change — but the only
   ways out of that state were committing a pose or the Autoposer's own panel,

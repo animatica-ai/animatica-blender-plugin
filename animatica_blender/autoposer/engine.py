@@ -45,6 +45,19 @@ def data_dir() -> str:
     return bpy.utils.user_resource("DATAFILES", path="animatica_autoposer", create=True)
 
 
+def bundled_model():
+    """A model directory shipped inside this build, or ``None``.
+
+    A test build can carry the weights so a machine needs no token and no
+    download; a release does not, and this returns ``None`` there, so the code
+    path is the same either way.
+    """
+    import pathlib
+
+    d = pathlib.Path(__file__).resolve().parent / "model"
+    return str(d) if (d / "meta.json").is_file() else None
+
+
 def source():
     """What `resolve()` should be pointed at, from the preferences.
 
@@ -55,6 +68,12 @@ def source():
     p = prefs()
     if p.model_source == "LOCAL":
         return (bpy.path.abspath(p.local_path) or None), None
+    # A model inside the addon wins over fetching one: it is the build's own,
+    # it needs no account, and a pointed-at folder is the only thing that
+    # should override it — which is the branch above.
+    shipped = bundled_model()
+    if shipped:
+        return shipped, None
     if p.model_source == "HF":
         repo = p.hf_repo.strip() or "Animatica-ai/autoposer"
         sub = p.hf_subfolder.strip()
@@ -95,13 +114,25 @@ def status(refresh: bool = False) -> dict:
             local = apr.bundle.Bundle(bpy.path.abspath(p.local_path))
         except Exception:                                      # noqa: BLE001
             local = None
-    b = local or cached
+    shipped = None
+    if local is None:
+        path = bundled_model()
+        if path:
+            try:
+                shipped = apr.bundle.Bundle(path)
+            except Exception:                                  # noqa: BLE001
+                shipped = None
+    b = local or shipped or cached
     out = {
         "runtime": runtime_ok,
         "runtime_dir": str(apr.ortsetup.default_target(d)),
         "model": b is not None,
         "model_dir": str(b.path) if b else "",
-        "model_source": (b.meta.get("source") if b else "") or ("folder" if local else ""),
+        # Where this model came from, most specific first: a build that ships
+        # one says so, since that is what a tester needs to know.
+        "model_source": (("shipped with the addon" if shipped else "")
+                         or ("folder" if local else "")
+                         or (b.meta.get("source") if b else "")),
         "step": (b.meta.get("step") if b else None),
         "loaded": _ENGINE is not None,
         "data_dir": d,
