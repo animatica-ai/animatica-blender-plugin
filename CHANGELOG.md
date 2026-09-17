@@ -117,6 +117,14 @@ Proscenium, and keep the identifiers those releases actually shipped.
   machine that should not fetch it. The model is still explicit: it is
   account-gated, and only the artist has the token.
 
+- **One character, not two.** The Autoposer carried a rig picker of its own, so
+  it was possible to pose one armature and generate another — and to wonder why
+  editing a key pose changed nothing. It now works on Animatica's target
+  armature, which is the only place a character is chosen; its panel shows
+  which rig that is rather than offering a second choice, and switching the
+  target carries it along. The control bones are built the first time a pose is
+  opened for editing, so there is nothing to press first.
+
 - **A build can carry the model.** `make zip-with-model MODEL_DIR=<bundle>`
   stages the weights into `autoposer/model/` inside the zip, and a model that
   ships with the addon is used ahead of fetching one — so a test build needs no

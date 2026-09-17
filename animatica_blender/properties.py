@@ -239,6 +239,21 @@ def reset_target_armature_state(settings) -> None:
     _redraw_animatica_editors()
 
 
+def mirror_autoposer_rig(settings) -> None:
+    """Point the Autoposer at the armature Animatica generates for.
+
+    One character, chosen once. The Autoposer's own ``ap_armature`` stays as
+    the mirror the ported module reads, rather than being torn out of it.
+    """
+    scene = getattr(settings, "id_data", None)
+    if scene is None or not hasattr(scene, "ap_armature"):
+        return
+    arm = _live_armature(settings.target_armature)
+    name = arm.name if arm is not None else ""
+    if scene.ap_armature != name:
+        scene.ap_armature = name
+
+
 def _target_armature_update(self, context):
     """Sync per-armature state when the picker changes.
 
@@ -255,6 +270,9 @@ def _target_armature_update(self, context):
     settings = context.scene.animatica
     new_arm = _live_armature(settings.target_armature)
     old_arm = _live_armature(settings.previous_target_armature)
+
+    # Whatever else happens below, the Autoposer follows the same character.
+    mirror_autoposer_rig(settings)
 
     if new_arm is None:
         reset_target_armature_state(settings)

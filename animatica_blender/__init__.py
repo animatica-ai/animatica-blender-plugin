@@ -86,6 +86,7 @@ def _animatica_load_post(dummy):
         try:
             properties.load_blocks_from_armature(arm, settings)
             settings.previous_target_armature = arm
+            properties.mirror_autoposer_rig(settings)
         except Exception:
             pass
 

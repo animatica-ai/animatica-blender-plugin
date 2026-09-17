@@ -54,11 +54,39 @@ def autoposer_available() -> bool:
 
 
 def autoposer_drives(arm) -> bool:
-    """True when the Autoposer is live on ``arm``."""
+    """True when the Autoposer is the thing posing this rig.
+
+    Which is now simply "it is the character we are working on": the Autoposer
+    follows Animatica's target armature rather than carrying a picker of its
+    own, so there is no longer a way for the two to disagree.
+    """
     if arm is None or not autoposer_available():
         return False
-    scene = bpy.context.scene
-    return str(getattr(scene, "ap_armature", "") or "") == arm.name
+    from .autoposer import poser
+
+    return poser._armature(bpy.context) is arm
+
+
+def ensure_control_rig(arm, report=None) -> bool:
+    """Give the rig its controls if it has none yet.
+
+    Building is not a step the artist should have to know about: the controls
+    are how a pose is edited, so they are made the first time a pose is
+    opened. It is one undo step and it is skipped entirely once they exist.
+    """
+    from .autoposer import poser
+
+    if arm is None or not autoposer_available():
+        return False
+    if poser.has_controls(arm):
+        return True
+    try:
+        result = bpy.ops.autoposer.build_rig()
+    except RuntimeError as exc:
+        if report:
+            report({'WARNING'}, f"could not build the control rig: {exc}")
+        return False
+    return 'FINISHED' in result and poser.has_controls(arm)
 
 
 def autoposer_holds(arm) -> bool:
@@ -264,6 +292,9 @@ class ANIMATICA_OT_edit_key_pose(Operator):
 
         handed_over = False
         if autoposer_drives(arm) and not autoposer_holds(arm):
+            # The controls are what a pose is edited with, so they are built
+            # here rather than asked for.
+            ensure_control_rig(arm, self.report)
             # Seat the controls on the pose that is there before freezing it,
             # so the artist starts from their own key rather than from
             # wherever the controls were left.

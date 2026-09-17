@@ -160,8 +160,29 @@ def _anim_conflict(arm):
 
 
 def _armature(context):
+    """The rig being posed — the one Animatica generates for.
+
+    This carried its own picker when it was an addon of its own, which made it
+    possible to pose one character and generate another, and to wonder why
+    editing a key pose did nothing. There is one character in this app, chosen
+    once: the target armature. ``scene.ap_armature`` is kept as a mirror of it
+    so the rest of this module reads unchanged, and as the fallback for a
+    scene that has no Animatica settings at all.
+    """
+    settings = getattr(context.scene, "animatica", None)
+    target = getattr(settings, "target_armature", None) if settings else None
+    try:
+        if target is not None and target.type == "ARMATURE":
+            return target
+    except ReferenceError:
+        pass                                # deleted out from under the pointer
     ob = bpy.data.objects.get(context.scene.ap_armature)
     return ob if (ob is not None and ob.type == "ARMATURE") else None
+
+
+def has_controls(arm) -> bool:
+    """Whether this rig has been given the control bones the poser drives."""
+    return arm is not None and any(_is_ctrl(b.bone) for b in arm.pose.bones)
 
 
 def _is_ctrl(b):
@@ -1264,9 +1285,15 @@ class AP_PT_panel(bpy.types.Panel):
             row.label(text="animation detached", icon="CHECKMARK")
             row.operator("autoposer.release", text="Give Back", icon="LOCKED")
         col = lay.column(align=True)
-        col.prop_search(s, "ap_armature", bpy.data, "objects", text="Rig")
+        # Not a picker: the rig is Animatica's target armature, chosen once in
+        # the main panel. Two pickers meant two characters.
+        row = col.row()
+        row.enabled = False
+        row.label(text=(arm.name if arm is not None else "no target armature"),
+                  icon="OUTLINER_OB_ARMATURE")
         col.separator()
-        col.operator("autoposer.build_rig", icon="OUTLINER_OB_ARMATURE")
+        if arm is not None and not has_controls(arm):
+            col.operator("autoposer.build_rig", icon="OUTLINER_OB_ARMATURE")
         if arm is not None:
             row = col.row(align=True)
             row.prop(arm, "show_in_front", text="In front", icon="XRAY")

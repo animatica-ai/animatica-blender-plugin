@@ -104,6 +104,12 @@ A pose **outside the generating range is not sent** at all — those are greyed
 out in the viewport, red on the timeline, and named in the panel. Widen a prompt
 block to bring one back into the plan, or move the pose.
 
+The Autoposer works on the character you picked for generation — there is one
+armature in the app, chosen once. The first time you open a pose for editing it
+gives that rig its control bones, so there is nothing to build by hand; the
+Autoposer panel's **Build Rig** button is only there for a rig that has none
+yet.
+
 If the **Autoposer** is holding the rig — it detaches the action while it
 poses, so frame changes stop moving the character — the main panel says so and
 offers **Give Back Rig**. If anything bound an action while it held the rig,
