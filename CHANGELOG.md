@@ -39,6 +39,18 @@ Proscenium, and keep the identifiers those releases actually shipped.
   showing one on its own costs nothing and switching one never disturbs or
   re-bakes the other.
 
+- **Click a ghost to edit that pose.** The ghosts show where the key poses are;
+  clicking one makes it the handle you grab to change it. The playhead goes to
+  that frame, the rig goes into pose mode, and where the Autoposer is driving
+  that rig the pose is handed to it — controls seated on the pose that is there,
+  then the rig taken over so the solve survives. **Apply** writes the edited
+  pose back onto that frame's keyframe as authored keys, so what you changed is
+  what the next generation is asked to hit, and hands the rig back. Clicks are
+  hit-tested against the ghost's own geometry, so only the silhouette you can
+  see is clickable, a click landing on the character in front of a ghost goes to
+  the character as it always did, and a click that hits nothing passes straight
+  through to selection.
+
 - **Key poses are marked on the Animatica timeline lane.** A diamond per
   authored pose, drawn over the prompt strips, so you can see at a glance which
   block each pose lands in — and in red when it falls outside the generating

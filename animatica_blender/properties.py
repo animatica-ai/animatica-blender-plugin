@@ -742,6 +742,15 @@ class AnimaticaSettings(PropertyGroup):
         default=False,
         update=_key_poses_redraw_update,
     )
+    editing_key_pose_frame: IntProperty(
+        name="Editing Key Pose",
+        description=(
+            "Frame of the key pose currently being edited, or -1. Set by "
+            "clicking a ghost; cleared by Apply or Cancel"
+        ),
+        default=-1,
+        options={"SKIP_SAVE"},
+    )
     key_pose_auto_refresh: BoolProperty(
         name="Auto Refresh",
         description=(

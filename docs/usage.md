@@ -72,6 +72,14 @@ the white one is the playhead. It traces the joints the model is steered by —
 **hands, feet, root and head** — so the foot lines tell you about sliding and
 footfalls, the hand lines about arcs, and the root line about the trajectory.
 
+**Click a ghost to edit that pose.** The playhead goes to its frame, the rig
+goes into pose mode, and — where the Autoposer is driving that rig — the pose
+is handed to it so you can push the body around with its controls. **Apply**
+writes what you posed back onto that frame's keyframe, so the pose the next
+generation is asked to hit is the one you just made; **Cancel** leaves it
+alone. Without the Autoposer the click still takes you there and Apply still
+keys what you posed by hand.
+
 A pose **outside the generating range is not sent** at all — those are greyed
 out in the viewport, red on the timeline, and named in the panel. Widen a prompt
 block to bring one back into the plan, or move the pose.

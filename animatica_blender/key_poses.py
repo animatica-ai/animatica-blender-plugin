@@ -44,6 +44,7 @@ import bpy
 import gpu
 import numpy as np
 from bpy_extras import view3d_utils
+from mathutils import Vector
 from gpu_extras.batch import batch_for_shader
 
 
@@ -752,7 +753,7 @@ def rebuild(context=None) -> int:
             if f not in key_set:
                 continue
 
-            entry: dict = {"tris": None, "lines": None}
+            entry: dict = {"tris": None, "lines": None, "pick": None}
             points = ()
             if meshes:
                 captured = _capture_meshes(meshes, depsgraph)
@@ -762,6 +763,13 @@ def rebuild(context=None) -> int:
                     entry["tris"] = batch_for_shader(
                         shader, 'TRIS', {"pos": verts}, indices=tris,
                     )
+                    # Kept so a click can be tested against the body the
+                    # artist actually sees. The BVH is built from it lazily,
+                    # on the first click rather than in every bake.
+                    entry["pick"] = {
+                        "verts": verts, "tris": tris, "bvh": None,
+                        "lo": verts.min(axis=0), "hi": verts.max(axis=0),
+                    }
             if bone_names:
                 segments = _capture_bones(arm, bone_names, depsgraph)
                 if segments is not None:
@@ -769,6 +777,12 @@ def rebuild(context=None) -> int:
                     entry["lines"] = batch_for_shader(
                         line_shader, 'LINES', {"pos": segments},
                     )
+                    if entry["pick"] is None:
+                        pts = np.asarray(segments, dtype='f')
+                        entry["pick"] = {
+                            "segments": segments, "bvh": None,
+                            "lo": pts.min(axis=0), "hi": pts.max(axis=0),
+                        }
             if entry["tris"] is None and entry["lines"] is None:
                 continue
             ghosts[f] = entry
@@ -1030,6 +1044,156 @@ def _visible_poses(scene, p) -> list[tuple[int, dict]]:
         for f in _ghosts["frames"]
         if f != current
     ]
+
+
+# Pixels from a bone stick that still count as a hit. A skeleton ghost has no
+# surface to click, so it gets a screen-space tolerance instead — roughly the
+# slop Blender allows when clicking a bone.
+PICK_BONE_RADIUS = 9.0
+
+
+def _ghost_bvh(entry):
+    """BVH of one ghost's body, built on first use and cached."""
+    from mathutils.bvhtree import BVHTree
+
+    pick = entry.get("pick")
+    if pick is None or "verts" not in pick:
+        return None
+    if pick["bvh"] is None:
+        pick["bvh"] = BVHTree.FromPolygons(
+            [tuple(v) for v in pick["verts"]],
+            [tuple(int(i) for i in tri) for tri in pick["tris"]],
+            all_triangles=True,
+        )
+    return pick["bvh"]
+
+
+def _ray_hits_box(origin, direction, lo, hi) -> bool:
+    """Slab test — does the ray enter this ghost's bounding box at all?
+
+    A cheap reject in front of the BVH, which is what makes a click cheap:
+    building the tree for every ghost on the first click of a long blockout
+    would hitch, and the ray misses nearly all of them.
+    """
+    tmin, tmax = 0.0, float("inf")
+    for axis in range(3):
+        d = direction[axis]
+        o = origin[axis]
+        if abs(d) < 1e-9:
+            if o < lo[axis] or o > hi[axis]:
+                return False
+            continue
+        t1 = (lo[axis] - o) / d
+        t2 = (hi[axis] - o) / d
+        if t1 > t2:
+            t1, t2 = t2, t1
+        tmin = max(tmin, t1)
+        tmax = min(tmax, t2)
+        if tmin > tmax:
+            return False
+    return True
+
+
+def _scene_depth(context, origin, direction) -> float:
+    """Distance to the nearest real geometry along the ray, or infinity.
+
+    Used to keep a ghost from swallowing a click aimed at the character
+    standing in front of it: the ghost only wins where it is the thing you
+    can actually see.
+    """
+    try:
+        depsgraph = context.evaluated_depsgraph_get()
+        hit, location, _n, _i, _obj, _m = context.scene.ray_cast(
+            depsgraph, origin, direction,
+        )
+    except (RuntimeError, ValueError):
+        return float("inf")
+    if not hit:
+        return float("inf")
+    return (location - origin).length
+
+
+def _segment_distance_2d(px, py, a, b) -> float:
+    """Pixel distance from ``(px, py)`` to the segment ``a``–``b``."""
+    ax, ay = a
+    bx, by = b
+    dx, dy = bx - ax, by - ay
+    span = dx * dx + dy * dy
+    if span <= 1e-9:
+        return math.hypot(px - ax, py - ay)
+    u = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / span))
+    return math.hypot(px - (ax + u * dx), py - (ay + u * dy))
+
+
+def pick_frame(context, x: float, y: float) -> int | None:
+    """The key pose whose ghost lies under the region coordinates, if any.
+
+    Bodies are hit-tested by raycasting the geometry that was baked, so the
+    answer matches the silhouette on screen rather than a bounding box.
+    Skeleton ghosts have no surface, so they are tested in screen space with
+    a few pixels of slop. Nearest to the viewer wins when ghosts overlap.
+    """
+    region = context.region
+    rv3d = context.region_data
+    if region is None or rv3d is None:
+        return None
+
+    settings = _settings(context.scene)
+    if settings is None or not settings.show_key_poses or not settings.key_pose_ghosts:
+        return None
+    if not _ghosts["frames"]:
+        return None
+
+    origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, (x, y))
+    direction = view3d_utils.region_2d_to_vector_3d(region, rv3d, (x, y))
+    if origin is None or direction is None:
+        return None
+
+    current = context.scene.frame_current
+    best_frame: int | None = None
+    best_depth = float("inf")
+
+    for frame in _ghosts["frames"]:
+        if frame == current:
+            continue        # its ghost is suppressed, so it cannot be clicked
+        entry = _ghosts["ghosts"].get(frame)
+        if entry is None or entry.get("pick") is None:
+            continue
+
+        pick = entry["pick"]
+        lo, hi = pick.get("lo"), pick.get("hi")
+        if lo is not None and not _ray_hits_box(origin, direction, lo, hi):
+            continue
+
+        bvh = _ghost_bvh(entry)
+        if bvh is not None:
+            location, _normal, _index, distance = bvh.ray_cast(origin, direction)
+            if location is not None and distance < best_depth:
+                best_frame, best_depth = frame, distance
+            continue
+
+        segments = pick.get("segments")
+        if not segments:
+            continue
+        for i in range(0, len(segments) - 1, 2):
+            head = view3d_utils.location_3d_to_region_2d(region, rv3d, Vector(segments[i]))
+            tail = view3d_utils.location_3d_to_region_2d(region, rv3d, Vector(segments[i + 1]))
+            if head is None or tail is None:
+                continue
+            if _segment_distance_2d(x, y, head, tail) > PICK_BONE_RADIUS * _px():
+                continue
+            depth = (Vector(segments[i]) - origin).dot(direction)
+            if 0.0 < depth < best_depth:
+                best_frame, best_depth = frame, depth
+
+    if best_frame is None:
+        return None
+    # With X-Ray the ghosts are drawn over everything, so clicking one is
+    # unambiguous. Without it they are occluded like anything else, and a
+    # click landing on the character in front must go to the character.
+    if not settings.key_pose_xray and _scene_depth(context, origin, direction) < best_depth:
+        return None
+    return best_frame
 
 
 def _draw_geometry():

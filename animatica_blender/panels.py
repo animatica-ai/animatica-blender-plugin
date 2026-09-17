@@ -446,6 +446,25 @@ class ANIMATICA_PT_ghosts(AnimaticaPanelBase, Panel):
             warn.alert = True
             warn.label(text=f"Not sent: {shown}", icon='ERROR')
 
+        # An edit session owns the panel while it runs: the rig may be
+        # detached from its action, and Apply is what puts the pose back onto
+        # the keyframe, so it has to be the obvious thing on screen.
+        if settings.editing_key_pose_frame >= 0:
+            from . import pose_edit
+
+            box = layout.box()
+            box.label(
+                text=f"Editing pose at frame {settings.editing_key_pose_frame}",
+                icon='KEYFRAME_HLT',
+            )
+            if pose_edit.autoposer_holds(settings.target_armature):
+                note = box.row()
+                note.active = False
+                note.label(text="Autoposer has the rig")
+            row = box.row(align=True)
+            row.operator("animatica.apply_key_pose_edit", text="Apply", icon='CHECKMARK')
+            row.operator("animatica.cancel_key_pose_edit", text="Cancel", icon='X')
+
         body = layout.column()
         body.active = settings.show_key_poses
         body.use_property_split = True
@@ -461,6 +480,11 @@ class ANIMATICA_PT_ghosts(AnimaticaPanelBase, Panel):
         sub.prop(settings, "key_pose_labels")
 
         body.prop(settings, "key_pose_trail")
+
+        if settings.show_key_poses and settings.key_pose_ghosts:
+            hint = body.row()
+            hint.active = False
+            hint.label(text="Click a ghost to edit that pose")
 
         body.separator()
         body.prop(settings, "key_pose_xray")
