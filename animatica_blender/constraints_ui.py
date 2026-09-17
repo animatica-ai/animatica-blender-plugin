@@ -1060,7 +1060,10 @@ def sample_pose_keyframes(
     # we serialize) get their pose from the constraint stack. Sample those.
     # In direct mode the user keys the deform bones themselves; sample the
     # bones that actually have rotation keyframes.
-    sample_bone_names = deform_bones if is_control_rig else keyed_bones
+    # Intersected with what the skeleton carries: a keyed helper bone is still
+    # not a joint the server knows.
+    sample_bone_names = (deform_bones if is_control_rig else keyed_bones) & (
+        request_builder.request_joint_set(armature_obj))
 
     # Temporarily attach the source action so frame evaluation hits the
     # user's authored poses.
@@ -1200,14 +1203,12 @@ def sample_pose_at_frame(
 
     from . import request_builder  # noqa: PLC0415 — module-load circular
 
-    deform_bones = request_builder.detect_deform_bones(armature_obj)
+    # Only joints the skeleton will carry. Sampling every pose bone put the
+    # rig's control handles into joint_rotations the moment one existed, and
+    # the server rejects a constraint naming a joint it was never given.
+    sample_bone_names = set(request_builder.request_joint_set(armature_obj))
+    deform_bones = request_builder.emitted_deform_bones(armature_obj)
     is_control_rig = request_builder.is_control_rig(armature_obj)
-
-    sample_bone_names = (
-        deform_bones
-        if is_control_rig
-        else {pb.name for pb in armature_obj.pose.bones}
-    )
     if bone_names is not None:
         sample_bone_names = sample_bone_names & bone_names
     if not sample_bone_names:

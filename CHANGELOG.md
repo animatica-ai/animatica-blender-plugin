@@ -117,6 +117,17 @@ Proscenium, and keep the identifiers those releases actually shipped.
   machine that should not fetch it. The model is still explicit: it is
   account-gated, and only the artist has the token.
 
+- **Regenerating after an edit no longer malforms the request.** Same cause as
+  the skeleton above, in the sampler this time: the boundary observation a
+  block regeneration takes from the preview bake sampled *every pose bone*
+  unless the rig's deform bones were driven by constraints. With controls on
+  the rig that meant `joint_rotations` naming `C_cog_CTRL`, `L_arm_IK_CTRL` and
+  the rest, against a skeleton that had never heard of them — `Constraint #1
+  (pose_keyframe) references unknown joints`. What the request will carry is
+  now decided once, in `request_joint_set`, and the skeleton and both samplers
+  read it. They had drifted apart twice; one definition is harder to drift
+  from than three.
+
 - **Building the control rig no longer malforms the generation request.** The
   skeleton sent to the server is filtered to the deform bones only when the rig
   looked like a control rig — meaning deform bones driven by Copy/IK

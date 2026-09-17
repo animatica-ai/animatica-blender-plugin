@@ -766,6 +766,33 @@ def _build_deform_parent_map(
     return parent_map
 
 
+def request_joint_set(armature_obj: bpy.types.Object) -> set[str]:
+    """The joints the request will carry, and the only names a constraint may use.
+
+    One answer for both halves of the request. ``armature_to_skeleton`` emits
+    these, and every constraint's ``joint_rotations`` has to be a subset of
+    them — name a joint the skeleton does not have and the server rejects the
+    request.
+
+    They drifted apart twice, and both times the symptom was a malformed
+    request as soon as a control rig existed: the skeleton filtered to deform
+    bones only when the rig's deform bones were driven by *constraints*, and
+    the boundary sampler took every pose bone unless the same test passed. A
+    rig whose controls drive the body another way — the Autoposer writes the
+    pose directly — satisfied neither, and its handles went out as joints.
+
+    A bone outside the deform set is a helper whatever moves it. Where every
+    bone deforms, this is every bone.
+    """
+    if armature_obj is None or armature_obj.type != 'ARMATURE':
+        return set()
+    pose_bones = {pb.name for pb in armature_obj.pose.bones}
+    deform = emitted_deform_bones(armature_obj)
+    if deform and (is_control_rig(armature_obj) or len(deform) < len(pose_bones)):
+        return deform
+    return pose_bones
+
+
 def armature_to_skeleton(armature_obj: bpy.types.Object) -> dict[str, Any]:
     """Serialize the armature's rest layout to the MMCP `Skeleton` shape.
 
@@ -796,20 +823,9 @@ def armature_to_skeleton(armature_obj: bpy.types.Object) -> dict[str, Any]:
     # sees in the skeleton.
     deform = emitted_deform_bones(armature_obj)
 
-    # Emit the deform skeleton whenever the rig carries anything else.
-    #
-    # The trigger used to be is_control_rig() alone — deform bones driven by
-    # Copy*/IK constraints — which is one way a rig has handles and not the
-    # only one. The Autoposer's controls drive the body by writing the pose
-    # directly, so they matched nothing here and were serialized as joints:
-    # a request describing a character with six control bones growing out of
-    # it, which is not a skeleton the server can retarget.
-    #
-    # A bone outside the deform set is a helper whatever moves it, and the
-    # server has never wanted one. Where every bone deforms, this is a no-op.
-    use_deform_filter = bool(deform) and (
-        is_control_rig(armature_obj) or len(deform) < len(pose_bones)
-    )
+    # What goes out, decided in one place (see `request_joint_set`) so the
+    # skeleton and the constraints cannot disagree about what a joint is.
+    use_deform_filter = request_joint_set(armature_obj) != {pb.name for pb in pose_bones}
     parent_map = _build_deform_parent_map(armature_obj, deform) if use_deform_filter else None
 
     # The server requires parents to appear before their children in joints[].
