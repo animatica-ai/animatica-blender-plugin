@@ -16,6 +16,9 @@ from bpy.props import (
 )
 from bpy.types import AddonPreferences, PropertyGroup
 
+from . import autoposer
+from .autoposer import prefs as autoposer_prefs
+
 
 # ---------------------------------------------------------------------------
 # Per-armature prompt-block persistence
@@ -440,6 +443,12 @@ class AnimaticaAddonPreferences(AddonPreferences):
         description="Animatica plan tier (free / pro / team / admin)",
     )
 
+    # The Autoposer's own settings — model source, token, cache, threads —
+    # merged in below the class body. Blender allows one AddonPreferences per
+    # addon, and the Autoposer is part of this one now; its property names and
+    # defaults are unchanged, so a machine that already fetched the model
+    # through the standalone addon keeps using what it downloaded.
+
     def draw(self, context):
         from . import mmcp_client
 
@@ -507,12 +516,13 @@ class AnimaticaAddonPreferences(AddonPreferences):
         layout.separator()
 
         # --- Auth section -----------------------------------------------------
+        # An if/elif chain rather than an early return: the Autoposer section
+        # below is about work that happens on this machine and has to be
+        # reachable whether or not the cloud is signed into.
         if self.self_hosted:
             box = layout.box()
             box.label(text="Self-hosted: sign-in not required", icon='INFO')
-            return
-
-        if self.access_token:
+        elif self.access_token:
             box = layout.box()
             row = box.row()
             row.label(text=f"Signed in: {self.email}", icon='CHECKMARK')
@@ -524,6 +534,27 @@ class AnimaticaAddonPreferences(AddonPreferences):
             box = layout.box()
             box.label(text="Animatica Cloud — sign in", icon='USER')
             box.operator("animatica.signin", icon='IMPORT', text="Sign in")
+
+        # --- Autoposer --------------------------------------------------------
+        layout.separator()
+        header = layout.row()
+        header.label(text="Autoposer — poses solved on this machine", icon='ARMATURE_DATA')
+        clash = autoposer.superseded_addons()
+        if clash:
+            warn = layout.row()
+            warn.alert = True
+            warn.label(
+                text=f"Disable the standalone addon: {', '.join(clash)}",
+                icon='ERROR',
+            )
+        autoposer_prefs.draw(layout, self, context)
+
+
+# Merged after the class body: annotations are read at registration, so adding
+# them here gives the Autoposer's fields to Animatica's preferences without
+# restating them in two places.
+for _name, _prop in autoposer_prefs.PROPERTIES.items():
+    AnimaticaAddonPreferences.__annotations__[_name] = _prop
 
 
 def _model_id_items(self, context):

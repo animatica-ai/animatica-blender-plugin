@@ -80,6 +80,13 @@ writes the pose onto that frame's keyframe, so the pose the next generation is
 asked to hit is the one you just made. Without the Autoposer the click still
 takes you there, and Set Keyframe still keys what you posed by hand.
 
+**Drag a point on a motion trail** and that end effector moves at *that*
+frame — the playhead stays where it is. The other traced joints stay pinned
+where they were, the Autoposer solves the body around the one you moved, and a
+yellow skeleton shows the pose you are about to commit. Let go and it is keyed
+there, as a pose of yours: one more full-body constraint for the next
+generation. It solves at about 100 Hz, so the body follows the cursor.
+
 A pose **outside the generating range is not sent** at all — those are greyed
 out in the viewport, red on the timeline, and named in the panel. Widen a prompt
 block to bring one back into the plan, or move the pose.

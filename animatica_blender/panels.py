@@ -491,7 +491,7 @@ class ANIMATICA_PT_ghosts(AnimaticaPanelBase, Panel):
         if settings.show_key_poses and settings.key_pose_ghosts:
             hint = body.row()
             hint.active = False
-            hint.label(text="Click a ghost to edit that pose")
+            hint.label(text="Click a ghost to edit it · drag a trail point")
 
         body.separator()
         body.prop(settings, "key_pose_xray")

@@ -29,6 +29,8 @@ from . import operators
 from . import canonical_skeleton
 from . import constraints_ui
 from . import panels
+from . import autoposer
+from . import curve_edit
 from . import key_poses
 from . import pose_edit
 from . import path_follow
@@ -137,8 +139,10 @@ def register():
     constraints_ui.register()
     panels.register()
     path_follow.register()
+    autoposer.register()
     key_poses.register()
     pose_edit.register()
+    curve_edit.register()
     timeline_operators.register()
     timeline_overlay.register_draw_handler()
 
@@ -157,8 +161,10 @@ def unregister():
 
     timeline_overlay.unregister_draw_handler()
     timeline_operators.unregister()
+    curve_edit.unregister()
     pose_edit.unregister()
     key_poses.unregister()
+    autoposer.unregister()
     path_follow.unregister()
     panels.unregister()
     constraints_ui.unregister()

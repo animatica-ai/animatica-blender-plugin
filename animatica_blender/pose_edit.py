@@ -140,20 +140,46 @@ def _edited_bones(arm):
     return [pb for pb in arm.pose.bones if not pb.bone.hide]
 
 
-def _write_pose_to_action(arm, action, frame: int) -> int:
-    """Write the rig's current pose into ``action`` at ``frame``.
+def write_channels(action, frame: int, channels) -> int:
+    """Write ``(data_path, index, value)`` triples onto ``action`` at ``frame``.
 
-    Goes through the F-curves directly rather than ``keyframe_insert`` so it
-    works while the action is detached — which is exactly the case the
-    Autoposer leaves the rig in.
+    Goes through the F-curves directly rather than ``keyframe_insert`` for two
+    reasons: it works while the action is detached — the state the Autoposer
+    leaves the rig in — and it can key a frame the rig is not standing on,
+    which is what the motion-curve drag needs.
+
+    Keys are typed ``KEYFRAME``. On a rig carrying a generated take that is
+    the whole difference between a pose the request sends and one it drops.
     """
     from . import constraints_ui
 
     written = 0
+    for data_path, index, value in channels:
+        fc = constraints_ui._ensure_fcurve(action, data_path, index)
+        if fc is None:
+            continue
+        kp = next((k for k in fc.keyframe_points if int(round(k.co.x)) == frame), None)
+        if kp is None:
+            kp = fc.keyframe_points.insert(frame, value)
+        else:
+            kp.co.y = value
+            kp.handle_left.y = value
+            kp.handle_right.y = value
+        kp.type = 'KEYFRAME'
+        written += 1
+    for fcurves in constraints_ui._iter_fcurve_collections(action):
+        for fc in fcurves:
+            fc.update()
+    return written
+
+
+def _write_pose_to_action(arm, action, frame: int) -> int:
+    """Write the rig's current pose into ``action`` at ``frame``."""
+    channels = []
     root = next((pb for pb in arm.pose.bones if pb.parent is None), None)
     for pb in _edited_bones(arm):
         path, values = _rotation_values(pb)
-        channels = [(f'pose.bones["{pb.name}"].{path}', i, v) for i, v in enumerate(values)]
+        channels += [(f'pose.bones["{pb.name}"].{path}', i, v) for i, v in enumerate(values)]
         if pb is root or pb.parent is None:
             # The root's placement is half the pose: without it the body's
             # rotation is keyed and its position is left to whatever else is
@@ -162,27 +188,7 @@ def _write_pose_to_action(arm, action, frame: int) -> int:
                 (f'pose.bones["{pb.name}"].location', i, v)
                 for i, v in enumerate(pb.location)
             ]
-        for data_path, index, value in channels:
-            fc = constraints_ui._ensure_fcurve(action, data_path, index)
-            if fc is None:
-                continue
-            kp = next(
-                (k for k in fc.keyframe_points if int(round(k.co.x)) == frame), None,
-            )
-            if kp is None:
-                kp = fc.keyframe_points.insert(frame, value)
-            else:
-                kp.co.y = value
-                kp.handle_left.y = value
-                kp.handle_right.y = value
-            # Authored, not generated — this is the artist's pose, and the
-            # request builder reads the type to tell them apart.
-            kp.type = 'KEYFRAME'
-            written += 1
-    for fcurves in constraints_ui._iter_fcurve_collections(action):
-        for fc in fcurves:
-            fc.update()
-    return written
+    return write_channels(action, frame, channels)
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +290,22 @@ class ANIMATICA_OT_pick_ghost(Operator):
             settings = _settings(context)
             if settings is None or not settings.show_key_poses:
                 return {'PASS_THROUGH'}
+            # A point on a motion curve wins over the ghost behind it: it is
+            # the smaller target and the more specific intent.
+            from . import curve_edit
+
+            grabbed = curve_edit.pick_point(
+                context, event.mouse_region_x, event.mouse_region_y,
+            )
+            if grabbed is not None:
+                bone, curve_frame, _world = grabbed
+                bpy.app.driver_namespace["animatica_last_ghost_pick"] = {
+                    "xy": (event.mouse_region_x, event.mouse_region_y),
+                    "hit": f"curve {bone}@{curve_frame}",
+                }
+                return bpy.ops.animatica.drag_motion_curve(
+                    'INVOKE_DEFAULT', bone=bone, frame=curve_frame,
+                )
             frame = key_poses.pick_frame(
                 context, event.mouse_region_x, event.mouse_region_y,
             )

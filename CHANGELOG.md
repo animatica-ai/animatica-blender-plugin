@@ -39,6 +39,26 @@ Proscenium, and keep the identifiers those releases actually shipped.
   showing one on its own costs nothing and switching one never disturbs or
   re-bakes the other.
 
+- **The Autoposer is part of Animatica.** The neural control rig that was a
+  separate addon is ported in: its panels live under the Animatica tab, its
+  settings are a section of Animatica's preferences, and the inference package
+  is vendored so nothing is fetched but the model itself. The data directory is
+  unchanged, so a machine that already downloaded the model keeps using it.
+  Disable the standalone addon — the preferences say so when both are enabled,
+  since they register the same operators.
+
+- **Motion curves are editable — drag one and the body follows.** Pull a point
+  on a trail and that end effector moves at *that* frame, with the playhead
+  staying where it is. The other traced joints stay pinned where they were, so
+  a drag changes one effector rather than reinterpreting the pose; the
+  Autoposer solves the body around it, and a skeleton ghost shows the pose the
+  drag would commit before it is committed. Releasing keys that pose at that
+  frame as one of yours, so it becomes a full-body constraint like any other
+  key pose. The solve is a pure function of its effectors — it never reads the
+  rig's current pose — which is what lets it answer for frame 40 while the
+  artist is looking at frame 104. Measured: ~9 ms a solve (about 100 Hz), and
+  the rig reaches the dragged position within 0.1 cm at that frame.
+
 - **Click a ghost to edit that pose.** The ghosts show where the key poses are;
   clicking one makes it the handle you grab to change it. The playhead goes to
   that frame, the rig goes into pose mode, and where the Autoposer is driving
