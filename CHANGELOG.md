@@ -43,9 +43,10 @@ Proscenium, and keep the identifiers those releases actually shipped.
   clicking one makes it the handle you grab to change it. The playhead goes to
   that frame, the rig goes into pose mode, and where the Autoposer is driving
   that rig the pose is handed to it — controls seated on the pose that is there,
-  then the rig taken over so the solve survives. **Apply** writes the edited
-  pose back onto that frame's keyframe as authored keys, so what you changed is
-  what the next generation is asked to hit, and hands the rig back. Clicks are
+  then the rig taken over so the solve survives. **Set Keyframe** writes the
+  edited pose back onto that frame's keyframe as authored keys, so what you
+  changed is what the next generation is asked to hit, and hands the rig back.
+  Clicks are
   hit-tested against the ghost's own geometry, so only the silhouette you can
   see is clickable, a click landing on the character in front of a ghost goes to
   the character as it always did, and a click that hits nothing passes straight
@@ -57,16 +58,16 @@ Proscenium, and keep the identifiers those releases actually shipped.
   range. Blender's own keyframe row cannot show this: after a generation it is a
   solid band of baked samples, one per frame.
 
-- **Add Key Pose** (`F3` search, no button). Keys the current pose and marks it
-  as yours, so the next generation is asked to hit it. This is not a shortcut
-  for pressing `I`:
+- **Set Keyframe**, with the generate buttons. Keys the pose you are looking at
+  and marks it as yours, so the next generation is asked to hit it. This is not
+  a shortcut for pressing `I`:
   Blender keeps a keyframe's existing type when you key over an existing one, so
   posing on a frame a previous generation baked leaves a `GENERATED`-typed key —
   and the addon reads that type as "the model produced this" and leaves the pose
   out of the request. Poses added this way are typed as authored, so they
-  survive **Reject** and are sent as constraints. Keys the selected bones, or
-  the whole body when nothing is selected. **Jump to Key Pose** is there too,
-  stepping the playhead between your own poses — which Blender's keyframe jump
+  survive **Reject** and are sent as constraints. It needs no server, so it is
+  there whether or not you have connected. **Jump to Key Pose** (`F3` search)
+  steps the playhead between your own poses — which Blender's keyframe jump
   cannot do once a generated take has put a key on every frame.
 
 ### Fixed

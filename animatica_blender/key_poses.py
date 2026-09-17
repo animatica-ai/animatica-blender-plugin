@@ -127,6 +127,10 @@ _ghosts: dict = {
     "signature": None,
     "clamped": False,
     "kind": "BONES",
+    # Set whenever something asks for a rebake. The signature alone cannot
+    # answer "is this stale": editing a pose changes neither the rig's name
+    # nor the action's, so a content change is invisible to it.
+    "dirty": True,
 }
 
 # The motion trail, kept in its own cache with its own signature.
@@ -144,6 +148,7 @@ _trail: dict = {
     "frames": [],
     "points": {},
     "signature": None,
+    "dirty": True,
 }
 
 # Per-frame trail colours are a pure function of the plan, so they are
@@ -713,8 +718,16 @@ def rebuild(context=None) -> int:
 
     ghost_sig = _ghost_signature(arm, action, settings)
     trail_sig = _trail_signature(arm, action)
-    need_ghosts = settings.key_pose_ghosts and _ghosts["signature"] != ghost_sig
-    need_trail = settings.key_pose_trail and _trail["signature"] != trail_sig
+    # Either half rebakes when its identity changed (different rig, action or
+    # display mode) or when something reported a content change — a keyframe
+    # edited, inserted, retimed, the rig moved. Identity alone would miss
+    # every edit to the poses themselves.
+    need_ghosts = settings.key_pose_ghosts and (
+        _ghosts["dirty"] or _ghosts["signature"] != ghost_sig
+    )
+    need_trail = settings.key_pose_trail and (
+        _trail["dirty"] or _trail["signature"] != trail_sig
+    )
     if not need_ghosts and not need_trail:
         return len(_ghosts["frames"])
 
@@ -817,6 +830,7 @@ def rebuild(context=None) -> int:
         _ghosts["clamped"] = clamped
         _ghosts["kind"] = "BONES" if (bone_names and not meshes) else "MESH"
         _ghosts["signature"] = ghost_sig
+        _ghosts["dirty"] = False
     if need_trail:
         # A bone that never resolved leaves a short list; drop it rather than
         # draw a trail that does not line up with the sampled frames.
@@ -828,6 +842,7 @@ def rebuild(context=None) -> int:
         _trail["frames"] = trail_frames
         _trail["points"] = trail_points
         _trail["signature"] = trail_sig
+        _trail["dirty"] = False
         _trail_colors["signature"] = None
 
     tag_redraw()
@@ -841,10 +856,12 @@ def clear() -> None:
     _ghosts["roots"] = {}
     _ghosts["signature"] = None
     _ghosts["clamped"] = False
+    _ghosts["dirty"] = True
     _trail["bones"] = []
     _trail["frames"] = []
     _trail["points"] = {}
     _trail["signature"] = None
+    _trail["dirty"] = True
     _trail_colors["signature"] = None
     tag_redraw()
 
@@ -877,6 +894,10 @@ def request_rebuild(*, coalesce: bool = False) -> None:
     pushing the bake out until the drag ends — so they restart it.
     """
     global _rebuild_requested_at
+    # A request means "what was baked may no longer be true". Only the caller
+    # knows that; the caches cannot tell from the rig's name.
+    _ghosts["dirty"] = True
+    _trail["dirty"] = True
     if not (coalesce and _rebuild_requested_at is not None):
         _rebuild_requested_at = time.monotonic()
     if not bpy.app.timers.is_registered(_rebuild_timer):
@@ -1446,94 +1467,6 @@ class ANIMATICA_OT_key_poses_refresh(bpy.types.Operator):
         return {'FINISHED'}
 
 
-def _rotation_path(pb) -> str:
-    mode = pb.rotation_mode
-    if mode == 'QUATERNION':
-        return "rotation_quaternion"
-    if mode == 'AXIS_ANGLE':
-        return "rotation_axis_angle"
-    return "rotation_euler"
-
-
-def _promote_to_authored(action, frame: int, bone_names: set[str]) -> int:
-    """Retype this frame's rotation keys from ``GENERATED`` to ``KEYFRAME``.
-
-    Blender keeps a keyframe's existing type when you key over it, so pressing
-    I on a frame the last generation baked leaves a ``GENERATED`` key holding
-    the artist's new pose — and everything downstream reads that type as "the
-    model put this here" and drops it from the request. Retyping is what makes
-    the pose the artist's own.
-    """
-    from . import constraints_ui
-
-    promoted = 0
-    for fc in constraints_ui.iter_action_fcurves(action):
-        if "rotation" not in fc.data_path:
-            continue
-        bone = constraints_ui._bone_name_from_data_path(fc.data_path)
-        if bone is None or bone not in bone_names:
-            continue
-        changed = False
-        for kp in fc.keyframe_points:
-            if int(round(kp.co.x)) == frame and kp.type == 'GENERATED':
-                kp.type = 'KEYFRAME'
-                promoted += 1
-                changed = True
-        if changed:
-            fc.update()
-    return promoted
-
-
-class ANIMATICA_OT_mark_key_pose(bpy.types.Operator):
-    bl_idname = "animatica.mark_key_pose"
-    bl_label = "Add Key Pose"
-    bl_description = (
-        "Key the current pose at this frame and mark it as yours, so the next "
-        "generation is asked to hit it. Keys the selected bones, or the whole "
-        "body when none are selected"
-    )
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        settings = _settings(context.scene)
-        return settings is not None and _target(settings) is not None
-
-    def execute(self, context):
-        settings = _settings(context.scene)
-        arm = _target(settings)
-        frame = int(context.scene.frame_current)
-
-        selected = [pb for pb in arm.pose.bones if pb.select and not pb.bone.hide]
-        targets = selected or list(arm.pose.bones)
-        if not targets:
-            self.report({'WARNING'}, "This armature has no pose bones")
-            return {'CANCELLED'}
-
-        if arm.animation_data is None:
-            arm.animation_data_create()
-        for pb in targets:
-            try:
-                pb.keyframe_insert(data_path=_rotation_path(pb), frame=frame)
-            except RuntimeError:
-                continue
-
-        action = _action(arm)
-        if action is None:
-            self.report({'WARNING'}, "Could not key this pose")
-            return {'CANCELLED'}
-        _promote_to_authored(action, frame, {pb.name for pb in targets})
-
-        invalidate_plan()
-        if settings.show_key_poses:
-            request_rebuild()
-        else:
-            tag_redraw()
-        scope = f"{len(targets)} bones" if selected else "whole body"
-        self.report({'INFO'}, f"Key pose at frame {frame} ({scope})")
-        return {'FINISHED'}
-
-
 class ANIMATICA_OT_step_key_pose(bpy.types.Operator):
     bl_idname = "animatica.step_key_pose"
     bl_label = "Jump to Key Pose"
@@ -1571,7 +1504,6 @@ class ANIMATICA_OT_step_key_pose(bpy.types.Operator):
 
 _classes = (
     ANIMATICA_OT_key_poses_refresh,
-    ANIMATICA_OT_mark_key_pose,
     ANIMATICA_OT_step_key_pose,
 )
 

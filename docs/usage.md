@@ -74,21 +74,21 @@ footfalls, the hand lines about arcs, and the root line about the trajectory.
 
 **Click a ghost to edit that pose.** The playhead goes to its frame, the rig
 goes into pose mode, and — where the Autoposer is driving that rig — the pose
-is handed to it so you can push the body around with its controls. **Apply**
-writes what you posed back onto that frame's keyframe, so the pose the next
-generation is asked to hit is the one you just made; **Cancel** leaves it
-alone. Without the Autoposer the click still takes you there and Apply still
-keys what you posed by hand.
+is handed to it so you can push the body around with its controls. When you
+are happy, **Set Keyframe** (in the main panel, under the generate buttons)
+writes the pose onto that frame's keyframe, so the pose the next generation is
+asked to hit is the one you just made. Without the Autoposer the click still
+takes you there, and Set Keyframe still keys what you posed by hand.
 
 A pose **outside the generating range is not sent** at all — those are greyed
 out in the viewport, red on the timeline, and named in the panel. Widen a prompt
 block to bring one back into the plan, or move the pose.
 
-> **If a pose you just keyed doesn't appear**, you keyed it over a generated
-> take. Blender keeps a keyframe's existing type when you key over one, so
-> pressing `I` on a frame a previous generation baked leaves a key the addon
-> reads as the model's own output, and it is left out of the next request.
-> Press `F3` and run **Add Key Pose** to mark that pose as yours.
+> **Use Set Keyframe rather than `I` on top of a generated take.** Blender
+> keeps a keyframe's existing type when you key over one, so pressing `I` on a
+> frame a previous generation baked leaves a key the addon reads as the
+> model's own output — it gets no ghost and is left out of the next request.
+> **Set Keyframe** marks the pose as yours.
 
 The posed bodies and the trail are independent — show either on its own:
 

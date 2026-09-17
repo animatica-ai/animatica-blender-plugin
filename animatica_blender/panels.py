@@ -55,6 +55,24 @@ def _draw_signin_hint(layout, context) -> bool:
     return True
 
 
+def _draw_set_keyframe(layout, context, settings) -> None:
+    """The one button for committing a pose you posed by hand.
+
+    Sits with the pose-generation buttons because it answers the same
+    question — what is the pose at this frame — from the other direction: the
+    model proposes one, this one states one. It needs no server, so it is
+    drawn while disconnected too; everything else in that part of the panel
+    does, which is why this is a helper with two call sites rather than a line
+    in one place.
+    """
+    arm = properties._live_armature(settings.target_armature)
+    if arm is None:
+        return
+    row = layout.row()
+    row.scale_y = 1.2
+    row.operator("animatica.set_key_pose", icon='KEYFRAME_HLT', text="Set Keyframe")
+
+
 def _draw_duration_hint(layout, context, settings) -> None:
     """Warn when the would-be clip exceeds the model's duration limits.
 
@@ -167,6 +185,9 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
             else:
                 box.label(text="Connect to a server first", icon='INFO')
             box.operator("animatica.connect", icon='URL', text="Connect")
+            # Keying a pose is local work — no reason to make it wait on a
+            # server the artist has not connected to yet.
+            _draw_set_keyframe(layout, context, settings)
             return
 
         # Connected — show model picker.
@@ -294,6 +315,8 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
                 row = col.row()
                 row.scale_y = 1.2
                 row.operator("animatica.generate_pose", icon='ARMATURE_DATA', text=pose_text)
+
+            _draw_set_keyframe(col, context, settings)
 
             if in_preview:
                 layout.separator()
@@ -449,20 +472,6 @@ class ANIMATICA_PT_ghosts(AnimaticaPanelBase, Panel):
         # An edit session owns the panel while it runs: the rig may be
         # detached from its action, and Apply is what puts the pose back onto
         # the keyframe, so it has to be the obvious thing on screen.
-        from . import pose_edit
-
-        session = pose_edit.active_session(settings, settings.target_armature)
-        if session is not None:
-            box = layout.box()
-            box.label(text=f"Editing pose at frame {session}", icon='KEYFRAME_HLT')
-            if pose_edit.autoposer_holds(settings.target_armature):
-                note = box.row()
-                note.active = False
-                note.label(text="Autoposer has the rig")
-            row = box.row(align=True)
-            row.operator("animatica.apply_key_pose_edit", text="Apply", icon='CHECKMARK')
-            row.operator("animatica.cancel_key_pose_edit", text="Cancel", icon='X')
-
         body = layout.column()
         body.active = settings.show_key_poses
         body.use_property_split = True

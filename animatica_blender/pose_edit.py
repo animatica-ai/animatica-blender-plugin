@@ -5,9 +5,9 @@ The ghosts show where the key poses are; this makes them the handle you grab
 to change one. Clicking a ghost takes the playhead to its frame, puts the rig
 in pose mode, and — where the Autoposer is driving that rig — hands the pose
 over to it so the artist can push the body around with a handful of controls
-instead of bone by bone. **Apply** writes the result back onto that frame's
-keyframe, which is the whole point: the pose you edit is the constraint the
-next generation is asked to hit.
+instead of bone by bone. **Set Keyframe** writes the result back onto
+that frame's keyframe, which is the whole point: the pose you edit is the
+constraint the next generation is asked to hit.
 
 Why a commit step exists at all
 -------------------------------
@@ -15,8 +15,8 @@ The Autoposer has to *detach* the action to work (``autoposer.take_over``):
 its solve and the action both write the same bones, and whichever runs last
 wins, so the action is stashed while the artist poses. That means the edited
 pose lives only in the pose bones, and re-attaching the action would wipe it.
-Apply therefore reads the solved pose and writes it into the stashed action's
-F-curves at the frame being edited, before handing the rig back.
+Set Keyframe therefore reads the solved pose and writes it into the stashed
+action's F-curves at the current frame, before handing the rig back.
 
 The keys it writes are typed ``KEYFRAME``, not ``GENERATED``. On a rig
 carrying a generated take that distinction is everything: Blender preserves a
@@ -25,7 +25,8 @@ bake stays typed as the model's own output and the request builder drops it.
 See :func:`constraints_ui.authored_pose_frames`.
 
 Without the Autoposer this is still useful: the click lands you on the frame,
-in pose mode, on the right rig, and Apply keys whatever you posed by hand.
+in pose mode, on the right rig, and Set Keyframe keys whatever you posed by
+hand.
 """
 
 from __future__ import annotations
@@ -312,44 +313,41 @@ class ANIMATICA_OT_pick_ghost(Operator):
         return bpy.ops.animatica.edit_key_pose('INVOKE_DEFAULT', frame=frame)
 
 
-class ANIMATICA_OT_apply_key_pose_edit(Operator):
-    bl_idname = "animatica.apply_key_pose_edit"
-    bl_label = "Apply"
+class ANIMATICA_OT_set_key_pose(Operator):
+    bl_idname = "animatica.set_key_pose"
+    bl_label = "Set Keyframe"
     bl_description = (
-        "Write the pose you edited onto its keyframe and hand the rig back"
+        "Key the pose you are looking at as one of yours, so the next "
+        "generation is asked to hit it. Not the same as pressing I: Blender "
+        "keeps a keyframe's existing type when you key over one, so a pose "
+        "set on top of a generated take would otherwise read as the model's "
+        "own output and be left out of the request"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        settings = _settings(context)
-        if settings is None:
-            return False
-        return active_session(settings, _target(context)) is not None
+        return _target(context) is not None
 
     def execute(self, context):
         from . import key_poses
 
         arm = _target(context)
         settings = _settings(context)
-        if arm is None:
-            settings.editing_key_pose_frame = -1
-            return {'CANCELLED'}
+        frame = int(context.scene.frame_current)
 
-        session = active_session(settings, arm)
-        if session is None:
-            settings.editing_key_pose_frame = -1
-            return {'CANCELLED'}
-        frame = int(session)
         action = _editing_action(arm)
         if action is None:
-            self.report({'WARNING'}, "This rig has no action to write into")
-            return {'CANCELLED'}
+            # A rig with no action yet still deserves a first key pose.
+            if arm.animation_data is None:
+                arm.animation_data_create()
+            action = bpy.data.actions.new(f"{arm.name}Action")
+            arm.animation_data.action = action
 
         written = _write_pose_to_action(arm, action, frame)
 
         # Hand the rig back before anything re-evaluates: the pose now lives
-        # in the action, so re-attaching reproduces what was just edited.
+        # in the action, so re-attaching reproduces what was just keyed.
         if autoposer_holds(arm):
             try:
                 bpy.ops.autoposer.release()
@@ -360,38 +358,7 @@ class ANIMATICA_OT_apply_key_pose_edit(Operator):
         context.scene.frame_set(frame)
         key_poses.invalidate_plan()
         key_poses.request_rebuild()
-        self.report({'INFO'}, f"Key pose at frame {frame} updated ({written} channels)")
-        return {'FINISHED'}
-
-
-class ANIMATICA_OT_cancel_key_pose_edit(Operator):
-    bl_idname = "animatica.cancel_key_pose_edit"
-    bl_label = "Cancel"
-    bl_description = "Discard this edit and hand the rig back untouched"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        settings = _settings(context)
-        if settings is None:
-            return False
-        return active_session(settings, _target(context)) is not None
-
-    def execute(self, context):
-        from . import key_poses
-
-        arm = _target(context)
-        settings = _settings(context)
-        if arm is not None and autoposer_holds(arm):
-            try:
-                bpy.ops.autoposer.release()
-            except RuntimeError as exc:
-                self.report({'WARNING'}, f"Autoposer did not release: {exc}")
-        frame = int(settings.editing_key_pose_frame)
-        settings.editing_key_pose_frame = -1
-        if arm is not None:
-            context.scene.frame_set(frame)
-        key_poses.tag_redraw()
+        self.report({'INFO'}, f"Key pose set at frame {frame} ({written} channels)")
         return {'FINISHED'}
 
 
@@ -402,8 +369,7 @@ class ANIMATICA_OT_cancel_key_pose_edit(Operator):
 _classes = (
     ANIMATICA_OT_edit_key_pose,
     ANIMATICA_OT_pick_ghost,
-    ANIMATICA_OT_apply_key_pose_edit,
-    ANIMATICA_OT_cancel_key_pose_edit,
+    ANIMATICA_OT_set_key_pose,
 )
 
 _keymaps: list = []
