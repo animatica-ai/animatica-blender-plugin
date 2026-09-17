@@ -352,10 +352,19 @@ class ANIMATICA_OT_pick_ghost(Operator):
             settings = _settings(context)
             if settings is None or not settings.show_key_poses:
                 return {'PASS_THROUGH'}
-            # A point on a motion curve wins over the ghost behind it: it is
-            # the smaller target and the more specific intent.
             from . import curve_edit
 
+            # An Autoposer control wins over everything here: it is the thing
+            # the artist reached for, it sits exactly where the trail's
+            # current-frame marker is, and Blender's own selection is what
+            # should get the click.
+            if curve_edit.control_under_cursor(
+                context, event.mouse_region_x, event.mouse_region_y,
+            ):
+                return {'PASS_THROUGH'}
+
+            # A point on a motion curve then wins over the ghost behind it: it
+            # is the smaller target and the more specific intent.
             grabbed = curve_edit.pick_point(
                 context, event.mouse_region_x, event.mouse_region_y,
             )

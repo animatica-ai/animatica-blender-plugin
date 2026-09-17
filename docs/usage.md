@@ -94,6 +94,10 @@ together, so the character is carried to a new place with its shape intact.
 Shift can be taken up or let go mid-drag; the header names it while you are
 dragging.
 
+A control always wins the click: the controls sit on their joints and the
+trail runs through those same joints, so the two overlap by construction.
+Clicking a control selects it, as it would anywhere in Blender.
+
 Your key poses are the big diamonds on the curve, and they are what a click
 reaches for: a key pose wins over the frames either side of it even when they
 are a pixel apart. To bend the curve between keys instead, click exactly on

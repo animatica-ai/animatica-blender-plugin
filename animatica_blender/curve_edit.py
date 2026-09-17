@@ -40,6 +40,12 @@ from mathutils import Vector
 from mathutils.geometry import intersect_line_plane
 
 
+# A control's grab radius in screen space is taken from its own size — the
+# shapes range from a small circle to a double ring — clamped so it is neither
+# a pinprick when zoomed out nor a wall when zoomed in.
+CONTROL_RADIUS_MIN = 12.0
+CONTROL_RADIUS_MAX = 44.0
+
 # Pixels around a point that count as grabbing it. Two radii, because the
 # points are not equal: a key pose is a thing the artist put there and is what
 # the request carries, while the frames between are the motion that answers it,
@@ -117,6 +123,46 @@ def _from_poser(arm, xyz) -> Vector:
 # ---------------------------------------------------------------------------
 # Picking a point on a curve
 # ---------------------------------------------------------------------------
+
+def control_under_cursor(context, x: float, y: float) -> bool:
+    """Is an Autoposer control under the cursor?
+
+    They win over anything this module offers, and the reason is geometric
+    rather than a preference: the controls are re-seated onto their joints
+    every frame, and the motion trail runs through those same joints — so the
+    trail's marker for the current frame sits exactly under the control that
+    drives it. Picking the curve there would mean a click on a handle
+    sometimes grabbed the line behind it.
+    """
+    from . import key_poses
+    from .autoposer import poser
+
+    region, rv3d = context.region, context.region_data
+    settings = key_poses._settings(context.scene)
+    if region is None or rv3d is None or settings is None:
+        return False
+    arm = key_poses._target(settings)
+    if arm is None or not poser.has_controls(arm):
+        return False
+    if context.mode != 'POSE':
+        return False        # not selectable anyway
+
+    px = key_poses._px()
+    cursor = Vector((x, y))
+    mw = arm.matrix_world
+    for pb in arm.pose.bones:
+        if not poser._is_ctrl(pb.bone) or pb.bone.hide:
+            continue
+        head = view3d_utils.location_3d_to_region_2d(region, rv3d, mw @ pb.head)
+        if head is None:
+            continue
+        tail = view3d_utils.location_3d_to_region_2d(region, rv3d, mw @ pb.tail)
+        span = (tail - head).length if tail is not None else CONTROL_RADIUS_MIN
+        radius = max(CONTROL_RADIUS_MIN, min(CONTROL_RADIUS_MAX, span * 0.6)) * px
+        if (head - cursor).length <= radius:
+            return True
+    return False
+
 
 def pick_point(context, x: float, y: float):
     """``(bone, frame, world position)`` of the trail point under the cursor.

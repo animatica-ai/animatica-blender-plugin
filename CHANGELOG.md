@@ -117,6 +117,16 @@ Proscenium, and keep the identifiers those releases actually shipped.
   machine that should not fetch it. The model is still explicit: it is
   account-gated, and only the artist has the token.
 
+- **An Autoposer control wins the click over the motion curve.** They overlap
+  by construction: the controls are re-seated onto their joints every frame and
+  the trail runs through those same joints, so the trail's marker for the
+  current frame sits exactly under the control that drives it. Measured before
+  the fix, a click on any control was picked up as a curve drag instead — the
+  hand control grabbed the hand curve, the foot control the foot curve. A
+  control under the cursor now passes the click to Blender, which is where a
+  click on a bone belongs; its grab radius comes from the control's own size on
+  screen, so it holds at any zoom.
+
 - **Live posing was on in name only, and keyed nothing.** Two faults met.
   `ap_live` is a scene property whose update callback fires when it *changes*,
   so a file load or an addon reload left it True with no timer behind it —
