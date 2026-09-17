@@ -87,6 +87,16 @@ yellow skeleton shows the pose you are about to commit. Let go and it is keyed
 there, as a pose of yours: one more full-body constraint for the next
 generation. It solves at about 100 Hz, so the body follows the cursor.
 
+**Dragging the root curve moves the whole pose** — every joint travels
+together, so the character is carried to a new place with its shape intact.
+Hold **Shift** to do the same from any other handle.
+
+Your key poses are the big diamonds on the curve, and they are what a click
+reaches for: a key pose wins over the frames either side of it even when they
+are a pixel apart. To bend the curve between keys instead, click exactly on
+the small dot you want. The label by the cursor names the frame you grabbed
+while you drag, so a mis-grab is one **Esc** away.
+
 A pose **outside the generating range is not sent** at all — those are greyed
 out in the viewport, red on the timeline, and named in the panel. Widen a prompt
 block to bring one back into the plan, or move the pose.

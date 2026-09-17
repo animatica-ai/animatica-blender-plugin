@@ -31,6 +31,7 @@ is what keeps up.
 
 from __future__ import annotations
 
+import blf
 import bpy
 import gpu
 from bpy_extras import view3d_utils
@@ -39,8 +40,15 @@ from mathutils import Vector
 from mathutils.geometry import intersect_line_plane
 
 
-# Pixels around a sampled point that count as grabbing it.
-PICK_RADIUS = 11.0
+# Pixels around a point that count as grabbing it. Two radii, because the
+# points are not equal: a key pose is a thing the artist put there and is what
+# the request carries, while the frames between are the motion that answers it,
+# a dot per frame and only a few pixels apart at any sensible zoom. Grabbing
+# the frame next to the one you meant was the first thing to go wrong in real
+# use, so a key pose wins from much further away, and an in-between has to be
+# hit almost exactly.
+KEY_PICK_RADIUS = 18.0
+FRAME_PICK_RADIUS = 5.0
 
 # Tolerance in metres handed to the poser for every effector in a drag. Tight:
 # the artist has just said where these joints are, so the model's job is the
@@ -65,11 +73,18 @@ _drag: dict = {
     "points": None,       # solved joint positions, world space
     "parents": None,      # skeleton parent indices, for drawing
     "solve": None,        # the raw solve, kept for the commit
+    "whole_pose": False,  # moving the body, rather than one effector
     "error": "",
 }
 
+LABEL_SIZE = 12
+LABEL_COLOR = (1.0, 0.9, 0.4, 1.0)
+LABEL_OFFSET_PX = 14.0
+
 _draw_handle = None
+_label_handle = None
 _NS_KEY = "_animatica_curve_drag_handle"
+_NS_LABEL_KEY = "_animatica_curve_drag_label_handle"
 
 
 # ---------------------------------------------------------------------------
@@ -124,9 +139,13 @@ def pick_point(context, x: float, y: float):
     if not trail["bones"] or not frames:
         return None
 
-    radius = PICK_RADIUS * key_poses._px()
-    best = None
-    best_d = radius
+    px = key_poses._px()
+    keys = set(key_poses.plan(context.scene)["frames"])
+    cursor = Vector((x, y))
+    best_key = best_frame = None
+    best_key_d = KEY_PICK_RADIUS * px
+    best_frame_d = FRAME_PICK_RADIUS * px
+
     for bone in trail["bones"]:
         points = trail["points"].get(bone)
         if not points or len(points) != len(frames):
@@ -135,27 +154,52 @@ def pick_point(context, x: float, y: float):
             co = view3d_utils.location_3d_to_region_2d(region, rv3d, Vector(points[i]))
             if co is None:
                 continue
-            d = (co - Vector((x, y))).length
-            if d < best_d:
-                best, best_d = (bone, frame, Vector(points[i])), d
-    return best
+            d = (co - cursor).length
+            if frame in keys:
+                if d < best_key_d:
+                    best_key, best_key_d = (bone, frame, Vector(points[i])), d
+            elif d < best_frame_d:
+                best_frame, best_frame_d = (bone, frame, Vector(points[i])), d
+    # A key pose within reach always wins, however close an in-between is.
+    return best_key or best_frame
 
 
 # ---------------------------------------------------------------------------
 # Solving a dragged frame
 # ---------------------------------------------------------------------------
 
-def _effectors_at(arm, frame_index: int, dragged_bone: str, target: Vector):
-    """The frame's traced joints as position effectors, one of them moved."""
+def is_root(bone: str) -> bool:
+    """Is this the curve that carries the body's placement?"""
+    return _canonical(bone) == "Hips"
+
+
+def _effectors_at(arm, frame_index: int, dragged_bone: str, target: Vector,
+                  *, whole_pose: bool = False):
+    """The frame's traced joints as position effectors.
+
+    Two behaviours, because two different things are being asked for:
+
+    * pulling an end effector moves **that one** — the rest stay pinned where
+      they were, and the body between them is the poser's problem;
+    * pulling the **root**, or any handle with Shift held, moves the whole
+      pose: every effector shifts by the same delta, so the character is
+      carried bodily to the new place with its shape intact. Re-solving a
+      moved pelvis against pinned hands and feet is a weight shift, not a
+      move, and there was no way to simply relocate a pose without it.
+    """
     from . import key_poses
 
     trail = key_poses._trail
+    delta = target - Vector(trail["points"][dragged_bone][frame_index]) if whole_pose else None
     out = []
     for bone in trail["bones"]:
         points = trail["points"].get(bone)
         if not points:
             continue
-        world = target if bone == dragged_bone else Vector(points[frame_index])
+        if whole_pose:
+            world = Vector(points[frame_index]) + delta
+        else:
+            world = target if bone == dragged_bone else Vector(points[frame_index])
         out.append({
             "joint": _canonical(bone),
             "type": "pos",
@@ -165,12 +209,15 @@ def _effectors_at(arm, frame_index: int, dragged_bone: str, target: Vector):
     return out
 
 
-def solve_drag(arm, frame_index: int, dragged_bone: str, target: Vector):
-    """Solve the body for this frame with one effector moved. Never touches
-    the rig, the playhead, or the current pose."""
+def solve_drag(arm, frame_index: int, dragged_bone: str, target: Vector,
+               *, whole_pose: bool = False):
+    """Solve the body for this frame with one effector moved — or all of them,
+    for a whole-pose move. Never touches the rig, the playhead, or the current
+    pose."""
     from .autoposer import engine
 
-    effectors = _effectors_at(arm, frame_index, dragged_bone, target)
+    effectors = _effectors_at(arm, frame_index, dragged_bone, target,
+                              whole_pose=whole_pose)
     if len(effectors) < 3:
         raise engine.NotReady(
             "the trail follows fewer than three joints — the poser needs 3+")
@@ -279,6 +326,40 @@ def _draw():
         gpu.state.depth_test_set('NONE')
 
 
+def _draw_label():
+    """What you grabbed, next to where you are dragging it.
+
+    A drag that silently took the frame next to the one you meant is only
+    obvious once it is committed. Naming the frame while the mouse is still
+    down makes a mis-grab something you can see and escape.
+    """
+    if not _drag["active"] or _drag["target"] is None:
+        return
+    context = bpy.context
+    space = getattr(context, "space_data", None)
+    if space is None or space.type != 'VIEW_3D':
+        return
+    region, rv3d = context.region, context.region_data
+    if region is None or rv3d is None:
+        return
+    co = view3d_utils.location_3d_to_region_2d(region, rv3d, _drag["target"])
+    if co is None:
+        return
+
+    from . import key_poses
+
+    px = key_poses._px()
+    text = (f"whole pose · frame {_drag['frame']}" if _drag["whole_pose"]
+            else f"{_drag['joint']} · frame {_drag['frame']}")
+    if _drag["error"]:
+        text = _drag["error"]
+    font_id = 0
+    blf.size(font_id, int(LABEL_SIZE * px))
+    blf.position(font_id, co.x + LABEL_OFFSET_PX * px, co.y + LABEL_OFFSET_PX * px, 0)
+    blf.color(font_id, *LABEL_COLOR)
+    blf.draw(font_id, text)
+
+
 def register_draw_handler() -> None:
     global _draw_handle
     ns = bpy.app.driver_namespace
@@ -287,26 +368,32 @@ def register_draw_handler() -> None:
         return
     _draw_handle = bpy.types.SpaceView3D.draw_handler_add(_draw, (), 'WINDOW', 'POST_VIEW')
     ns[_NS_KEY] = _draw_handle
+    global _label_handle
+    if ns.get(_NS_LABEL_KEY) is None:
+        _label_handle = bpy.types.SpaceView3D.draw_handler_add(
+            _draw_label, (), 'WINDOW', 'POST_PIXEL')
+        ns[_NS_LABEL_KEY] = _label_handle
 
 
 def unregister_draw_handler() -> None:
-    global _draw_handle
+    global _draw_handle, _label_handle
     ns = bpy.app.driver_namespace
-    handle = _draw_handle or ns.get(_NS_KEY)
-    if handle is not None:
-        try:
-            bpy.types.SpaceView3D.draw_handler_remove(handle, 'WINDOW')
-        except (ValueError, RuntimeError):
-            pass
-    ns.pop(_NS_KEY, None)
-    _draw_handle = None
+    for key, handle in ((_NS_KEY, _draw_handle), (_NS_LABEL_KEY, _label_handle)):
+        h = handle or ns.get(key)
+        if h is not None:
+            try:
+                bpy.types.SpaceView3D.draw_handler_remove(h, 'WINDOW')
+            except (ValueError, RuntimeError):
+                pass
+        ns.pop(key, None)
+    _draw_handle = _label_handle = None
 
 
 def _clear() -> None:
     _drag.update({
         "active": False, "bone": "", "joint": "", "frame": -1,
         "origin": None, "target": None, "points": None, "parents": None,
-        "solve": None, "error": "",
+        "solve": None, "whole_pose": False, "error": "",
     })
 
 
@@ -326,6 +413,11 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
 
     bone: bpy.props.StringProperty()
     frame: bpy.props.IntProperty()
+    whole_pose: bpy.props.BoolProperty(
+        name="Whole Pose",
+        description="Carry the whole pose instead of moving one end effector",
+        default=False,
+    )
 
     def invoke(self, context, event):
         from . import key_poses
@@ -344,7 +436,11 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             return {'CANCELLED'}
 
         origin = Vector(points[self._index])
+        # The root is the body's placement, so its curve moves the body. Shift
+        # says the same thing from any other handle.
+        self._whole = bool(self.whole_pose) or is_root(self.bone) or event.shift
         _drag.update({
+            "whole_pose": self._whole,
             "active": True, "bone": self.bone, "joint": _canonical(self.bone),
             "frame": int(self.frame), "origin": origin, "target": origin.copy(),
             "points": None, "parents": None, "solve": None, "error": "",
@@ -373,7 +469,8 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
 
         _drag["target"] = self._mouse_world(context, event)
         try:
-            out = solve_drag(self._arm, self._index, self.bone, _drag["target"])
+            out = solve_drag(self._arm, self._index, self.bone, _drag["target"],
+                             whole_pose=self._whole)
         except engine.NotReady as exc:
             _drag["error"] = str(exc)
             _drag["solve"] = None
@@ -413,11 +510,9 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             written = commit(self._arm, frame, out)
             key_poses.invalidate_plan()
             key_poses.request_rebuild()
-            self.report(
-                {'INFO'},
-                f"{_canonical(self.bone)} moved at frame {frame} "
-                f"— pose keyed ({written} channels)",
-            )
+            what = ("whole pose moved" if self._whole
+                    else f"{_canonical(self.bone)} moved")
+            self.report({'INFO'}, f"{what} at frame {frame} — keyed ({written} channels)")
             return {'FINISHED'}
 
         return {'RUNNING_MODAL'}

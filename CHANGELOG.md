@@ -59,6 +59,20 @@ Proscenium, and keep the identifiers those releases actually shipped.
   artist is looking at frame 104. Measured: ~9 ms a solve (about 100 Hz), and
   the rig reaches the dragged position within 0.1 cm at that frame.
 
+  **The root curve moves the whole pose**, and Shift does the same from any
+  handle: every effector shifts by one delta, so the character is carried
+  bodily to a new place with its shape intact (measured: 0.00 cm of distortion
+  under an 0.85 m move). Re-solving a moved pelvis against pinned hands and
+  feet is a weight shift, not a move, and there was no way to simply relocate
+  a pose without it.
+
+  **A click reaches for a key pose first.** The points are a dot per frame and
+  at a normal zoom the neighbours sit less than a pixel apart — measured 0.6 px
+  on a walk — so grabbing the frame next to the one you meant was the first
+  thing to go wrong in real use. A key pose now wins from 18 px away, an
+  in-between has to be hit almost exactly, and the frame you grabbed is named
+  beside the cursor while you drag.
+
 - **Click a ghost to edit that pose.** The ghosts show where the key poses are;
   clicking one makes it the handle you grab to change it. The playhead goes to
   that frame, the rig goes into pose mode, and where the Autoposer is driving
