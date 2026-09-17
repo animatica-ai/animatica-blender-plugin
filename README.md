@@ -33,7 +33,7 @@ You need **Blender 5.0+** and a free [Animatica](https://animatica.ai) account.
 ## Get started in Blender
 
 1. **Edit → Preferences → Add-ons → Animatica** — sign in with your Animatica account
-2. Open the **N** panel in the 3D View (**Animatica** tab) → **Connect** → choose a model
+2. Open the **N** panel in the 3D View (**Animatica** tab) — it connects on its own → choose a model
 3. Pick your **target armature** (or **Import skeleton** if you're starting from ours)
 4. Add prompts and constraints, then **Generate Motion**
 5. **Accept** to keep the animation, or **Reject** to undo

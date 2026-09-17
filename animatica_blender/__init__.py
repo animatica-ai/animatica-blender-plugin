@@ -76,6 +76,9 @@ def _animatica_load_post(dummy):
     key_poses.clear()
     key_poses.invalidate_plan()
 
+    from . import mmcp_client
+    mmcp_client.connect_async()
+
     for scene in bpy.data.scenes:
         settings = getattr(scene, "animatica", None)
         if settings is None:
@@ -150,6 +153,15 @@ def register():
     timeline_overlay.register_draw_handler()
 
     _reset_runtime_flags()
+
+    # Connecting is not a decision — it is how the addon learns which models
+    # exist. Deferred a moment so preferences (server URL, token) are readable.
+    def _connect_when_ready():
+        from . import mmcp_client
+        mmcp_client.connect_async()
+        return None
+
+    bpy.app.timers.register(_connect_when_ready, first_interval=1.0)
 
     # Install persistent handlers, purging any stale copies from prior loads.
     _purge_stale_handlers(bpy.app.handlers.save_pre, "_animatica_save_pre")

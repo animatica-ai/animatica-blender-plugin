@@ -105,6 +105,16 @@ Proscenium, and keep the identifiers those releases actually shipped.
   steps the playhead between your own poses — which Blender's keyframe jump
   cannot do once a generated take has put a key on every frame.
 
+- **It connects by itself.** Fetching what the server hosts is not a decision —
+  it is how the addon learns which models exist — so pressing **Connect** was a
+  step in front of everything else that could only ever be answered one way. It
+  now happens on startup, after a file load, after signing in, and again on its
+  own schedule when the first attempt failed: a laptop that woke up or a VPN
+  that came back no longer needs a click. The panel says *Connecting…* while it
+  runs and offers **Try again** only when the server genuinely cannot be
+  reached. Attempts are on a worker thread, so nothing waits on the network,
+  and no more than one every twenty seconds.
+
 ### Fixed
 
 - **The inference runtime installs itself.** Solving a pose needs onnxruntime,

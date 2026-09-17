@@ -201,15 +201,19 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
 
         # Soft prompt to connect first. Server URL + auth live in addon prefs.
         if mmcp_client.cached_capabilities() is None:
+            # Connecting happens by itself, so this says what is happening
+            # rather than asking for a click — and asks again on its own
+            # schedule, for a laptop that woke up or a VPN that came back.
+            mmcp_client.connect_async()
             box = layout.box()
             err = mmcp_client.last_connection_error()
-            if err:
-                box.label(text="Connection failed", icon='ERROR')
-                for line in err.split("\n")[:3]:
-                    box.label(text=line)
+            if mmcp_client.connecting() or not err:
+                box.label(text="Connecting…", icon='SORTTIME')
             else:
-                box.label(text="Connect to a server first", icon='INFO')
-            box.operator("animatica.connect", icon='URL', text="Connect")
+                box.label(text="Cannot reach the server", icon='ERROR')
+                for line in err.split("\n")[:2]:
+                    box.label(text=line)
+                box.operator("animatica.connect", icon='FILE_REFRESH', text="Try again")
             # Keying a pose is local work — no reason to make it wait on a
             # server the artist has not connected to yet.
             _draw_set_keyframe(layout, context, settings)

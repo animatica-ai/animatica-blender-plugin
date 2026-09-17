@@ -490,14 +490,15 @@ class AnimaticaAddonPreferences(AddonPreferences):
         caps = mmcp_client.cached_capabilities()
         box = layout.box()
         if caps is None:
+            mmcp_client.connect_async()
             err = mmcp_client.last_connection_error()
-            if err:
-                box.label(text="Connection failed", icon='ERROR')
+            if mmcp_client.connecting() or not err:
+                box.label(text="Connecting…", icon='SORTTIME')
+            else:
+                box.label(text="Cannot reach the server", icon='ERROR')
                 for line in err.split("\n")[:3]:
                     box.label(text=line)
-            else:
-                box.label(text="Not connected", icon='UNLINKED')
-            box.operator("animatica.connect", icon='URL', text="Connect")
+                box.operator("animatica.connect", icon='FILE_REFRESH', text="Try again")
         else:
             n_models = len(caps.get("models", []))
             row = box.row()

@@ -6,7 +6,7 @@
 
 1. [Install](installation.md) and [sign in](configuration.md)
 2. In the 3D View, open the **N** panel → **Animatica** tab
-3. In the **Animatica** panel, click **Connect**, then pick a model
+3. In the **Animatica** panel, pick a model — it connects on its own
 
 ## Choose your character
 

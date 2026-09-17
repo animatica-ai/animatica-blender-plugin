@@ -329,6 +329,82 @@ def last_connection_error() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Connecting, without being asked
+#
+# Fetching /capabilities is not a decision — it is how the addon finds out
+# which models exist so it can show them. Making the artist press Connect
+# first put a step in front of everything else that could only ever be
+# answered one way. It happens on its own now: at startup, after a file load,
+# after signing in, and again on its own schedule if the network was not there
+# the first time.
+# ---------------------------------------------------------------------------
+
+#: Seconds before a failed attempt is worth repeating. Long enough not to
+#: hammer a server that is down, short enough that coming back from a dropped
+#: network or a VPN does not need a click.
+CONNECT_RETRY_SECONDS = 20.0
+
+_CONNECT = {"running": False, "at": 0.0}
+
+
+def connecting() -> bool:
+    return bool(_CONNECT["running"])
+
+
+def connect_async(*, force: bool = False) -> bool:
+    """Fetch capabilities on a worker thread. True if an attempt started.
+
+    Safe to call from anywhere, including a draw callback: it starts a thread
+    and touches no Blender data. The result is applied on the main thread.
+    """
+    import threading
+    import time as _time
+
+    if _CONNECT["running"] or (_CAPABILITIES is not None and not force):
+        return False
+    if not force and _time.monotonic() - _CONNECT["at"] < CONNECT_RETRY_SECONDS:
+        return False        # tried recently and it did not work
+    _CONNECT["running"] = True
+    _CONNECT["at"] = _time.monotonic()
+    url = get_mmcp_url()
+
+    def _work():
+        caps, error = None, ""
+        try:
+            caps = MmcpClient(url, timeout=30).capabilities(refresh=True)
+        except Exception as exc:                            # noqa: BLE001
+            error = str(exc)
+        _CONNECT["running"] = False
+        bpy.app.timers.register(
+            lambda: _apply_connection(caps, error, url), first_interval=0.0)
+
+    threading.Thread(target=_work, daemon=True).start()
+    return True
+
+
+def _apply_connection(caps, error: str, url: str):
+    """Land the result on the main thread, where Blender data may be touched."""
+    if caps is None:
+        clear_capabilities(error=error or f"no answer from {url}")
+    else:
+        store_capabilities(caps)
+        models = [m.get("id") for m in caps.get("models", []) if m.get("id")]
+        for scene in getattr(bpy.data, "scenes", ()):
+            settings = getattr(scene, "animatica", None)
+            if settings is None or not models or settings.model_id in models:
+                continue
+            try:
+                settings.model_id = models[0]
+            except TypeError:
+                pass
+    wm = getattr(bpy.context, "window_manager", None)
+    for window in getattr(wm, "windows", ()):
+        for area in window.screen.areas:
+            area.tag_redraw()
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
 
