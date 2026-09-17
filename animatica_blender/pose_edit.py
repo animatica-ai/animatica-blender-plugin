@@ -80,29 +80,42 @@ def active_session(settings, arm) -> int | None:
     frame = int(getattr(settings, "editing_key_pose_frame", -1))
     if frame < 0:
         return None
-    if autoposer_holds(arm):
-        return frame
     scene = getattr(bpy.context, "scene", None)
     if scene is not None and frame == int(scene.frame_current):
         return frame
     return None
 
 
+def stash_is_stale(arm) -> bool:
+    """The Autoposer stashed an action, but something else has bound one since.
+
+    ``take_over`` detaches the action and records its name, so while it holds
+    the rig there is nothing bound. An action bound *and* a stash recorded
+    means the two have diverged — a generation bound its result, or a key was
+    written into a new action — and the stash no longer describes the rig.
+    Handing it back then would swap the work out for what was there before.
+    """
+    if not autoposer_holds(arm):
+        return False
+    return arm.animation_data is not None and arm.animation_data.action is not None
+
+
 def _editing_action(arm):
     """The action an edit must be written into.
 
-    While the Autoposer holds the rig its action is detached and stashed on
-    the object, so the live ``animation_data.action`` is not the one the
-    artist is editing.
+    Whatever is bound, first: that is what plays, and what the request reads.
+    The Autoposer's stash is the fallback, for the window where it holds the
+    rig and nothing is bound at all — writing into the stash while a different
+    action is bound would put the pose somewhere nothing is looking.
     """
-    stashed = arm.get(_AP_STASHED_ACTION)
-    if stashed:
-        action = bpy.data.actions.get(str(stashed))
-        if action is not None:
-            return action
     if arm.animation_data is None:
         arm.animation_data_create()
-    return arm.animation_data.action
+    if arm.animation_data.action is not None:
+        return arm.animation_data.action
+    stashed = arm.get(_AP_STASHED_ACTION)
+    if stashed:
+        return bpy.data.actions.get(str(stashed))
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +348,52 @@ class ANIMATICA_OT_pick_ghost(Operator):
         return bpy.ops.animatica.edit_key_pose('INVOKE_DEFAULT', frame=frame)
 
 
+class ANIMATICA_OT_give_back_rig(Operator):
+    bl_idname = "animatica.give_back_rig"
+    bl_label = "Give Back Rig"
+    bl_description = (
+        "Hand the rig back from the Autoposer, which detached its action to "
+        "hold the pose. Re-attaches what it stashed — or, if something has "
+        "bound an action since, keeps that and just lets go"
+    )
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        arm = _target(context)
+        return arm is not None and autoposer_holds(arm)
+
+    def execute(self, context):
+        from . import key_poses
+
+        arm = _target(context)
+        settings = _settings(context)
+        settings.editing_key_pose_frame = -1
+
+        if stash_is_stale(arm):
+            # Something bound an action after the take-over. Re-attaching the
+            # stash would replace it — the generated take, or the poses keyed
+            # since — so let go without touching what is bound.
+            kept = arm.animation_data.action.name
+            for key in ("ap_stashed_action", "ap_stashed_slot",
+                        "ap_stashed_slot_id", "ap_muted_nla"):
+                if key in arm:
+                    del arm[key]
+            for track in arm.animation_data.nla_tracks:
+                track.mute = False
+            self.report({'INFO'}, f"Autoposer let go — {kept} kept")
+        else:
+            try:
+                bpy.ops.autoposer.release()
+            except RuntimeError as exc:
+                self.report({'WARNING'}, f"Autoposer did not release: {exc}")
+                return {'CANCELLED'}
+            self.report({'INFO'}, "Autoposer handed the rig back")
+        key_poses.invalidate_plan()
+        key_poses.request_rebuild()
+        return {'FINISHED'}
+
+
 class ANIMATICA_OT_set_key_pose(Operator):
     bl_idname = "animatica.set_key_pose"
     bl_label = "Set Keyframe"
@@ -392,6 +451,7 @@ _classes = (
     ANIMATICA_OT_edit_key_pose,
     ANIMATICA_OT_pick_ghost,
     ANIMATICA_OT_set_key_pose,
+    ANIMATICA_OT_give_back_rig,
 )
 
 _keymaps: list = []

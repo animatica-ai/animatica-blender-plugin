@@ -107,6 +107,23 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Fixed
 
+- **The Autoposer can always be given the rig back.** Taking over detaches the
+  action — that is how a solved pose survives a frame change — but the only
+  ways out of that state were committing a pose or the Autoposer's own panel,
+  so a rig could sit held with the overlay reading "editing" and no obvious
+  way to leave. The main panel now says when the Autoposer is holding the rig
+  and offers **Give Back Rig** beside it.
+
+  Giving back is careful about which action wins. If something has bound one
+  since the take-over — a generation's result, or poses keyed into a new
+  action — re-attaching the stash would swap that work out for what was there
+  before, so in that case it lets go and keeps what is bound. Keys are written
+  to whatever is bound too, for the same reason: writing into a stashed action
+  while another one is playing puts the pose where nothing is looking.
+
+  The "editing" state no longer sticks either: it is the playhead being on the
+  frame that was opened, nothing more, so scrubbing away ends it.
+
 - **The ghosts no longer go out when you press Generate.** A rebake is held
   while a generation runs or the animation plays — it steps the playhead, which
   would fight both — and Generate swaps the rig's action, so the overlay went

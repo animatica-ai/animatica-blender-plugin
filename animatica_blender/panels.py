@@ -55,6 +55,30 @@ def _draw_signin_hint(layout, context) -> bool:
     return True
 
 
+def _draw_rig_held(layout, context, settings) -> None:
+    """Say when the Autoposer is holding the rig, and offer it back.
+
+    While it holds, the action is detached: the pose on screen is the solve,
+    frame changes do not move the character, and nothing is playing. That is a
+    state the artist has to be able to see and leave — without it, the addon
+    reads as stuck in editing with no way out.
+    """
+    from . import pose_edit
+
+    arm = properties._live_armature(settings.target_armature)
+    if arm is None or not pose_edit.autoposer_holds(arm):
+        return
+    box = layout.box()
+    box.label(text="Autoposer is holding this rig", icon='INFO')
+    note = box.row()
+    note.active = False
+    if pose_edit.stash_is_stale(arm):
+        note.label(text="its action has changed since — giving back keeps yours")
+    else:
+        note.label(text="its animation is detached while it poses")
+    box.operator("animatica.give_back_rig", icon='LOOP_BACK', text="Give Back Rig")
+
+
 def _draw_set_keyframe(layout, context, settings) -> None:
     """The one button for committing a pose you posed by hand.
 
@@ -71,6 +95,7 @@ def _draw_set_keyframe(layout, context, settings) -> None:
     row = layout.row()
     row.scale_y = 1.2
     row.operator("animatica.set_key_pose", icon='KEYFRAME_HLT', text="Set Keyframe")
+    _draw_rig_held(layout, context, settings)
 
 
 def _draw_duration_hint(layout, context, settings) -> None:

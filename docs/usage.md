@@ -104,6 +104,12 @@ A pose **outside the generating range is not sent** at all — those are greyed
 out in the viewport, red on the timeline, and named in the panel. Widen a prompt
 block to bring one back into the plan, or move the pose.
 
+If the **Autoposer** is holding the rig — it detaches the action while it
+poses, so frame changes stop moving the character — the main panel says so and
+offers **Give Back Rig**. If anything bound an action while it held the rig,
+giving back keeps that one rather than swapping your work for what was there
+before.
+
 > **Use Set Keyframe rather than `I` on top of a generated take.** Blender
 > keeps a keyframe's existing type when you key over one, so pressing `I` on a
 > frame a previous generation baked leaves a key the addon reads as the
