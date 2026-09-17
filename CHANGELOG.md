@@ -105,6 +105,21 @@ Proscenium, and keep the identifiers those releases actually shipped.
   steps the playhead between your own poses — which Blender's keyframe jump
   cannot do once a generated take has put a key on every frame.
 
+- **The sidebar is three panels, named for the job.** It had grown to five,
+  split by how the addon was built rather than by what an artist does:
+  Constraints, Ghosts and Posing were all "direct the motion". They are one
+  **Pose** panel now — the handles, what the overlay draws, and what will be
+  sent — with paths and pins as a collapsed child, since they are reached
+  rarely. **Animatica** keeps the shot, **Settings** takes everything set once:
+  the seed (which sat above a button pressed constantly), the floor, how ghosts
+  are drawn, in-front and hide-skeleton.
+
+  The control list went from seven two-row boxes — each a checkbox, a truncated
+  rig name like `C_head_AI…`, and a tolerance field reading 0.005 for the
+  seventh time — to one row of handles in the artist's words (Hips, Chest, L
+  hand, Head) and a single **Tightness**, which is the one decision those seven
+  fields were asking over and over. Eighteen rows became three.
+
 - **It connects by itself.** Fetching what the server hosts is not a decision —
   it is how the addon learns which models exist — so pressing **Connect** was a
   step in front of everything else that could only ever be answered one way. It

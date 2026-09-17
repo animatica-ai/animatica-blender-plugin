@@ -161,10 +161,12 @@ entire action the way **Generate Motion** does.
 
 ## Sidebar panels (quick reference)
 
-- **Animatica** (main) — connect, pick a model, target armature, generate, accept / reject
-- **Constraints** — root paths and pinned effectors
-- **Ghosts** — the poses you keyed and the motion trail, drawn in the viewport
-- **Settings** — generation options for the current shot
+- **Animatica** — the shot: model, character, generate, accept / reject
+- **Pose** — the character: the handles you pose with, what the overlay draws,
+  and what the next generation will be sent
+  - **Paths & Pins** — a curve to travel along, an empty to pin a hand to
+- **Settings** — everything set once and left alone: seed, quality, guidance,
+  the floor, how ghosts are drawn
 
 ## Help
 

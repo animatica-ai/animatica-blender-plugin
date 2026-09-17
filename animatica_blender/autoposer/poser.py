@@ -1317,100 +1317,22 @@ class AP_OT_rest(bpy.types.Operator):
 
 
 # --------------------------------------------------------------------------- UI
-class AP_PT_panel(bpy.types.Panel):
-    bl_label = "Posing"
-    bl_idname = "AP_PT_panel"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "Animatica"     # ported: one addon, one tab
+def joint_label(b) -> str:
+    """What to call a control in a panel.
 
-    def draw(self, context):
-        s = context.scene
-        lay = self.layout
-        st = engine.status()
-        if not (st["runtime"] and st["model"]):
-            # first run: say what is missing and where to fix it, rather than failing at the
-            # first drag with an error in the status bar
-            box = lay.box().column(align=True)
-            box.label(text="Set up the model", icon="ERROR")
-            if not st["runtime"]:
-                box.label(text="the inference runtime is not installed")
-            if not st["model"]:
-                box.label(text="no model on this machine yet")
-            box.operator("screen.userpref_show", text="Open Preferences",
-                         icon="PREFERENCES").section = "ADDONS"
-            return
-        arm = _armature(context)
-        # No conflict box and no detach button any more. Both existed because a
-        # solved pose was transient — written to matrix_basis, gone at the next
-        # animation evaluation — so the addon had to warn about the action and
-        # offer to take it away. Animatica keys the solve at the frame instead
-        # (see AFTER_SOLVE), which puts the pose in the action rather than in
-        # spite of it. A rig still detached by an older session can be handed
-        # back from the Animatica panel.
-        col = lay.column(align=True)
-        # Not a picker: the rig is Animatica's target armature, chosen once in
-        # the main panel. Two pickers meant two characters.
-        row = col.row()
-        row.enabled = False
-        row.label(text=(arm.name if arm is not None else "no target armature"),
-                  icon="OUTLINER_OB_ARMATURE")
-        col.separator()
-        if arm is not None and not has_controls(arm):
-            col.operator("autoposer.build_rig", icon="OUTLINER_OB_ARMATURE")
-        if arm is not None:
-            row = col.row(align=True)
-            row.prop(arm, "show_in_front", text="In front", icon="XRAY")
-            row.prop(s, "ap_hide_deform", text="Hide skeleton", icon="HIDE_ON")
-        # Solve, Key Pose and Snap have all become things that happen: the
-        # body follows a control as it moves, the pose is keyed where it was
-        # made, and the controls re-seat on every frame change. Leaving the
-        # buttons would be leaving three ways to ask for what already
-        # happened. They remain in the search menu for when one is wanted.
-        row = col.row(align=True)
-        row.prop(s, "ap_floor", text="Floor", toggle=True, icon="MOD_PHYSICS")
-        row.operator("autoposer.rest", text="Rest Pose", icon="LOOP_BACK")
-        if arm is not None:
-            _draw_controls(lay, context, arm)
-        if s.ap_status:
-            note = lay.row()
-            note.active = False
-            note.label(text=s.ap_status)
-
-
-
-def _draw_controls(lay, context, arm):
-    """The controls, inline. This was a panel of its own under the Autoposer's,
-    which made posing something you reached through two headers — one to find
-    the poser, another to find the handles that are the whole of it."""
-    ctrls = _controls(arm)
-    if not ctrls:
-        return
-    ETY = {0: "pos", 1: "rot", 2: "aim"}
-    col = lay.column(align=True)
-    for b in ctrls:
-        box = col.box().column(align=True)
-        row = box.row(align=True)
-        row.prop(b, "ap_enabled", text="")
-        row.label(text=f"{b.name}", icon="BONE_DATA")
-        row.label(text=ETY.get(int(b.get('ap_ety', 0)), "?"))
-        if int(b.get("ap_ety", 0)) == 0:
-            row.prop(b, "ap_rot", text="", icon="ORIENTATION_GIMBAL", toggle=True)
-        op = row.operator("autoposer.remove_control", text="", icon="X", emboss=False)
-        op.name = b.name
-        sub = box.row(align=True)
-        sub.active = b.ap_enabled
-        sub.prop(b, "ap_tol_m", text="tol (m)")
-        if b.ap_rot:
-            r2 = box.row(align=True)
-            r2.active = b.ap_enabled
-            r2.prop(b, "ap_rot_tol_m", text="rot tol")
-    lay.operator("autoposer.add_control", icon="ADD")
+    ``C_cog_CTRL``, ``L_arm_IK_CTRL`` and ``C_head_AIM_CTRL`` are rig
+    internals; an artist reaches for the hips, the left hand, the head.
+    """
+    joint = (b.get("ap_eff") or b.get("ap_joint") or b.name).rsplit(":", 1)[-1]
+    for side, short in (("Left", "L "), ("Right", "R ")):
+        if joint.startswith(side):
+            return short + joint[len(side):].lower()
+    return joint.capitalize() if joint.isupper() else joint
 
 
 CLASSES = (AP_OT_build_rig, AP_OT_add_control, AP_OT_remove_control, AP_OT_solve,
            AP_OT_snap_controls, AP_OT_rest, AP_OT_key_pose, AP_OT_take_over, AP_OT_release,
-           AP_PT_panel)
+)
 
 
 def register():

@@ -343,6 +343,25 @@ def _key_poses_rebake_update(self, context):
     key_poses.on_rebake_setting(self)
 
 
+def _tightness_update(self, context):
+    """Push one number onto every control's own tolerance.
+
+    The poser reads a tolerance per control — metres of slack, and the IK
+    weight. Seven identical fields reading 0.005 is not seven decisions; it is
+    one, asked seven times. This is that one, and the per-control values stay
+    underneath for anyone who wants them from the bone properties.
+    """
+    from . import properties  # noqa: PLC0415 — self, for _live_armature
+    from .autoposer import poser  # noqa: PLC0415 — lazy to avoid circular import
+
+    arm = properties._live_armature(self.target_armature)
+    if arm is None:
+        return
+    for b in poser._controls(arm):
+        b.ap_tol_m = float(self.pose_tightness)
+        b.ap_rot_tol_m = float(self.pose_tightness)
+
+
 def _key_poses_redraw_update(self, context):
     from . import key_poses  # noqa: PLC0415 — lazy to avoid circular import
 
@@ -800,6 +819,16 @@ class AnimaticaSettings(PropertyGroup):
         ),
         default=-1,
         options={"SKIP_SAVE"},
+    )
+    pose_tightness: FloatProperty(
+        name="Tightness",
+        description=(
+            "How exactly the poser must obey a control. Tight puts the joint "
+            "where you put the handle; loose makes it a hint the model may "
+            "overrule to keep the body natural"
+        ),
+        default=0.005, min=0.001, max=0.2, precision=3, step=1,
+        update=_tightness_update,
     )
     key_pose_auto_refresh: BoolProperty(
         name="Auto Refresh",
