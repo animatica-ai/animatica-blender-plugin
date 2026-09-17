@@ -168,24 +168,19 @@ def pick_point(context, x: float, y: float):
 # Solving a dragged frame
 # ---------------------------------------------------------------------------
 
-def is_root(bone: str) -> bool:
-    """Is this the curve that carries the body's placement?"""
-    return _canonical(bone) == "Hips"
-
-
 def _effectors_at(arm, frame_index: int, dragged_bone: str, target: Vector,
                   *, whole_pose: bool = False):
     """The frame's traced joints as position effectors.
 
     Two behaviours, because two different things are being asked for:
 
-    * pulling an end effector moves **that one** — the rest stay pinned where
-      they were, and the body between them is the poser's problem;
-    * pulling the **root**, or any handle with Shift held, moves the whole
-      pose: every effector shifts by the same delta, so the character is
-      carried bodily to the new place with its shape intact. Re-solving a
-      moved pelvis against pinned hands and feet is a weight shift, not a
-      move, and there was no way to simply relocate a pose without it.
+    * pulling a handle moves **that one** — the rest stay pinned where they
+      were, and the body between them is the poser's problem. That holds for
+      the hips too: dragging them over a foot is a weight shift, which is the
+      commoner thing to want;
+    * holding **Shift** moves the whole pose instead: every effector shifts by
+      the same delta, so the character is carried bodily to a new place with
+      its shape intact.
     """
     from . import key_poses
 
@@ -407,9 +402,8 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
     bl_description = (
         "Drag a point on a motion trail: that end effector moves at that "
         "frame, the Autoposer solves the body around it, and releasing keys "
-        "the pose. The playhead does not move. The root curve carries the "
-        "whole pose — hold Ctrl to move the hips alone, or Shift to carry the "
-        "whole pose from any other handle"
+        "the pose. The playhead does not move. Hold Shift to carry the whole "
+        "pose instead of the one joint"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -451,30 +445,24 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         self._plane_no = context.region_data.view_rotation @ Vector((0.0, 0.0, 1.0))
         self._solve(context, event)
         context.area.header_text_set(
-            "Drag a motion curve   |   Shift: whole pose   |   Ctrl: hips only   "
-            "|   Esc: cancel")
+            "Drag a motion curve   |   Shift: whole pose   |   Esc: cancel")
         context.window_manager.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
     def _mode(self, event) -> bool:
         """Whether this drag carries the whole pose, read from the modifiers.
 
-        The root is the body's placement, so its curve carries the body — that
-        is what a root curve means, and what relocating a pose needs. But the
-        hips are also a joint you pose: shifting weight over a foot moves the
-        pelvis and nothing else. **Ctrl** asks for that, treating the root like
-        any other effector; **Shift** asks for the opposite from any other
-        handle, carrying everything.
+        One rule for every handle: a drag moves the joint you grabbed, and
+        **Shift** moves the whole body instead. The root is not a special case
+        — the hips are a joint you pose like any other, and shifting weight
+        over a foot is the commoner thing to want than relocating the
+        character.
 
         Read on every mouse move rather than latched at the press, the way
         Blender's own transforms read theirs — changing your mind mid-drag is
         what modifiers are for.
         """
-        if bool(self.whole_pose):
-            return True
-        if event.ctrl:
-            return False
-        return bool(event.shift) or is_root(self.bone)
+        return bool(self.whole_pose) or bool(event.shift)
 
     def _mouse_world(self, context, event):
         region, rv3d = context.region, context.region_data
@@ -513,8 +501,7 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
     def modal(self, context, event):
         # Modifier presses and releases arrive as their own events; re-solving
         # on them is what makes holding Shift mid-drag do something.
-        if event.type in {'MOUSEMOVE', 'LEFT_SHIFT', 'RIGHT_SHIFT',
-                          'LEFT_CTRL', 'RIGHT_CTRL'}:
+        if event.type in {'MOUSEMOVE', 'LEFT_SHIFT', 'RIGHT_SHIFT'}:
             self._solve(context, event)
             context.area.tag_redraw()
             return {'RUNNING_MODAL'}

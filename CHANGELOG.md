@@ -59,15 +59,13 @@ Proscenium, and keep the identifiers those releases actually shipped.
   artist is looking at frame 104. Measured: ~9 ms a solve (about 100 Hz), and
   the rig reaches the dragged position within 0.1 cm at that frame.
 
-  **The root curve moves the whole pose**, and Shift does the same from any
-  handle: every effector shifts by one delta, so the character is carried
-  bodily to a new place with its shape intact (measured: 0.00 cm of distortion
-  under an 0.85 m move). **Ctrl** asks for the other thing the hips are for —
-  the pelvis alone, hands and feet staying where they are, which is a weight
-  shift rather than a move (measured: dropping the hips moves the pelvis and
-  the spine above it, both feet within a millimetre). The modifiers are read
-  on every mouse move, not latched at the press, so either can be held or
-  released mid-drag; the header names them while dragging.
+  One rule for every handle: a drag moves the joint you grabbed — the hips
+  included, where it is a weight shift, the pelvis going over feet that stay
+  put — and **Shift** moves the whole pose instead, every effector by one
+  delta, so the character is carried bodily to a new place with its shape
+  intact (measured: 0.00 cm of distortion under an 0.85 m move). Shift is read
+  on every mouse move rather than latched at the press, so it can be taken up
+  or dropped mid-drag; the header names it while dragging.
 
   **A click reaches for a key pose first.** The points are a dot per frame and
   at a normal zoom the neighbours sit less than a pixel apart — measured 0.6 px
