@@ -117,6 +117,23 @@ Proscenium, and keep the identifiers those releases actually shipped.
   machine that should not fetch it. The model is still explicit: it is
   account-gated, and only the artist has the token.
 
+- **Posing with the controls keys the pose, so nothing is detached any more.**
+  A solve lives in `matrix_basis`, which the next animation evaluation
+  overwrites, and the Autoposer's answer was **Take Over Rig**: detach the
+  action, hold the pose, hand it back afterwards. That is a mode to be in, to
+  remember being in, and to get out of — and it invited the worst failure this
+  addon has had, where generating while held meant giving back swapped the
+  result for the action from before. The motion-curve drag never needed any of
+  it, because it writes keys instead of posing the rig. Control posing now does
+  the same: a solve is captured as it happens and keyed at the frame it was
+  made for once the drag settles, so the action carries the pose. Measured on a
+  rig with an action bound: 0.06 cm of drift through a frame change, against
+  434 cm for a pose that was keyed a quarter of a second too late — the capture
+  has to be synchronous, the write does not. The Take Over and Give Back
+  buttons are gone from the Autoposer panel with the problem they solved; a rig
+  left detached by an older session can still be handed back from the main
+  panel.
+
 - **One character, not two.** The Autoposer carried a rig picker of its own, so
   it was possible to pose one armature and generate another — and to wonder why
   editing a key pose changed nothing. It now works on Animatica's target

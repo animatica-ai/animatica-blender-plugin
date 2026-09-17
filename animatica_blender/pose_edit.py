@@ -214,8 +214,15 @@ def write_channels(action, frame: int, channels) -> int:
     return written
 
 
-def _write_pose_to_action(arm, action, frame: int) -> int:
-    """Write the rig's current pose into ``action`` at ``frame``."""
+def pose_channels(arm) -> list:
+    """The rig's current pose as ``(data_path, index, value)`` triples.
+
+    Split from the write so a pose can be *captured* at one moment and
+    *written* at another. That distinction is not academic: a solve lives in
+    ``matrix_basis``, which the next animation evaluation overwrites, so
+    reading the pose even a fraction of a second later reads the action's pose
+    back instead of the one just solved.
+    """
     channels = []
     root = next((pb for pb in arm.pose.bones if pb.parent is None), None)
     for pb in _edited_bones(arm):
@@ -229,7 +236,12 @@ def _write_pose_to_action(arm, action, frame: int) -> int:
                 (f'pose.bones["{pb.name}"].location', i, v)
                 for i, v in enumerate(pb.location)
             ]
-    return write_channels(action, frame, channels)
+    return channels
+
+
+def _write_pose_to_action(arm, action, frame: int) -> int:
+    """Write the rig's current pose into ``action`` at ``frame``."""
+    return write_channels(action, frame, pose_channels(arm))
 
 
 # ---------------------------------------------------------------------------
@@ -290,27 +302,28 @@ class ANIMATICA_OT_edit_key_pose(Operator):
             self.report({'WARNING'}, "Could not enter pose mode")
             return {'CANCELLED'}
 
-        handed_over = False
-        if autoposer_drives(arm) and not autoposer_holds(arm):
+        posed = False
+        if autoposer_drives(arm):
             # The controls are what a pose is edited with, so they are built
-            # here rather than asked for.
-            ensure_control_rig(arm, self.report)
-            # Seat the controls on the pose that is there before freezing it,
-            # so the artist starts from their own key rather than from
-            # wherever the controls were left.
-            try:
-                bpy.ops.autoposer.snap_controls()
-                bpy.ops.autoposer.take_over()
-                handed_over = True
-            except RuntimeError as exc:
-                self.report({'WARNING'}, f"Autoposer did not take the rig: {exc}")
+            # here rather than asked for, and seated on the pose that is
+            # already at this frame so the artist starts from their own key.
+            #
+            # Nothing is detached. A solve is keyed at the frame it was made
+            # for (see ``autopose_sync``), so the action carries the pose and
+            # there is no held state to be in or to leave.
+            if ensure_control_rig(arm, self.report):
+                try:
+                    bpy.ops.autoposer.snap_controls()
+                    posed = True
+                except RuntimeError as exc:
+                    self.report({'WARNING'}, f"controls did not seat: {exc}")
 
         settings.editing_key_pose_frame = frame
         key_poses.tag_redraw()
         self.report(
             {'INFO'},
             f"Editing the pose at frame {frame}"
-            + (" — Autoposer has the rig" if handed_over else ""),
+            + (" — drag a control to reshape it" if posed else ""),
         )
         return {'FINISHED'}
 
@@ -457,15 +470,6 @@ class ANIMATICA_OT_set_key_pose(Operator):
             arm.animation_data.action = action
 
         written = _write_pose_to_action(arm, action, frame)
-
-        # Hand the rig back before anything re-evaluates: the pose now lives
-        # in the action, so re-attaching reproduces what was just keyed.
-        if autoposer_holds(arm):
-            try:
-                bpy.ops.autoposer.release()
-            except RuntimeError as exc:
-                self.report({'WARNING'}, f"Autoposer did not release: {exc}")
-
         settings.editing_key_pose_frame = -1
         context.scene.frame_set(frame)
         key_poses.invalidate_plan()

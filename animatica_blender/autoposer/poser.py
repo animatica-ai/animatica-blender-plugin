@@ -58,6 +58,12 @@ ROT_LATCH_DEG = 2.0        # rotating a control this far switches its rotation c
 SHAPE_SCALE = {"double_ring": 2.6, "cube": 1.9, "square": 1.25, "circle": 1.1,
                "diamond": 0.8, "triangle": 0.8, "arrow": 1.2}
 
+#: Called after a successful solve, with the context. Animatica sets this to
+#: key the solved pose at the current frame — which is what makes detaching
+#: the action unnecessary: the pose lives in the action, so the next animation
+#: evaluation reproduces it instead of overwriting it.
+AFTER_SOLVE = None
+
 _BUSY = False
 _BUILDING = False
 _LAST_KEY = None
@@ -608,6 +614,11 @@ def solve(context, report=None):
         err += f" | {abs(ik['below_floor_cm']):.1f} under"
     context.scene.ap_status = (
         f"{len(eff)} eff | {_STATS['ms']:.0f} ms (~{1000 / max(_STATS['ms'], 1):.0f} Hz) | {err}")
+    if AFTER_SOLVE is not None:
+        try:
+            AFTER_SOLVE(context)
+        except Exception as exc:                              # noqa: BLE001
+            print(f"[Animatica] after-solve hook failed: {exc}")
     return True
 
 
@@ -1272,18 +1283,13 @@ class AP_PT_panel(bpy.types.Panel):
                          icon="PREFERENCES").section = "ADDONS"
             return
         arm = _armature(context)
-        conflict = _anim_conflict(arm) if arm else None
-        if conflict:
-            box = lay.box().column(align=True)
-            box.label(text="Pose will be overwritten", icon="ERROR")
-            box.label(text=f"driven by {conflict}")
-            box.label(text="a mode or frame change re-applies it")
-            box.operator("autoposer.key_pose", icon="KEYINGSET")
-            box.operator("autoposer.take_over", text="or detach it", icon="UNLOCKED")
-        elif arm is not None and arm.get("ap_stashed_action"):
-            row = lay.box().row(align=True)
-            row.label(text="animation detached", icon="CHECKMARK")
-            row.operator("autoposer.release", text="Give Back", icon="LOCKED")
+        # No conflict box and no detach button any more. Both existed because a
+        # solved pose was transient — written to matrix_basis, gone at the next
+        # animation evaluation — so the addon had to warn about the action and
+        # offer to take it away. Animatica keys the solve at the frame instead
+        # (see AFTER_SOLVE), which puts the pose in the action rather than in
+        # spite of it. A rig still detached by an older session can be handed
+        # back from the Animatica panel.
         col = lay.column(align=True)
         # Not a picker: the rig is Animatica's target armature, chosen once in
         # the main panel. Two pickers meant two characters.

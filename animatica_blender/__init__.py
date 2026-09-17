@@ -30,6 +30,7 @@ from . import canonical_skeleton
 from . import constraints_ui
 from . import panels
 from . import autoposer
+from . import autopose_sync
 from . import curve_edit
 from . import key_poses
 from . import pose_edit
@@ -141,6 +142,7 @@ def register():
     panels.register()
     path_follow.register()
     autoposer.register()
+    autopose_sync.register()
     key_poses.register()
     pose_edit.register()
     curve_edit.register()
@@ -165,6 +167,7 @@ def unregister():
     curve_edit.unregister()
     pose_edit.unregister()
     key_poses.unregister()
+    autopose_sync.unregister()
     autoposer.unregister()
     path_follow.unregister()
     panels.unregister()

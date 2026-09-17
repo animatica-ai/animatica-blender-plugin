@@ -110,11 +110,9 @@ gives that rig its control bones, so there is nothing to build by hand; the
 Autoposer panel's **Build Rig** button is only there for a rig that has none
 yet.
 
-If the **Autoposer** is holding the rig — it detaches the action while it
-poses, so frame changes stop moving the character — the main panel says so and
-offers **Give Back Rig**. If anything bound an action while it held the rig,
-giving back keeps that one rather than swapping your work for what was there
-before.
+Posing with the controls keys the pose where you made it, so it survives frame
+changes on its own — there is no mode to enter or leave. (A rig left detached
+by an older session can still be handed back from the main panel.)
 
 > **Use Set Keyframe rather than `I` on top of a generated take.** Blender
 > keeps a keyframe's existing type when you key over one, so pressing `I` on a
