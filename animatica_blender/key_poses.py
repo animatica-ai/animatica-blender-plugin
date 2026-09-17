@@ -921,14 +921,17 @@ def _rebuild_timer():
         # Asked again while we waited — sit out the rest of the window.
         return REBUILD_DEBOUNCE - waited
 
-    # Hold the request rather than dropping it while a generation runs, or
-    # while the animation is playing: a bake steps the playhead frame by
-    # frame, which would fight the player for it.
+    # Held only for a generation, which owns the playhead and the action while
+    # it samples frame by frame — stepping the frame under it would corrupt
+    # what it reads.
+    #
+    # Playback used to hold it too, on the same reasoning. It does not need
+    # to: a bake restores the frame it started on, and the player cannot
+    # advance while the bake holds the main thread, so it resumes exactly
+    # where it was. The cost is one hitch the length of a bake, against
+    # ghosts that told the truth only when you stopped playing.
     settings = _settings(getattr(bpy.context, "scene", None))
     if settings is not None and settings.is_generating:
-        return REBUILD_DEBOUNCE
-    screen = getattr(bpy.context, "screen", None)
-    if screen is not None and getattr(screen, "is_animation_playing", False):
         return REBUILD_DEBOUNCE
 
     _rebuild_requested_at = None
@@ -1114,9 +1117,6 @@ def refresh_held_by() -> str:
     settings = _settings(scene)
     if settings is not None and settings.is_generating:
         return "generating"
-    screen = getattr(bpy.context, "screen", None)
-    if screen is not None and getattr(screen, "is_animation_playing", False):
-        return "playback"
     return ""
 
 

@@ -120,6 +120,12 @@ Proscenium, and keep the identifiers those releases actually shipped.
   entirely, and the panel says when a refresh is waiting and on what. The same
   hold was behind trail and pose toggles sometimes needing a Refresh.
 
+  Playback no longer holds a refresh at all: a bake restores the frame it
+  started on, and the player cannot advance while it holds the main thread, so
+  it resumes exactly where it was. Measured: 91 ms for four ghosts and a
+  110-frame trail, mid-playback, frame 28 in and frame 28 out. Only a running
+  generation still waits, because it owns the playhead while it samples.
+
 - **The pose-keyframe count in Constraints counts poses, not curve points.** It
   summed every keyframe point on every rotation channel, so a rig carrying a
   generated take reported tens of thousands of "pose keyframes" — one per bone
