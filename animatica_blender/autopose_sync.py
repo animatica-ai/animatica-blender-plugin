@@ -81,7 +81,9 @@ def _write_timer():
     if waited < KEY_DEBOUNCE:
         return KEY_DEBOUNCE - waited     # still moving
     _pending["at"] = None
-    _pending["channels"] = None
+    # The captured pose is cleared by write_captured once it has been used.
+    # Clearing it here threw the pose away a line before it was needed, and
+    # every auto-key through this timer silently wrote nothing.
     try:
         write_captured(bpy.context)
     except Exception as exc:             # noqa: BLE001 — a timer must not raise
@@ -159,6 +161,9 @@ def _on_frame_change(scene, _depsgraph=None) -> None:
         return
     try:
         poser._snap(arm, bpy.context)
+        # The controls just moved, and nobody moved them. Take that as the new
+        # baseline, or the live timer reads a scrub as a drag and solves.
+        poser.sync_state(arm)
     except Exception as exc:                # noqa: BLE001 — a handler must not raise
         print(f"[Animatica] could not seat the controls: {exc}")
 

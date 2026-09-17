@@ -82,6 +82,7 @@ def ensure_control_rig(arm, report=None) -> bool:
     # some other command is run is a control that looks broken. The panel no
     # longer offers the switch, so this is where it is held on.
     bpy.context.scene.ap_live = True
+    poser.ensure_timer(bpy.context.scene)
     if poser.has_controls(arm):
         return True
     try:

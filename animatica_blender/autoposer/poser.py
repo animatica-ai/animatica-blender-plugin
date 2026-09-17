@@ -678,6 +678,38 @@ def _on_rot(self, context):
 
 
 # --------------------------------------------------------------------------- live timer
+def editing_now(ctx, arm) -> bool:
+    """Whether the artist is posing this rig right now.
+
+    Live solving belongs to an edit and nothing else. Outside one it is a
+    timer waiting to mistake something for a drag: the playhead moving
+    re-seats the controls, a generation samples frame by frame, and either
+    would read as "a control moved" and solve — and, now that a solve is
+    keyed, write a pose nobody asked for.
+    """
+    screen = getattr(ctx, "screen", None)
+    if screen is not None and getattr(screen, "is_animation_playing", False):
+        return False
+    settings = getattr(getattr(ctx, "scene", None), "animatica", None)
+    if settings is not None and getattr(settings, "is_generating", False):
+        return False
+    if ctx.mode != "POSE":
+        return False
+    return ctx.view_layer.objects.active is arm
+
+
+def sync_state(arm) -> None:
+    """Take the controls' current positions as the baseline.
+
+    Called after anything that moves the controls without the artist doing it
+    — re-seating them on a frame change, above all. Without this the next tick
+    sees a changed fingerprint and solves, which is the difference between
+    scrubbing and posing.
+    """
+    global _LAST_KEY
+    _LAST_KEY = _state_key(arm)
+
+
 def _tick():
     global _LAST_KEY
     ctx = bpy.context
@@ -687,11 +719,37 @@ def _tick():
     arm = _armature(ctx)
     if arm is None:
         return 0.2
+    if not editing_now(ctx, arm):
+        # Keep the baseline current while not editing, so returning to the rig
+        # does not read every frame scrubbed through as one enormous drag.
+        _LAST_KEY = _state_key(arm)
+        return 1.0 / max(scene.ap_rate, 1)
     key = _state_key(arm)
     if key != _LAST_KEY:
         _LAST_KEY = key
         solve(ctx)
     return 1.0 / max(scene.ap_rate, 1)
+
+
+def ensure_timer(scene=None) -> bool:
+    """Start the live timer if the scene says live and nothing is running.
+
+    ``ap_live`` is a scene property and its update callback only fires when it
+    *changes*. A file load or an addon reload therefore leaves it True with no
+    timer behind it — live, and dead, with no way to tell from the UI. This is
+    how it gets restarted.
+    """
+    global _TIMER_ON, _LAST_KEY
+    scene = scene or getattr(bpy.context, "scene", None)
+    if scene is None or not getattr(scene, "ap_live", False):
+        return False
+    if bpy.app.timers.is_registered(_tick):
+        _TIMER_ON = True
+        return True
+    _LAST_KEY = None
+    bpy.app.timers.register(_tick, persistent=True)
+    _TIMER_ON = True
+    return True
 
 
 def _set_live(self, context):

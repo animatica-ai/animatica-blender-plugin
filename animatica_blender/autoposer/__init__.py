@@ -58,6 +58,7 @@ def _start_runtime_install():
         engine.preload_async()
     except (AttributeError, KeyError):
         pass        # preferences not up yet; the first solve will start it
+    poser.ensure_timer()
     return None
 
 

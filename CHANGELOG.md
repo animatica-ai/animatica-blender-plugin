@@ -117,6 +117,25 @@ Proscenium, and keep the identifiers those releases actually shipped.
   machine that should not fetch it. The model is still explicit: it is
   account-gated, and only the artist has the token.
 
+- **Live posing was on in name only, and keyed nothing.** Two faults met.
+  `ap_live` is a scene property whose update callback fires when it *changes*,
+  so a file load or an addon reload left it True with no timer behind it —
+  live, dead, and no way to tell from the UI. And the debounced write cleared
+  the captured pose one line before using it, so every auto-key through the
+  timer wrote nothing: the solve appeared, then went at the next frame change.
+  Tests had called the writer directly and never crossed the timer. Both fixed,
+  and the timer is now restarted on load, on reload, and whenever the poser is
+  made ready.
+
+- **Live solving belongs to an edit, and only to one.** It used to be a timer
+  running whatever was happening. Re-seating the controls on a frame change
+  moves them, which reads as a control having been dragged — so scrubbing, and
+  playback, and a generation sampling frame by frame, could each provoke a
+  solve, and a solve is now keyed. It solves only while the artist is posing:
+  pose mode, on this rig, not playing, not generating. Re-seating takes the new
+  positions as its baseline rather than as an edit. Verified: scrubbing through
+  five frames creates no key poses, while moving a control keys exactly one.
+
 - **Dragging a control poses the body, without arming anything first.** Live
   solving was a switch that defaulted to off, so a control moved nothing until
   Solve was pressed — and the panel offered Solve, Key Pose and Snap, all three
