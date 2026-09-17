@@ -110,8 +110,9 @@ gives that rig its control bones, so there is nothing to build by hand; the
 Autoposer panel's **Build Rig** button is only there for a rig that has none
 yet.
 
-Posing with the controls keys the pose where you made it, so it survives frame
-changes on its own — there is no mode to enter or leave. (A rig left detached
+The controls follow the playhead, so you can start posing at any frame: scrub
+to where you want a pose and grab one. Posing with them keys the pose where you
+made it, so it survives frame changes on its own — there is no mode to enter or leave. (A rig left detached
 by an older session can still be handed back from the main panel.)
 
 > **Use Set Keyframe rather than `I` on top of a generated take.** Blender

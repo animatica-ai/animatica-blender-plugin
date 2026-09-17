@@ -821,6 +821,13 @@ def rebuild(context=None) -> int:
     finally:
         scene.frame_set(saved_frame, subframe=saved_subframe)
         _baking = False
+        # The walk above happened with the control-seating handler muted, so
+        # the controls are describing whatever frame the bake stopped on.
+        try:
+            from . import autopose_sync
+            autopose_sync.reseat_controls(scene)
+        except Exception:                   # noqa: BLE001 — never fail a bake
+            pass
 
     # Each half is written back only if it was baked, and its signature is
     # stamped even when it produced nothing — "baked and empty" has to be

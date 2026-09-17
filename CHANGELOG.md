@@ -117,6 +117,17 @@ Proscenium, and keep the identifiers those releases actually shipped.
   machine that should not fetch it. The model is still explicit: it is
   account-gated, and only the artist has the token.
 
+- **The Autoposer works at whatever frame you are on.** Its controls are free
+  bones that stay where they were last put, while the joints they drive move
+  with the animation — so scrubbing anywhere left them behind. Measured on a
+  walk: 1.7 to 2.5 metres from their joints. Grab one there and the solve does
+  what it is told, which is to drag the body back to where the handle is, and
+  posing anywhere but the frame the controls happened to be seated on looked
+  broken. They are now re-seated on every frame change, about 2 ms, so the
+  Autoposer is simply available where the playhead is. A ghost bake walks a
+  hundred frames with that muted and re-seats them once at the end, rather than
+  a hundred times on the way through.
+
 - **Posing with the controls keys the pose, so nothing is detached any more.**
   A solve lives in `matrix_basis`, which the next animation evaluation
   overwrites, and the Autoposer's answer was **Take Over Rig**: detach the

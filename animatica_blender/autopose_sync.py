@@ -120,16 +120,75 @@ def write_captured(context) -> int:
     return written
 
 
+# ---------------------------------------------------------------------------
+# Controls follow the frame
+# ---------------------------------------------------------------------------
+
+def _on_frame_change(scene, _depsgraph=None) -> None:
+    """Re-seat the controls on the pose at the new frame.
+
+    A control is a handle on a joint, and the joint moves with the animation —
+    but the controls are free bones that stay where they were last put. Scrub
+    away and they are left behind: measured on a walk, 1.7 to 2.5 metres from
+    the joints they drive. Grab one there and the solve does what it is told,
+    which is to pull the body back to where the handle is. That is why posing
+    "did not work" at any frame but the one the controls were seated on.
+
+    Seating them on every frame change costs about 2 ms and means the
+    Autoposer is simply available wherever the playhead is.
+    """
+    from . import key_poses
+    from .autoposer import poser
+
+    # Not while something else is stepping the playhead: the ghost bake walks
+    # a hundred frames, and a generation samples frame by frame. Both would
+    # snap the controls once per frame and leave them wherever they stopped.
+    if key_poses._baking or poser._BUSY:
+        return
+    settings = _settings(scene)
+    if settings is None or settings.is_generating:
+        return
+    arm = _target(scene)
+    if arm is None or not poser.has_controls(arm):
+        return
+    try:
+        poser._snap(arm, bpy.context)
+    except Exception as exc:                # noqa: BLE001 — a handler must not raise
+        print(f"[Animatica] could not seat the controls: {exc}")
+
+
+def reseat_controls(scene=None) -> None:
+    """Put the controls back on their joints at the current frame.
+
+    Called after anything that walked the playhead with the frame handler
+    muted — a ghost bake steps a hundred frames and restores, and the controls
+    would otherwise be left describing a pose from the middle of that walk.
+    """
+    _on_frame_change(scene or bpy.context.scene)
+
+
+_HANDLER_NAME = "_on_frame_change"
+
+
+def _purge(handlers) -> None:
+    for h in list(handlers):
+        if getattr(h, "__name__", None) == _HANDLER_NAME:
+            handlers.remove(h)
+
+
 def register() -> None:
     from .autoposer import poser
 
     poser.AFTER_SOLVE = on_solved
+    _purge(bpy.app.handlers.frame_change_post)
+    bpy.app.handlers.frame_change_post.append(_on_frame_change)
 
 
 def unregister() -> None:
     from .autoposer import poser
 
     poser.AFTER_SOLVE = None
+    _purge(bpy.app.handlers.frame_change_post)
     if bpy.app.timers.is_registered(_write_timer):
         bpy.app.timers.unregister(_write_timer)
     _pending["at"] = None
