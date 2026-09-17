@@ -127,6 +127,7 @@ _ghosts: dict = {
     "signature": None,
     "clamped": False,
     "kind": "BONES",
+    "arm": "",
     # Set whenever something asks for a rebake. The signature alone cannot
     # answer "is this stale": editing a pose changes neither the rig's name
     # nor the action's, so a content change is invisible to it.
@@ -149,6 +150,7 @@ _trail: dict = {
     "points": {},
     "signature": None,
     "dirty": True,
+    "arm": "",
 }
 
 # Per-frame trail colours are a pure function of the plan, so they are
@@ -831,6 +833,7 @@ def rebuild(context=None) -> int:
         _ghosts["kind"] = "BONES" if (bone_names and not meshes) else "MESH"
         _ghosts["signature"] = ghost_sig
         _ghosts["dirty"] = False
+        _ghosts["arm"] = arm.name
     if need_trail:
         # A bone that never resolved leaves a short list; drop it rather than
         # draw a trail that does not line up with the sampled frames.
@@ -843,6 +846,7 @@ def rebuild(context=None) -> int:
         _trail["points"] = trail_points
         _trail["signature"] = trail_sig
         _trail["dirty"] = False
+        _trail["arm"] = arm.name
         _trail_colors["signature"] = None
 
     tag_redraw()
@@ -857,11 +861,13 @@ def clear() -> None:
     _ghosts["signature"] = None
     _ghosts["clamped"] = False
     _ghosts["dirty"] = True
+    _ghosts["arm"] = ""
     _trail["bones"] = []
     _trail["frames"] = []
     _trail["points"] = {}
     _trail["signature"] = None
     _trail["dirty"] = True
+    _trail["arm"] = ""
     _trail_colors["signature"] = None
     tag_redraw()
 
@@ -1033,14 +1039,31 @@ def _overlay_gate(context):
     return settings, plan(context.scene)
 
 
+def _stale_ok(cache, arm) -> bool:
+    """Whether what was baked is worth drawing while a rebake is pending.
+
+    Yes, unless it came from a different character — the same poses on another
+    rig are simply somewhere else.
+
+    This is the difference between an overlay that flickers and one that
+    vanishes. A rebake is deliberately held while the animation plays or a
+    generation runs, and clicking Generate swaps the action, so the cache goes
+    stale at the exact moment it cannot be refreshed: the ghosts went out and
+    stayed out until the artist pressed Refresh. Showing the previous bake for
+    those few seconds is wrong only in detail, and only briefly; showing
+    nothing is wrong in a way that looks broken.
+    """
+    if not cache["frames"]:
+        return False
+    return not cache["arm"] or cache["arm"] == arm.name
+
+
 def _ghosts_ready(settings) -> bool:
-    """Whether the baked ghosts match the scene; asks for a rebake if not.
+    """Whether to draw the ghosts; asks for a rebake when they are stale.
 
     Checked independently of the trail, and that independence is the point:
     one cache answering for both meant switching the trail off blanked the
-    ghosts until something rebaked them — and while the animation plays, or a
-    generation runs, the rebake is deliberately held, so they stayed gone
-    until the artist hit Refresh.
+    ghosts.
 
     An empty cache reads as "never baked" rather than "nothing to draw", so a
     file load or an addon reload heals itself; a bake that legitimately found
@@ -1049,24 +1072,52 @@ def _ghosts_ready(settings) -> bool:
     if not settings.key_pose_ghosts:
         return False
     arm = _target(settings)
-    if _ghosts["signature"] == _ghost_signature(arm, _action(arm), settings):
+    if arm is None:
+        return False
+    fresh = (
+        not _ghosts["dirty"]
+        and _ghosts["signature"] == _ghost_signature(arm, _action(arm), settings)
+    )
+    if fresh:
         return True
     invalidate_plan()
     request_rebuild(coalesce=True)
-    return False
+    return _stale_ok(_ghosts, arm)
 
 
 def _trail_ready(settings) -> bool:
-    """Whether the sampled trail matches the scene; asks for a rebake if not."""
+    """Whether to draw the trail; asks for a rebake when it is stale."""
     if not settings.key_pose_trail:
         return False
     arm = _target(settings)
     if arm is None:
         return False
-    if _trail["signature"] == _trail_signature(arm, _action(arm)):
+    fresh = (
+        not _trail["dirty"]
+        and _trail["signature"] == _trail_signature(arm, _action(arm))
+    )
+    if fresh:
         return True
     request_rebuild(coalesce=True)
-    return False
+    return _stale_ok(_trail, arm)
+
+
+def refresh_held_by() -> str:
+    """Why a pending rebake has not run yet, in words, or an empty string.
+
+    The panel says this: a bake that is waiting is indistinguishable from one
+    that is not coming.
+    """
+    if _rebuild_requested_at is None:
+        return ""
+    scene = getattr(bpy.context, "scene", None)
+    settings = _settings(scene)
+    if settings is not None and settings.is_generating:
+        return "generating"
+    screen = getattr(bpy.context, "screen", None)
+    if screen is not None and getattr(screen, "is_animation_playing", False):
+        return "playback"
+    return ""
 
 
 def _visible_poses(scene, p) -> list[tuple[int, dict]]:

@@ -501,6 +501,15 @@ class ANIMATICA_PT_ghosts(AnimaticaPanelBase, Panel):
         col.prop(settings, "key_pose_auto_refresh")
         col.operator("animatica.key_poses_refresh", text="Refresh", icon='FILE_REFRESH')
 
+        # A held rebake is invisible otherwise: what is on screen is the last
+        # bake, and there is no way to tell that from a refresh that is never
+        # coming.
+        held = key_poses.refresh_held_by() if settings.show_key_poses else ""
+        if held:
+            note = body.row()
+            note.active = False
+            note.label(text=f"refreshing after {held}")
+
         if settings.show_key_poses and key_poses.state()["clamped"]:
             body.label(text=f"First {key_poses.MAX_GHOSTS} shown", icon='INFO')
 

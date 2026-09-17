@@ -121,6 +121,10 @@ The posed bodies and the trail are independent — show either on its own:
 | **X-Ray** | Draw poses through the character instead of behind it |
 | **Auto Refresh** | Re-read the plan when you key a pose or move the rig. Turn off on a heavy character and use **Refresh** |
 
+While a generation is running or the animation is playing, a refresh waits —
+re-reading the poses moves the playhead, which would fight both. What you see
+until then is the last one, and the panel says a refresh is pending.
+
 ## Generate a full clip
 
 1. Set your frame range on the timeline

@@ -109,6 +109,17 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Fixed
 
+- **The ghosts no longer go out when you press Generate.** A rebake is held
+  while a generation runs or the animation plays — it steps the playhead, which
+  would fight both — and Generate swaps the rig's action, so the overlay went
+  stale at the exact moment it could not refresh. It blanked itself and stayed
+  blank until Refresh was pressed, which looked like the feature breaking
+  whenever it was used. The last bake is now drawn while a refresh is pending:
+  briefly a frame or two out of date, rather than gone. Switching to a
+  different armature still clears it, since those poses are somewhere else
+  entirely, and the panel says when a refresh is waiting and on what. The same
+  hold was behind trail and pose toggles sometimes needing a Refresh.
+
 - **The pose-keyframe count in Constraints counts poses, not curve points.** It
   summed every keyframe point on every rotation channel, so a rig carrying a
   generated take reported tens of thousands of "pose keyframes" — one per bone
