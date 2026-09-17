@@ -11,7 +11,11 @@
 ADDON         := animatica_blender
 VERSION       := $(shell python3 -c "import re,pathlib;t=pathlib.Path('$(ADDON)/__init__.py').read_text();m=re.search(r'\"version\":\s*\(([\d, ]+)\)',t);print('.'.join(p.strip() for p in m.group(1).split(',')))")
 DIST          := dist
-ZIP           := $(DIST)/animatica-blender-$(VERSION).zip
+# Tack a label onto the zip's name without touching bl_info, which only takes
+# numbers: `make zip VERSION_SUFFIX=-dev` builds animatica-blender-X.Y.Z-dev.zip
+# for a build that is not a release.
+VERSION_SUFFIX ?=
+ZIP           := $(DIST)/animatica-blender-$(VERSION)$(VERSION_SUFFIX).zip
 
 # macOS default Blender 5.x addon path. Override on Linux/Windows.
 BLENDER_ADDONS_DIR ?= $(HOME)/Library/Application Support/Blender/5.0/scripts/addons
