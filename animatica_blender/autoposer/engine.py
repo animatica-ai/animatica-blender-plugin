@@ -148,10 +148,73 @@ def load(*, allow_install=True, allow_download=True, on_progress=None):
         return _ENGINE
 
 
+#: The one-off runtime fetch, tracked so the UI can say it is happening. It runs
+#: on a worker thread: it is tens of megabytes, and Blender's main thread is
+#: where the artist is.
+_INSTALL = {"running": False, "done": False, "error": ""}
+
+
+def install_state() -> dict:
+    return dict(_INSTALL)
+
+
+def _install_worker(cache_dir):
+    try:
+        apr.ortsetup.install(cache_dir=cache_dir)
+        _INSTALL["done"] = True
+    except Exception as exc:                                   # noqa: BLE001
+        _INSTALL["error"] = str(exc)
+    finally:
+        _INSTALL["running"] = False
+        # sys.path is touched on the main thread, where everything else that
+        # imports is, and a redraw picks the new state up.
+        bpy.app.timers.register(_after_install, first_interval=0.0)
+
+
+def _after_install():
+    apr.ortsetup.activate(cache_dir=data_dir())
+    status(refresh=True)
+    wm = getattr(bpy.context, "window_manager", None)
+    for window in getattr(wm, "windows", ()):
+        for area in window.screen.areas:
+            area.tag_redraw()
+    return None
+
+
+def ensure_runtime(*, force: bool = False) -> bool:
+    """Start the one-off runtime install if it is missing. Returns True if it
+    is already usable.
+
+    Nothing about this needs a decision from the artist: the runtime is a
+    dependency of the addon, not a choice within it, and asking someone to
+    press Install Runtime before the first pose can be solved is a step that
+    exists only because the download has to happen somewhere. It happens
+    here, once, in the background.
+    """
+    d = data_dir()
+    if apr.ortsetup.activate(cache_dir=d):
+        return True
+    if _INSTALL["running"]:
+        return False
+    if _INSTALL["error"] and not force:
+        return False        # said its piece; the preferences button can retry
+    _INSTALL.update({"running": True, "done": False, "error": ""})
+    threading.Thread(target=_install_worker, args=(d,), daemon=True).start()
+    return False
+
+
 def get():
-    """The engine, loading it if it is not up yet. Never downloads behind the user's back."""
+    """The engine, loading it if it is not up yet.
+
+    The runtime installs itself on first need; the model still does not, since
+    it is account-gated and only the artist has the token.
+    """
     if _ENGINE is not None:
         return _ENGINE
+    if not ensure_runtime():
+        if _INSTALL["error"]:
+            raise NotReady(f"the inference runtime would not install: {_INSTALL['error']}")
+        raise NotReady("fetching the inference runtime — one-off, about 75 MB")
     return load(allow_install=False, allow_download=False)
 
 

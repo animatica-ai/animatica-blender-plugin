@@ -123,6 +123,12 @@ class AP_OT_forget_model(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 
 PROPERTIES = {
+    'auto_install_runtime': bpy.props.BoolProperty(
+        name="Install runtime automatically",
+        default=True,
+        description="Fetch the inference runtime in the background the first "
+                    "time it is missing, instead of waiting to be asked. "
+                    "About 75 MB, once per machine"),
     'model_source': bpy.props.EnumProperty(
         name="Model from",
         items=[("HF", "Hugging Face", "Download from a Hugging Face repo (private repos "
@@ -162,10 +168,25 @@ def draw(layout, prefs, context):
     row = box.row()
     row.label(text="Inference runtime",
               icon="CHECKMARK" if st["runtime"] else "ERROR")
-    row.label(text="ready" if st["runtime"] else "not installed")
+    installing = engine.install_state()
+    if st["runtime"]:
+        row.label(text="ready")
+    elif installing["running"]:
+        row.label(text="installing…")
+    else:
+        row.label(text="not installed")
     if not st["runtime"]:
-        box.operator("autoposer.install_runtime", icon="IMPORT")
-        box.label(text="onnxruntime, ~75 MB, once per machine", icon="INFO")
+        if installing["running"]:
+            box.label(text="fetching onnxruntime in the background, ~75 MB",
+                      icon="SORTTIME")
+        else:
+            if installing["error"]:
+                err = box.row()
+                err.alert = True
+                err.label(text=installing["error"][:70], icon="ERROR")
+            box.operator("autoposer.install_runtime", icon="IMPORT")
+            box.label(text="onnxruntime, ~75 MB, once per machine", icon="INFO")
+    box.prop(prefs, "auto_install_runtime")
 
     box = lay.box()
     row = box.row()

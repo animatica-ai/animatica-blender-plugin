@@ -107,6 +107,16 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Fixed
 
+- **The inference runtime installs itself.** Solving a pose needs onnxruntime,
+  and the addon used to stop at a message asking the artist to open the
+  preferences and press Install Runtime. That step exists only because the
+  download has to happen somewhere — it is a dependency of the addon, not a
+  choice within it. It is now fetched in the background the first time it is
+  missing, once per machine, and the preferences say so while it runs and offer
+  the button back if it fails. Turn **Install runtime automatically** off for a
+  machine that should not fetch it. The model is still explicit: it is
+  account-gated, and only the artist has the token.
+
 - **The Autoposer can always be given the rig back.** Taking over detaches the
   action — that is how a solved pose survives a frame change — but the only
   ways out of that state were committing a pose or the Autoposer's own panel,

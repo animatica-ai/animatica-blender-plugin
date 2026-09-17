@@ -45,10 +45,26 @@ def superseded_addons() -> list[str]:
     return [name for name in _SUPERSEDED if name in enabled]
 
 
+def _start_runtime_install():
+    """Fetch the inference runtime in the background, once, if it is missing.
+
+    Deferred a moment past registration because preferences are not readable
+    while Blender is still starting up, and skipped entirely when the artist
+    has said not to.
+    """
+    try:
+        if engine.prefs().auto_install_runtime:
+            engine.ensure_runtime()
+    except (AttributeError, KeyError):
+        pass        # preferences not up yet; the first solve will start it
+    return None
+
+
 def register() -> None:
     for cls in prefs.CLASSES:
         bpy.utils.register_class(cls)
     poser.register()
+    bpy.app.timers.register(_start_runtime_install, first_interval=2.0)
     clash = superseded_addons()
     if clash:
         print("[Animatica] the Autoposer is built in now — disable the standalone "
