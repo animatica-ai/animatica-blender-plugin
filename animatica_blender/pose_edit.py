@@ -78,6 +78,10 @@ def ensure_control_rig(arm, report=None) -> bool:
 
     if arm is None or not autoposer_available():
         return False
+    # Live is the behaviour, not a mode: a control that moves nothing until
+    # some other command is run is a control that looks broken. The panel no
+    # longer offers the switch, so this is where it is held on.
+    bpy.context.scene.ap_live = True
     if poser.has_controls(arm):
         return True
     try:

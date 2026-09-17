@@ -55,6 +55,7 @@ def _start_runtime_install():
     try:
         if engine.prefs().auto_install_runtime:
             engine.ensure_runtime()
+        engine.preload_async()
     except (AttributeError, KeyError):
         pass        # preferences not up yet; the first solve will start it
     return None

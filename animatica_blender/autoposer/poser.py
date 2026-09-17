@@ -1304,18 +1304,14 @@ class AP_PT_panel(bpy.types.Panel):
             row = col.row(align=True)
             row.prop(arm, "show_in_front", text="In front", icon="XRAY")
             row.prop(s, "ap_hide_deform", text="Hide skeleton", icon="HIDE_ON")
+        # Solve, Key Pose and Snap have all become things that happen: the
+        # body follows a control as it moves, the pose is keyed where it was
+        # made, and the controls re-seat on every frame change. Leaving the
+        # buttons would be leaving three ways to ask for what already
+        # happened. They remain in the search menu for when one is wanted.
         row = col.row(align=True)
-        row.operator("autoposer.solve", icon="ARMATURE_DATA")
-        row.prop(s, "ap_live", text="Live", toggle=True, icon="PLAY")
-        col.prop(s, "ap_rate")
-        col.separator()
-        col.operator("autoposer.key_pose", icon="KEYINGSET")
-        row = col.row(align=True)
-        row.operator("autoposer.snap_controls", text="Snap", icon="SNAP_ON")
-        row.operator("autoposer.rest", text="Rest", icon="LOOP_BACK")
-        row = col.row(align=True)
-        row.prop(s, "ap_use_ik")
-        row.prop(s, "ap_floor")
+        row.prop(s, "ap_floor", text="Floor", toggle=True, icon="MOD_PHYSICS")
+        row.operator("autoposer.rest", text="Rest Pose", icon="LOOP_BACK")
         if s.ap_status:
             col.label(text=s.ap_status, icon="INFO")
         col.label(text="solved on this machine", icon="LOCKED")
@@ -1392,7 +1388,10 @@ def register():
                     "sets the IK weight (1/tol), so poser and solver read the same dial")
     S = bpy.types.Scene
     S.ap_armature = bpy.props.StringProperty(name="Rig", default="")
-    S.ap_live = bpy.props.BoolProperty(name="Live", default=False, update=_set_live)
+    S.ap_live = bpy.props.BoolProperty(
+        name="Live", default=True, update=_set_live,
+        description="Solve as you drag a control. Off, a control moves nothing "
+                    "until you run Solve from the search menu")
     S.ap_rate = bpy.props.IntProperty(name="Max Hz", default=60, min=5, max=120)
     S.ap_use_ik = bpy.props.BoolProperty(name="IK refine", default=True)
     S.ap_floor = bpy.props.BoolProperty(

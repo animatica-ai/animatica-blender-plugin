@@ -205,6 +205,7 @@ def _install_worker(cache_dir):
 def _after_install():
     apr.ortsetup.activate(cache_dir=data_dir())
     status(refresh=True)
+    preload_async()
     wm = getattr(bpy.context, "window_manager", None)
     for window in getattr(wm, "windows", ()):
         for area in window.screen.areas:
@@ -232,6 +233,35 @@ def ensure_runtime(*, force: bool = False) -> bool:
     _INSTALL.update({"running": True, "done": False, "error": ""})
     threading.Thread(target=_install_worker, args=(d,), daemon=True).start()
     return False
+
+
+_PRELOAD = {"running": False}
+
+
+def preload_async() -> None:
+    """Bring the engine up in the background, before anyone reaches for it.
+
+    Loading is two onnx graphs and a self-test — about a second and a half. On
+    the first drag that lands as a freeze in the middle of the gesture, which
+    is the worst possible moment for it. Doing it on a worker thread when the
+    pieces are already on the machine means the first drag is as fast as the
+    tenth.
+    """
+    if _ENGINE is not None or _PRELOAD["running"]:
+        return
+    if not apr.ortsetup.activate(cache_dir=data_dir()):
+        return                      # runtime not there yet; its install will call back
+    _PRELOAD["running"] = True
+
+    def _work():
+        try:
+            load(allow_install=False, allow_download=False)
+        except Exception:                                      # noqa: BLE001
+            pass            # the first real solve reports it properly
+        finally:
+            _PRELOAD["running"] = False
+
+    threading.Thread(target=_work, daemon=True).start()
 
 
 def get():

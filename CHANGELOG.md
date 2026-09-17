@@ -117,6 +117,17 @@ Proscenium, and keep the identifiers those releases actually shipped.
   machine that should not fetch it. The model is still explicit: it is
   account-gated, and only the artist has the token.
 
+- **Dragging a control poses the body, without arming anything first.** Live
+  solving was a switch that defaulted to off, so a control moved nothing until
+  Solve was pressed — and the panel offered Solve, Key Pose and Snap, all three
+  of which are now things that happen by themselves: the body follows a control
+  as it moves, the pose is keyed where it was made, the controls re-seat on
+  every frame change. The buttons are gone with the work they used to ask for
+  (they remain in the search menu), and Live is held on wherever the poser is
+  made ready. The engine also loads in the background once its pieces are on
+  the machine, so the first drag is not the one that pays for it: 23 ms instead
+  of 1657 ms.
+
 - **The Autoposer works at whatever frame you are on.** Its controls are free
   bones that stay where they were last put, while the joints they drive move
   with the animation — so scrubbing anywhere left them behind. Measured on a
