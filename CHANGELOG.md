@@ -117,6 +117,18 @@ Proscenium, and keep the identifiers those releases actually shipped.
   machine that should not fetch it. The model is still explicit: it is
   account-gated, and only the artist has the token.
 
+- **Building the control rig no longer malforms the generation request.** The
+  skeleton sent to the server is filtered to the deform bones only when the rig
+  looked like a control rig — meaning deform bones driven by Copy/IK
+  constraints. The Autoposer's controls drive the body by writing the pose
+  directly, so they matched nothing there and were serialized as joints: a
+  request describing a character with six control bones growing out of it, which
+  is not a skeleton the server can retarget. A bone outside the deform set is a
+  helper whatever moves it, so it is now left out on that basis. Measured on the
+  Animatic rig after building controls: 84 bones, 77 joints sent, no controls,
+  one root, every parent resolving, and the pose constraints referencing only
+  joints that exist. Where every bone deforms, nothing changes.
+
 - **An Autoposer control wins the click over the motion curve.** They overlap
   by construction: the controls are re-seated onto their joints every frame and
   the trail runs through those same joints, so the trail's marker for the

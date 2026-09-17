@@ -796,7 +796,20 @@ def armature_to_skeleton(armature_obj: bpy.types.Object) -> dict[str, Any]:
     # sees in the skeleton.
     deform = emitted_deform_bones(armature_obj)
 
-    use_deform_filter = is_control_rig(armature_obj)
+    # Emit the deform skeleton whenever the rig carries anything else.
+    #
+    # The trigger used to be is_control_rig() alone — deform bones driven by
+    # Copy*/IK constraints — which is one way a rig has handles and not the
+    # only one. The Autoposer's controls drive the body by writing the pose
+    # directly, so they matched nothing here and were serialized as joints:
+    # a request describing a character with six control bones growing out of
+    # it, which is not a skeleton the server can retarget.
+    #
+    # A bone outside the deform set is a helper whatever moves it, and the
+    # server has never wanted one. Where every bone deforms, this is a no-op.
+    use_deform_filter = bool(deform) and (
+        is_control_rig(armature_obj) or len(deform) < len(pose_bones)
+    )
     parent_map = _build_deform_parent_map(armature_obj, deform) if use_deform_filter else None
 
     # The server requires parents to appear before their children in joints[].
