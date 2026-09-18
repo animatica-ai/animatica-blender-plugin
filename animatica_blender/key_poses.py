@@ -391,12 +391,25 @@ def dropped_frames(scene=None) -> list[int]:
 def overlay_on(settings) -> bool:
     """Is any part of the plan overlay switched on?
 
-    There is no separate master switch: the two halves the artist picks —
-    Ghosts and Trail — are the switch. A panel that turned the whole overlay
-    off from its header read as turning *posing* off, which it never did.
+    ``key_pose_overlay`` is the master — one click to clear the viewport —
+    and the two halves under it say what the overlay is made of. Asking both
+    questions here saves every caller from having to remember the master
+    exists.
     """
-    return bool(settings is not None
+    return bool(settings is not None and settings.key_pose_overlay
                 and (settings.key_pose_ghosts or settings.key_pose_trail))
+
+
+def ghosts_on(settings) -> bool:
+    """Should the keyed poses be drawn and baked?"""
+    return bool(settings is not None and settings.key_pose_overlay
+                and settings.key_pose_ghosts)
+
+
+def trail_on(settings) -> bool:
+    """Should the motion trail be drawn and baked?"""
+    return bool(settings is not None and settings.key_pose_overlay
+                and settings.key_pose_trail)
 
 
 def timeline_ticks(scene) -> tuple[list[tuple[int, bool]], tuple[int, int]]:
@@ -779,10 +792,10 @@ def rebuild(context=None) -> int:
     # display mode) or when something reported a content change — a keyframe
     # edited, inserted, retimed, the rig moved. Identity alone would miss
     # every edit to the poses themselves.
-    need_ghosts = settings.key_pose_ghosts and (
+    need_ghosts = ghosts_on(settings) and (
         _ghosts["dirty"] or _ghosts["signature"] != ghost_sig
     )
-    need_trail = settings.key_pose_trail and (
+    need_trail = trail_on(settings) and (
         _trail["dirty"] or _trail["signature"] != trail_sig
     )
     if not need_ghosts and not need_trail:
@@ -1164,7 +1177,7 @@ def _ghosts_ready(settings) -> bool:
     file load or an addon reload heals itself; a bake that legitimately found
     nothing stamps its signature, so this cannot spin.
     """
-    if not settings.key_pose_ghosts:
+    if not ghosts_on(settings):
         return False
     arm = _target(settings)
     if arm is None:
@@ -1182,7 +1195,7 @@ def _ghosts_ready(settings) -> bool:
 
 def _trail_ready(settings) -> bool:
     """Whether to draw the trail; asks for a rebake when it is stale."""
-    if not settings.key_pose_trail:
+    if not trail_on(settings):
         return False
     arm = _target(settings)
     if arm is None:
@@ -1319,7 +1332,7 @@ def pick_frame(context, x: float, y: float) -> int | None:
         return None
 
     settings = _settings(context.scene)
-    if settings is None or not settings.key_pose_ghosts:
+    if not ghosts_on(settings):
         return None
     if not _ghosts["frames"]:
         return None
@@ -1607,7 +1620,8 @@ class ANIMATICA_OT_key_poses_refresh(bpy.types.Operator):
         settings = _settings(context.scene)
         invalidate_plan()
         if not overlay_on(settings):
-            settings.key_pose_ghosts = True   # the update callback bakes
+            settings.key_pose_overlay = True  # the update callbacks bake
+            settings.key_pose_ghosts = True
             return {'FINISHED'}
         if rebuild(context) == 0:
             self.report({'INFO'}, "No key poses to show — pose the rig and insert a keyframe")

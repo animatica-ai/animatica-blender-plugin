@@ -426,14 +426,20 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
         # --- what is drawn --------------------------------------------------
         layout.separator()
         col = layout.column(align=True)
-        row = col.row(align=True)
+        col.prop(settings, "key_pose_overlay", text="Show Plan", toggle=True,
+                 icon='HIDE_OFF' if settings.key_pose_overlay else 'HIDE_ON')
+        # What the plan is made of. Greyed rather than hidden when the master
+        # is off, so the way back is where the artist left it.
+        parts = col.column(align=True)
+        parts.active = settings.key_pose_overlay
+        row = parts.row(align=True)
         row.prop(settings, "key_pose_ghosts", text="Ghosts", toggle=True)
         row.prop(settings, "key_pose_trail", text="Trail", toggle=True)
-        row = col.row(align=True)
+        row = parts.row(align=True)
         row.active = key_poses.overlay_on(settings)
         row.prop(settings, "key_pose_labels", text="Numbers", toggle=True)
         row.prop(settings, "key_pose_xray", text="X-Ray", toggle=True)
-        if settings.key_pose_ghosts:
+        if key_poses.ghosts_on(settings):
             sub = col.row()
             sub.active = False
             sub.label(text="drag a curve · shift moves the pose")

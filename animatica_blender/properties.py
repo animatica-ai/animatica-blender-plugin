@@ -754,9 +754,19 @@ class AnimaticaSettings(PropertyGroup):
     # constraint in the request. These settings control the viewport view of
     # that plan — which poses exist, where, and which the request will carry.
     # See ``key_poses.py``.
-    # There is no master switch: these two toggles are it. One that also sat
-    # in the Pose panel's header read as switching posing off, which it never
-    # did.
+    # One switch for the whole overlay, so it can go away in a click instead
+    # of three. It sits with the toggles it governs — the same switch in the
+    # Pose panel's *header* read as switching posing off, which it never did.
+    key_pose_overlay: BoolProperty(
+        name="Show Plan",
+        description=(
+            "Draw the motion plan in the viewport at all. Off hides the "
+            "ghosts, the trail and the frame numbers in one go, and remembers "
+            "which of them were on for when you switch it back"
+        ),
+        default=True,
+        update=_key_poses_toggle_update,
+    )
     key_pose_ghosts: BoolProperty(
         name="Ghosts",
         description=(
