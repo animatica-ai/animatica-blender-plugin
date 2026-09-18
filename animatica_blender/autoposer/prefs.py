@@ -124,11 +124,12 @@ class AP_OT_forget_model(bpy.types.Operator):
 
 PROPERTIES = {
     'auto_install_runtime': bpy.props.BoolProperty(
-        name="Install runtime automatically",
+        name="Set the poser up automatically",
         default=True,
-        description="Fetch the inference runtime in the background the first "
-                    "time it is missing, instead of waiting to be asked. "
-                    "About 75 MB, once per machine"),
+        description="Fetch what the poser needs — the inference runtime and "
+                    "the model — in the background the first time they are "
+                    "missing, instead of waiting to be asked. About 225 MB in "
+                    "total, once per machine"),
     'model_source': bpy.props.EnumProperty(
         name="Model from",
         items=[("HF", "Hugging Face", "Download from a Hugging Face repo (private repos "
@@ -189,9 +190,21 @@ def draw(layout, prefs, context):
     box.prop(prefs, "auto_install_runtime")
 
     box = lay.box()
+    fetching = engine.fetch_state()
     row = box.row()
     row.label(text="Model", icon="CHECKMARK" if st["model"] else "ERROR")
-    row.label(text=(f"step {st['step']}" if st["step"] else "not downloaded"))
+    if st["model"]:
+        row.label(text=f"step {st['step']}" if st["step"] else "ready")
+    elif fetching["running"]:
+        row.label(text=f"downloading… {engine.fetch_percent():.0f}%")
+    else:
+        row.label(text="not downloaded")
+    if not st["model"] and fetching["running"]:
+        box.label(text="fetching the model in the background, ~150 MB", icon="SORTTIME")
+    elif fetching["error"] and not st["model"]:
+        err = box.row()
+        err.alert = True
+        err.label(text=fetching["error"][:70], icon="ERROR")
     col = box.column(align=True)
     col.prop(prefs, "model_source", expand=True)
     if prefs.model_source == "HF":

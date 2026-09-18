@@ -205,6 +205,7 @@ def _install_worker(cache_dir):
 def _after_install():
     apr.ortsetup.activate(cache_dir=data_dir())
     status(refresh=True)
+    ensure_model()          # the runtime is only half of what a solve needs
     preload_async()
     wm = getattr(bpy.context, "window_manager", None)
     for window in getattr(wm, "windows", ()):
@@ -232,6 +233,74 @@ def ensure_runtime(*, force: bool = False) -> bool:
         return False        # said its piece; the preferences button can retry
     _INSTALL.update({"running": True, "done": False, "error": ""})
     threading.Thread(target=_install_worker, args=(d,), daemon=True).start()
+    return False
+
+
+#: The one-off model fetch, tracked the same way and for the same reason: it
+#: is ~150 MB and the artist should be able to see that it is happening.
+_FETCH = {"running": False, "error": "", "done": 0, "total": 0}
+
+
+def fetch_state() -> dict:
+    return dict(_FETCH)
+
+
+def fetch_percent() -> float:
+    total = _FETCH["total"]
+    return (100.0 * _FETCH["done"] / total) if total else 0.0
+
+
+def _fetch_worker(cache_dir, src, token):
+    def on_progress(_name, done, total):
+        _FETCH["done"], _FETCH["total"] = done, total
+
+    try:
+        apr.resolve(src, cache_dir=cache_dir, token=token, allow_download=True,
+                    on_progress=on_progress)
+    except Exception as exc:                                   # noqa: BLE001
+        _FETCH["error"] = str(exc)
+    finally:
+        _FETCH["running"] = False
+        bpy.app.timers.register(_after_fetch, first_interval=0.0)
+
+
+def _after_fetch():
+    status(refresh=True)
+    preload_async()
+    wm = getattr(bpy.context, "window_manager", None)
+    for window in getattr(wm, "windows", ()):
+        for area in window.screen.areas:
+            area.tag_redraw()
+    return None
+
+
+def ensure_model(*, force: bool = False) -> bool:
+    """Start the one-off model download if it is missing. True if it is here.
+
+    This used to be the artist's job, because the weights were account-gated
+    and only they had the token. They are public now, which makes pressing
+    Download Model a step that exists for no reason: the model is what the
+    Autoposer *is*. So it fetches itself, in the background, once — the same
+    deal as the runtime.
+
+    A folder the artist pointed at is left alone: LOCAL means they have said
+    where it is, and downloading over that would be presumptuous.
+    """
+    p = prefs()
+    if getattr(p, "model_source", "HF") == "LOCAL":
+        return bool(status()["model"])
+    if status()["model"]:
+        return True
+    if _FETCH["running"]:
+        return False
+    if _FETCH["error"] and not force:
+        return False        # said its piece; the preferences button can retry
+    src, token = source()
+    if not src:
+        return False
+    _FETCH.update({"running": True, "error": "", "done": 0, "total": 0})
+    threading.Thread(target=_fetch_worker, args=(data_dir(), src, token),
+                     daemon=True).start()
     return False
 
 
@@ -267,8 +336,9 @@ def preload_async() -> None:
 def get():
     """The engine, loading it if it is not up yet.
 
-    The runtime installs itself on first need; the model still does not, since
-    it is account-gated and only the artist has the token.
+    Both halves install themselves on first need — runtime, then model. What
+    the caller gets in the meantime is a sentence saying so, not a button to
+    press: there is no decision here to put to anyone.
     """
     if _ENGINE is not None:
         return _ENGINE
@@ -276,6 +346,12 @@ def get():
         if _INSTALL["error"]:
             raise NotReady(f"the inference runtime would not install: {_INSTALL['error']}")
         raise NotReady("fetching the inference runtime — one-off, about 75 MB")
+    if not ensure_model():
+        if _FETCH["error"]:
+            raise NotReady(f"the model would not download: {_FETCH['error']}")
+        pct = fetch_percent()
+        raise NotReady("fetching the poser model — one-off, about 150 MB"
+                       + (f" ({pct:.0f}%)" if pct else ""))
     return load(allow_install=False, allow_download=False)
 
 

@@ -397,8 +397,13 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
         status = engine.status()
         if not (status["runtime"] and status["model"]):
             box = layout.box()
-            box.label(text="The poser is still setting itself up", icon='SORTTIME')
-            box.label(text="Preferences → Animatica for progress")
+            fetching = engine.fetch_state()
+            if fetching["running"]:
+                box.label(text=f"Downloading the poser… {engine.fetch_percent():.0f}%",
+                          icon='SORTTIME')
+            else:
+                box.label(text="The poser is setting itself up", icon='SORTTIME')
+            box.label(text="Preferences → Animatica for detail")
         elif not poser.has_controls(arm):
             layout.operator("autoposer.build_rig", icon='OUTLINER_OB_ARMATURE',
                             text="Build Autoposer Rig")

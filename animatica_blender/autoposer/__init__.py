@@ -46,15 +46,20 @@ def superseded_addons() -> list[str]:
 
 
 def _start_runtime_install():
-    """Fetch the inference runtime in the background, once, if it is missing.
+    """Fetch what the poser needs, in the background, once, if it is missing.
 
-    Deferred a moment past registration because preferences are not readable
-    while Blender is still starting up, and skipped entirely when the artist
-    has said not to.
+    Both halves: the inference runtime and the model. Deferred a moment past
+    registration because preferences are not readable while Blender is still
+    starting up, and skipped entirely when the artist has said not to.
+
+    Doing it now rather than on the first drag is the difference between a
+    poser that is ready when reached for and one that answers the first grab
+    with a download.
     """
     try:
         if engine.prefs().auto_install_runtime:
             engine.ensure_runtime()
+            engine.ensure_model()
         engine.preload_async()
     except (AttributeError, KeyError):
         pass        # preferences not up yet; the first solve will start it
