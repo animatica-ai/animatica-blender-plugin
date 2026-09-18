@@ -264,6 +264,10 @@ def sync_path_to_armature(
             continue
         _write_fcurve(fc, frames, values)
         written = True
+    if written:
+        from . import _bake_common
+
+        _bake_common.group_curves(action)     # root keys belong under their bone too
     return written
 
 

@@ -14,6 +14,7 @@ geometrically from the IK chain).
 
 from __future__ import annotations
 
+import re
 from typing import Callable
 
 import bpy
@@ -133,6 +134,81 @@ def ensure_fcurve(action, datablock, data_path: str, index: int):
         except Exception:
             return None
     return None
+
+
+# ---------------------------------------------------------------------------
+# Channel groups
+# ---------------------------------------------------------------------------
+#
+# Blender's own ``keyframe_insert`` files each pose-bone curve under a group
+# named after the bone, which is what makes the dope sheet a list of bones you
+# can fold rather than four hundred rows of "W Quaternion Rotation". Every
+# curve this addon creates by hand — the generated take, a keyed pose, a baked
+# path — skipped that, so an action it wrote read as one flat list.
+
+_BONE_PATH = re.compile(r'pose\.bones\["([^"]+)"\]')
+
+
+def bone_of(data_path: str) -> str:
+    """The bone a pose-bone data path belongs to, or "" for anything else."""
+    m = _BONE_PATH.match(data_path or "")
+    return m.group(1) if m else ""
+
+
+def _curve_owners(action):
+    """``(groups owner, fcurves)`` for a flat action and for every channelbag.
+
+    Groups live beside the curves they hold: on the action itself before
+    Blender 4.4, on each channelbag after it.
+    """
+    flat = getattr(action, "fcurves", None)
+    if flat is not None:
+        yield action, flat
+        return
+    for layer in getattr(action, "layers", ()):
+        for strip in getattr(layer, "strips", ()):
+            if not hasattr(strip, "channelbag"):
+                continue
+            for slot in getattr(action, "slots", ()):
+                cb = strip.channelbag(slot, ensure=False)
+                if cb is not None:
+                    yield cb, cb.fcurves
+
+
+def group_curves(action) -> int:
+    """File every ungrouped pose-bone curve under its bone. Returns how many.
+
+    Cheap enough to run after any write — a few hundred curves, and only the
+    ones with no group at all are touched, so curves the artist has arranged
+    themselves are left alone.
+    """
+    moved = 0
+    if action is None:
+        return 0
+    for owner, fcurves in _curve_owners(action):
+        groups = getattr(owner, "groups", None)
+        if groups is None:
+            continue
+        known = {g.name: g for g in groups}
+        for fc in list(fcurves):
+            if fc.group is not None:
+                continue
+            name = bone_of(fc.data_path)
+            if not name:
+                continue
+            grp = known.get(name)
+            if grp is None:
+                try:
+                    grp = groups.new(name)
+                except Exception:           # noqa: BLE001
+                    continue
+                known[name] = grp
+            try:
+                fc.group = grp
+                moved += 1
+            except Exception:               # noqa: BLE001 — never fail a bake over tidiness
+                pass
+    return moved
 
 
 # ---------------------------------------------------------------------------

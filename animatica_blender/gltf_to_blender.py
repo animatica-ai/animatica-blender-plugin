@@ -25,7 +25,7 @@ from typing import Any, Collection
 import bpy
 from mathutils import Matrix, Quaternion, Vector
 
-from . import coords, request_builder
+from . import _bake_common, coords, request_builder
 
 
 # MMCP world (right-handed Y-up) → Blender world (right-handed Z-up) as a 3×3
@@ -795,6 +795,7 @@ def bake_gltf_to_actions_per_block(
             )
             _tag_keyframe_types(action, block_anchors)
 
+        _bake_common.group_curves(action)     # a dope sheet of bones, not of channels
         actions.append(action)
 
     if skipped and actions:
@@ -1582,6 +1583,8 @@ def _write_control_keyframes(
             _set_fcurve_keyframes(fcurves_container, dp_scl, ax, scale_keys[ax])
         for ax in range(len(rot_keys)):
             _set_fcurve_keyframes(fcurves_container, dp_rot, ax, rot_keys[ax])
+
+    _bake_common.group_curves(action)
 
 
 def _action_fcurves_container(armature_obj, action):

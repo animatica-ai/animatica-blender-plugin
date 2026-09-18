@@ -197,7 +197,7 @@ def write_channels(action, frame: int, channels) -> int:
     Keys are typed ``KEYFRAME``. On a rig carrying a generated take that is
     the whole difference between a pose the request sends and one it drops.
     """
-    from . import constraints_ui
+    from . import _bake_common, constraints_ui
 
     written = 0
     for data_path, index, value in channels:
@@ -216,6 +216,7 @@ def write_channels(action, frame: int, channels) -> int:
     for fcurves in constraints_ui._iter_fcurve_collections(action):
         for fc in fcurves:
             fc.update()
+    _bake_common.group_curves(action)     # keep the dope sheet a list of bones
     return written
 
 
