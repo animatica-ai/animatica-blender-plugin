@@ -92,9 +92,12 @@ def _draw_set_keyframe(layout, context, settings) -> None:
     arm = properties._live_armature(settings.target_armature)
     if arm is None:
         return
-    row = layout.row()
+    row = layout.row(align=True)
     row.scale_y = 1.2
     row.operator("animatica.set_key_pose", icon='KEYFRAME_HLT', text="Set Keyframe")
+    # Record, next to the button it automates: on, posing with the handles keys
+    # itself; off, Set Keyframe is the only way a pose is written.
+    row.prop(settings, "auto_key_pose", text="", icon='REC', toggle=True)
     _draw_rig_held(layout, context, settings)
 
 
@@ -398,7 +401,7 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
             box.label(text="Preferences → Animatica for progress")
         elif not poser.has_controls(arm):
             layout.operator("autoposer.build_rig", icon='OUTLINER_OB_ARMATURE',
-                            text="Add Pose Controls")
+                            text="Build Autoposer Rig")
         else:
             # The handles, in the artist's words rather than the rig's. Adding
             # one belongs in the same block as picking one, so the + sits with

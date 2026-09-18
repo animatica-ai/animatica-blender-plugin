@@ -829,6 +829,16 @@ class AnimaticaSettings(PropertyGroup):
         default=0.005, min=0.001, max=0.2, precision=3, step=1,
         update=_tightness_update,
     )
+    auto_key_pose: BoolProperty(
+        name="Auto Key",
+        description=(
+            "Write a keyframe whenever you pose with the Autoposer handles. "
+            "Off: posing still works and still shows, but nothing is recorded "
+            "until you press Set Keyframe — the way to try a pose out without "
+            "it landing in the action"
+        ),
+        default=True,
+    )
     pose_details: BoolProperty(
         name="Per-Handle Settings",
         description=(

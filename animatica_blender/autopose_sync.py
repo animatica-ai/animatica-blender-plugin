@@ -51,7 +51,8 @@ def _target(scene):
 def on_solved(context, *, moved: bool = False) -> None:
     """Hook for :data:`poser.AFTER_SOLVE`: capture now, write when it settles.
 
-    ``moved`` is the whole gate: a key is written when the artist drags a handle, and at no other
+    Two things gate a write. ``auto_key_pose`` is the artist's own switch — the record button
+    beside Set Keyframe — and ``moved`` says the solve answers a handle they dragged, at no other
     time. Solving happens for plenty of other reasons — a tolerance nudged, a handle switched on,
     a control added, the rig built, the Pose button pressed — and keying those wrote poses nobody
     made, including one back onto a frame whose keyframe had just been deleted.
@@ -70,7 +71,10 @@ def on_solved(context, *, moved: bool = False) -> None:
     if not moved:
         return
     scene = getattr(context, "scene", None)
-    arm = _target(scene) if scene is not None else None
+    settings = _settings(scene) if scene is not None else None
+    if settings is None or not settings.auto_key_pose:
+        return
+    arm = _target(scene)
     if arm is None:
         return
     _pending["channels"] = pose_edit.pose_channels(arm)
