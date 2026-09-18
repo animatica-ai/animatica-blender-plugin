@@ -17,6 +17,10 @@ bl_info = {
     "blender": (5, 0, 0),
     "location": "View3D > Sidebar > Animatica",
     "description": "AI motion generation — select armature, set keyframes, generate",
+    # Blender shows this beside the addon in Preferences, with a warning icon.
+    # An early preview should say so where it is installed, not only in the
+    # name of the file it came in.
+    "warning": "Early preview — things will change; please report what breaks",
     "category": "Animation",
 }
 
