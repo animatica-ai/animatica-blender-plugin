@@ -350,7 +350,7 @@ class ANIMATICA_OT_pick_ghost(Operator):
             if context.area is None or context.area.type != 'VIEW_3D':
                 return {'PASS_THROUGH'}
             settings = _settings(context)
-            if settings is None or not settings.show_key_poses:
+            if not key_poses.overlay_on(settings):
                 return {'PASS_THROUGH'}
             from . import curve_edit
 

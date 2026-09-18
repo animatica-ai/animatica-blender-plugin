@@ -754,28 +754,17 @@ class AnimaticaSettings(PropertyGroup):
     # constraint in the request. These settings control the viewport view of
     # that plan — which poses exist, where, and which the request will carry.
     # See ``key_poses.py``.
-    show_key_poses: BoolProperty(
-        name="Show Key Poses",
-        description=(
-            "Show the poses you keyed as ghosts in the viewport, each tinted "
-            "with its prompt block's colour and labelled with its frame. "
-            "These are the full-body constraints the model is asked to hit; "
-            "poses outside the generation range are greyed out because the "
-            "request leaves them out"
-        ),
-        default=False,
-        update=_key_poses_toggle_update,
-    )
+    # There is no master switch: these two toggles are it. One that also sat
+    # in the Pose panel's header read as switching posing off, which it never
+    # did.
     key_pose_ghosts: BoolProperty(
-        # Named "Poses" in the UI: the panel it lives in is already called
-        # Ghosts, and this picks which part of that overlay draws.
-        name="Poses",
+        name="Ghosts",
         description=(
             "Draw the body at each pose you keyed. Independent of the motion "
             "trail — either can be shown on its own"
         ),
         default=True,
-        update=_key_poses_redraw_update,
+        update=_key_poses_toggle_update,
     )
     key_pose_display: EnumProperty(
         name="Show As",
@@ -803,7 +792,7 @@ class AnimaticaSettings(PropertyGroup):
             "by: the hands and feet, the root, and the head"
         ),
         default=True,
-        update=_key_poses_redraw_update,
+        update=_key_poses_toggle_update,
     )
     key_pose_xray: BoolProperty(
         name="X-Ray",
@@ -829,6 +818,14 @@ class AnimaticaSettings(PropertyGroup):
         ),
         default=0.005, min=0.001, max=0.2, precision=3, step=1,
         update=_tightness_update,
+    )
+    pose_details: BoolProperty(
+        name="Per-Handle Settings",
+        description=(
+            "Show each handle's own tightness and whether it sends its "
+            "rotation, instead of the compact row of on/off toggles"
+        ),
+        default=False,
     )
     key_pose_auto_refresh: BoolProperty(
         name="Auto Refresh",

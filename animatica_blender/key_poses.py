@@ -388,6 +388,17 @@ def dropped_frames(scene=None) -> list[int]:
     return [f for f in p["frames"] if not p["entries"][f]["in_range"]]
 
 
+def overlay_on(settings) -> bool:
+    """Is any part of the plan overlay switched on?
+
+    There is no separate master switch: the two halves the artist picks —
+    Ghosts and Trail — are the switch. A panel that turned the whole overlay
+    off from its header read as turning *posing* off, which it never did.
+    """
+    return bool(settings is not None
+                and (settings.key_pose_ghosts or settings.key_pose_trail))
+
+
 def timeline_ticks(scene) -> tuple[list[tuple[int, bool]], tuple[int, int]]:
     """``([(frame, in_range), …], window)`` for the timeline lane overlay.
 
@@ -395,7 +406,7 @@ def timeline_ticks(scene) -> tuple[list[tuple[int, bool]], tuple[int, int]]:
     grow marks the artist did not ask for.
     """
     settings = _settings(scene)
-    if settings is None or not settings.show_key_poses:
+    if not overlay_on(settings):
         return [], (0, 0)
     p = plan(scene)
     return [(f, p["entries"][f]["in_range"]) for f in p["frames"]], p["range"]
@@ -758,7 +769,7 @@ def rebuild(context=None) -> int:
 
     arm = _target(settings)
     action = _action(arm)
-    if arm is None or action is None or not settings.show_key_poses:
+    if arm is None or action is None or not overlay_on(settings):
         clear()
         return 0
 
@@ -1026,9 +1037,9 @@ def tag_redraw() -> None:
 
 
 def on_toggle(settings) -> None:
-    """``show_key_poses`` flipped."""
+    """A half of the overlay — Ghosts or Trail — was switched on or off."""
     invalidate_plan()
-    if settings.show_key_poses:
+    if overlay_on(settings):
         request_rebuild()
     else:
         clear()
@@ -1036,7 +1047,7 @@ def on_toggle(settings) -> None:
 
 def on_rebake_setting(settings) -> None:
     """A setting that changes the captured geometry changed."""
-    if settings.show_key_poses:
+    if overlay_on(settings):
         request_rebuild()
 
 
@@ -1090,7 +1101,7 @@ def _on_depsgraph(scene, depsgraph) -> None:
         # The plan is cheap and the panel reports it even with the ghosts off,
         # so it is always invalidated; only the geometry waits on the toggle.
         invalidate_plan()
-        if settings.show_key_poses and settings.key_pose_auto_refresh:
+        if overlay_on(settings) and settings.key_pose_auto_refresh:
             request_rebuild()
         else:
             tag_redraw()
@@ -1102,7 +1113,7 @@ def _on_undo(scene, _depsgraph=None) -> None:
     would otherwise outlive the change it was built from."""
     invalidate_plan()
     settings = _settings(scene)
-    if settings is not None and settings.show_key_poses:
+    if overlay_on(settings):
         request_rebuild()
 
 
@@ -1118,7 +1129,7 @@ def _overlay_gate(context):
     if not space.overlay.show_overlays:
         return None
     settings = _settings(context.scene)
-    if settings is None or not settings.show_key_poses:
+    if not overlay_on(settings):
         return None
     return settings, plan(context.scene)
 
@@ -1308,7 +1319,7 @@ def pick_frame(context, x: float, y: float) -> int | None:
         return None
 
     settings = _settings(context.scene)
-    if settings is None or not settings.show_key_poses or not settings.key_pose_ghosts:
+    if settings is None or not settings.key_pose_ghosts:
         return None
     if not _ghosts["frames"]:
         return None
@@ -1595,8 +1606,8 @@ class ANIMATICA_OT_key_poses_refresh(bpy.types.Operator):
     def execute(self, context):
         settings = _settings(context.scene)
         invalidate_plan()
-        if not settings.show_key_poses:
-            settings.show_key_poses = True   # the update callback bakes
+        if not overlay_on(settings):
+            settings.key_pose_ghosts = True   # the update callback bakes
             return {'FINISHED'}
         if rebuild(context) == 0:
             self.report({'INFO'}, "No key poses to show — pose the rig and insert a keyframe")

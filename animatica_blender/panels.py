@@ -379,9 +379,6 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
     bl_label = "Pose"
     bl_idname = "ANIMATICA_PT_pose"
 
-    def draw_header(self, context):
-        self.layout.prop(context.scene.animatica, "show_key_poses", text="")
-
     def draw(self, context):
         from . import key_poses, pose_edit
         from .autoposer import engine, poser
@@ -403,26 +400,40 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
             layout.operator("autoposer.build_rig", icon='OUTLINER_OB_ARMATURE',
                             text="Add Pose Controls")
         else:
-            # One row of handles in the artist's words, not the rig's.
+            # The handles, in the artist's words rather than the rig's. Adding
+            # one belongs in the same block as picking one, so the + sits with
+            # them either way round.
             controls = poser._controls(arm)
-            grid = layout.grid_flow(row_major=True, columns=4, align=True)
-            for b in controls:
-                grid.prop(b, "ap_enabled", text=poser.joint_label(b), toggle=True)
+            if settings.pose_details:
+                col = layout.column(align=True)
+                for b in controls:
+                    row = col.row(align=True)
+                    row.prop(b, "ap_enabled", text=poser.joint_label(b), toggle=True)
+                    sub = row.row(align=True)
+                    sub.active = b.ap_enabled
+                    sub.prop(b, "ap_rot", text="Rot", toggle=True)
+                    sub.prop(b, "ap_tol_m", text="")
+                col.operator("autoposer.add_control", text="Add Handle", icon='ADD')
+            else:
+                grid = layout.grid_flow(row_major=True, columns=4, align=True)
+                for b in controls:
+                    grid.prop(b, "ap_enabled", text=poser.joint_label(b), toggle=True)
+                grid.operator("autoposer.add_control", text="", icon='ADD')
             row = layout.row(align=True)
             row.prop(settings, "pose_tightness", slider=True)
-            row.operator("autoposer.add_control", text="", icon='ADD')
+            row.prop(settings, "pose_details", text="", icon='OPTIONS')
 
         # --- what is drawn --------------------------------------------------
         layout.separator()
         col = layout.column(align=True)
-        col.active = settings.show_key_poses
         row = col.row(align=True)
         row.prop(settings, "key_pose_ghosts", text="Ghosts", toggle=True)
         row.prop(settings, "key_pose_trail", text="Trail", toggle=True)
         row = col.row(align=True)
+        row.active = key_poses.overlay_on(settings)
         row.prop(settings, "key_pose_labels", text="Numbers", toggle=True)
         row.prop(settings, "key_pose_xray", text="X-Ray", toggle=True)
-        if settings.show_key_poses and settings.key_pose_ghosts:
+        if settings.key_pose_ghosts:
             sub = col.row()
             sub.active = False
             sub.label(text="drag a curve · shift moves the pose")
@@ -445,7 +456,7 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
             warn = layout.row()
             warn.alert = True
             warn.label(text=f"Not sent: {shown}", icon='ERROR')
-        held = key_poses.refresh_held_by() if settings.show_key_poses else ""
+        held = key_poses.refresh_held_by() if key_poses.overlay_on(settings) else ""
         if held:
             note = layout.row()
             note.active = False

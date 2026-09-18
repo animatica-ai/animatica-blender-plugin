@@ -1062,7 +1062,7 @@ class AP_OT_build_rig(bpy.types.Operator):
         made = []
         try:
             for spec in rig:
-                if not (self.all_controls or spec["default_on"]):
+                if not (self.all_controls or spec["name"] in DEFAULT_CONTROLS):
                     continue
                 if joint_bone(arm, spec["joint"]) is None:
                     continue
@@ -1080,6 +1080,18 @@ class AP_OT_build_rig(bpy.types.Operator):
         return {"FINISHED"}
 
 
+# The handles an animator meets on a fresh rig. The taxonomy carries its own
+# ``default_on``, but that is the research rig's opening set: it has a chest
+# handle (the spine follows well enough without one) and no head aim (where a
+# character looks is one of the first things you pose). This is ours.
+DEFAULT_CONTROLS = {
+    "C_cog_CTRL",                               # hips
+    "L_arm_IK_CTRL", "R_arm_IK_CTRL",           # hands
+    "L_foot_IK_CTRL", "R_foot_IK_CTRL",         # feet
+    "C_head_AIM_CTRL",                          # look at
+}
+
+
 class AP_OT_add_control(bpy.types.Operator):
     bl_idname = "autoposer.add_control"
     bl_label = "Add Control"
@@ -1093,7 +1105,8 @@ class AP_OT_add_control(bpy.types.Operator):
         except Exception:
             return [("NONE", "sidecar unreachable", "")]
         have = {b.name for b in _controls(arm)} if arm else set()
-        out = [(s["name"], f"{s['name']}  ({s['joint']}, {s['kind']})", s["kind"])
+        out = [(s["name"], control_label(s["joint"], s["kind"]),
+                f"{s['name']} — {s['joint']}, {s['kind']}")
                for s in rig if s["name"] not in have]
         return out or [("NONE", "all controls already present", "")]
 
@@ -1317,17 +1330,46 @@ class AP_OT_rest(bpy.types.Operator):
 
 
 # --------------------------------------------------------------------------- UI
-def joint_label(b) -> str:
-    """What to call a control in a panel.
+#
+# What an animator calls a handle. The rig calls the same thing
+# ``L_arm_IK_CTRL`` driving ``LeftHand``; nobody reaches for that. Where the
+# joint name and the everyday word differ — a knee is driven through the shin,
+# an elbow through the forearm — the everyday word wins.
+_HUMAN_JOINT = {
+    "Hips": "Hips",
+    "Spine1": "Lower back",
+    "Spine2": "Upper back",
+    "Chest": "Chest",
+    "Neck1": "Neck",
+    "Head": "Head",
+    "LeftShoulder": "L shoulder", "RightShoulder": "R shoulder",
+    "LeftForeArm": "L elbow", "RightForeArm": "R elbow",
+    "LeftHand": "L hand", "RightHand": "R hand",
+    "LeftShin": "L knee", "RightShin": "R knee",
+    "LeftFoot": "L foot", "RightFoot": "R foot",
+    "LeftToeBase": "L toe", "RightToeBase": "R toe",
+}
 
-    ``C_cog_CTRL``, ``L_arm_IK_CTRL`` and ``C_head_AIM_CTRL`` are rig
-    internals; an artist reaches for the hips, the left hand, the head.
-    """
-    joint = (b.get("ap_eff") or b.get("ap_joint") or b.name).rsplit(":", 1)[-1]
+
+def control_label(joint: str, kind: str = "") -> str:
+    """The panel name for a control on ``joint`` of ``kind``."""
+    if kind == "aim":
+        return "Look at"        # not the head's position — where it faces
+    if kind == "root":
+        return "Root"
+    joint = (joint or "").rsplit(":", 1)[-1]
+    if joint in _HUMAN_JOINT:
+        return _HUMAN_JOINT[joint]
     for side, short in (("Left", "L "), ("Right", "R ")):
         if joint.startswith(side):
             return short + joint[len(side):].lower()
     return joint.capitalize() if joint.isupper() else joint
+
+
+def joint_label(b) -> str:
+    """What to call a control bone in a panel."""
+    return control_label(b.get("ap_eff") or b.get("ap_joint") or b.name,
+                         b.get("ap_kind") or "")
 
 
 CLASSES = (AP_OT_build_rig, AP_OT_add_control, AP_OT_remove_control, AP_OT_solve,

@@ -177,7 +177,7 @@ def pick_point(context, x: float, y: float):
     settings = key_poses._settings(context.scene)
     if region is None or rv3d is None or settings is None:
         return None
-    if not settings.show_key_poses or not settings.key_pose_trail:
+    if not settings.key_pose_trail:
         return None
 
     trail = key_poses._trail
