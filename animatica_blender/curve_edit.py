@@ -36,7 +36,7 @@ import bpy
 import gpu
 from bpy_extras import view3d_utils
 from gpu_extras.batch import batch_for_shader
-from mathutils import Vector
+from mathutils import Matrix, Vector
 from mathutils.geometry import intersect_line_plane
 
 
@@ -208,6 +208,62 @@ def pick_point(context, x: float, y: float):
                 best_frame, best_frame_d = (bone, frame, Vector(points[i])), d
     # A key pose within reach always wins, however close an in-between is.
     return best_key or best_frame
+
+
+# ---------------------------------------------------------------------------
+# What is picked
+# ---------------------------------------------------------------------------
+#
+# A click selects a point; a gizmo moves it. Clicking straight into a drag put
+# the whole edit on the accuracy of one press: grab the frame next to the one
+# you meant, or twitch the mouse on the way down, and the pose moved before you
+# could see which point you had. Selecting first makes the wrong grab cost
+# nothing — click again, and only then drag a handle that is unmistakably a
+# handle.
+
+_selection: dict = {"bone": "", "frame": -1}
+
+
+def select_point(bone: str, frame: int) -> None:
+    _selection.update({"bone": bone, "frame": int(frame)})
+
+
+def clear_selection() -> None:
+    _selection.update({"bone": "", "frame": -1})
+
+
+def selected():
+    """``(bone, frame)`` of the selected trail point, or None."""
+    if not _selection["bone"] or _selection["frame"] < 0:
+        return None
+    return _selection["bone"], _selection["frame"]
+
+
+def selected_world(context):
+    """Where the selected point is right now, or None if it is gone.
+
+    Read from the trail cache every time rather than remembered: a re-bake
+    moves the point, and a gizmo left at the old position would move the wrong
+    thing on the next drag.
+    """
+    from . import key_poses
+
+    pick = selected()
+    if pick is None:
+        return None
+    bone, frame = pick
+    settings = key_poses._settings(context.scene)
+    if not key_poses.trail_on(settings):
+        return None
+    trail = key_poses._trail
+    frames = trail["frames"]
+    points = trail["points"].get(bone)
+    if not points or frame not in frames:
+        return None
+    i = frames.index(frame)
+    if i >= len(points):
+        return None
+    return Vector(points[i])
 
 
 # ---------------------------------------------------------------------------
@@ -402,14 +458,23 @@ def _draw_label():
 
 
 def register_draw_handler() -> None:
-    global _draw_handle
+    """Install both handlers, replacing whatever an earlier module load left.
+
+    Reusing the handle Blender still holds keeps the OLD module's function
+    drawing — from the old module's globals — so an edit here would appear to
+    do nothing at all. The same trap as in key_poses; the same way out.
+    """
+    global _draw_handle, _label_handle
     ns = bpy.app.driver_namespace
-    if ns.get(_NS_KEY) is not None:
-        _draw_handle = ns[_NS_KEY]
-        return
+    for key in (_NS_KEY, _NS_LABEL_KEY):
+        stale = ns.pop(key, None)
+        if stale is not None:
+            try:
+                bpy.types.SpaceView3D.draw_handler_remove(stale, 'WINDOW')
+            except (ValueError, RuntimeError):
+                pass
     _draw_handle = bpy.types.SpaceView3D.draw_handler_add(_draw, (), 'WINDOW', 'POST_VIEW')
     ns[_NS_KEY] = _draw_handle
-    global _label_handle
     if ns.get(_NS_LABEL_KEY) is None:
         _label_handle = bpy.types.SpaceView3D.draw_handler_add(
             _draw_label, (), 'WINDOW', 'POST_PIXEL')
@@ -442,6 +507,30 @@ def _clear() -> None:
 # The drag
 # ---------------------------------------------------------------------------
 
+_AXES = {"X": Vector((1.0, 0.0, 0.0)),
+         "Y": Vector((0.0, 1.0, 0.0)),
+         "Z": Vector((0.0, 0.0, 1.0))}
+
+
+def _closest_on_axis(point, axis, ray_origin, ray_dir):
+    """Where an axis handle has been dragged to: the point on the axis line
+    through ``point`` that lies nearest the mouse ray.
+
+    Returns None when the two are near enough to parallel that the answer runs
+    off to infinity — looking straight down the axis you are dragging.
+    """
+    w0 = point - ray_origin
+    a = axis.dot(axis)
+    b = axis.dot(ray_dir)
+    c = ray_dir.dot(ray_dir)
+    d = axis.dot(w0)
+    e = ray_dir.dot(w0)
+    denom = a * c - b * b
+    if abs(denom) < 1e-8:
+        return None
+    return point + axis * ((b * e - c * d) / denom)
+
+
 class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
     bl_idname = "animatica.drag_motion_curve"
     bl_label = "Drag Motion Curve"
@@ -459,6 +548,11 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         name="Whole Pose",
         description="Carry the whole pose instead of moving one end effector",
         default=False,
+    )
+    axis: bpy.props.StringProperty(
+        name="Axis",
+        description="Constrain the move to a world axis: X, Y, Z, or empty for the view plane",
+        default="",
     )
 
     def invoke(self, context, event):
@@ -491,7 +585,9 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         self._plane_no = context.region_data.view_rotation @ Vector((0.0, 0.0, 1.0))
         self._solve(context, event)
         context.area.header_text_set(
-            "Drag a motion curve   |   Shift: whole pose   |   Esc: cancel")
+            f"Move {_canonical(self.bone)} at frame {self.frame}"
+            + (f" along {self.axis}" if self.axis else "")
+            + "   |   Shift: whole pose   |   Esc: cancel")
         context.window_manager.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
@@ -515,6 +611,9 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         co = (event.mouse_region_x, event.mouse_region_y)
         origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, co)
         direction = view3d_utils.region_2d_to_vector_3d(region, rv3d, co)
+        if self.axis:
+            hit = _closest_on_axis(_drag["origin"], _AXES[self.axis], origin, direction)
+            return hit or _drag["origin"]
         hit = intersect_line_plane(
             origin, origin + direction * 10000.0, _drag["origin"], self._plane_no,
         )
@@ -582,7 +681,93 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
 
-_classes = (ANIMATICA_OT_drag_motion_curve,)
+# ---------------------------------------------------------------------------
+# The gizmo
+# ---------------------------------------------------------------------------
+
+#: Blender's own axis colours, so the handles mean what they mean everywhere else.
+_AXIS_COLOUR = {"X": (0.93, 0.25, 0.30), "Y": (0.51, 0.78, 0.13), "Z": (0.15, 0.42, 0.93)}
+# Sized against Blender's own move gizmo: big enough to aim at without the
+# handles swallowing the curve they sit on.
+GIZMO_ARROW_LENGTH = 1.7
+GIZMO_DOT_SCALE = 0.26
+
+
+def _axis_matrix(axis: Vector, origin: Vector) -> Matrix:
+    """Place an arrow gizmo — which points along its own +Z — onto a world axis."""
+    up = Vector((0.0, 0.0, 1.0))
+    dot = axis.dot(up)
+    if dot > 0.9999:
+        rot = Matrix.Identity(3)
+    elif dot < -0.9999:
+        rot = Matrix.Rotation(3.141592653589793, 3, 'X')
+    else:
+        rot = up.rotation_difference(axis).to_matrix()
+    m = rot.to_4x4()
+    m.translation = origin
+    return m
+
+
+class ANIMATICA_GGT_curve_point(bpy.types.GizmoGroup):
+    """Handles on the selected trail point.
+
+    Three axis arrows for a move you can be exact about, and a ring in the
+    middle for the free view-plane drag the click used to start on its own.
+    Every one of them runs the same operator — the gizmo decides only whether
+    an axis constrains it.
+    """
+
+    bl_idname = "ANIMATICA_GGT_curve_point"
+    bl_label = "Motion Curve Point"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'WINDOW'
+    bl_options = {'3D', 'PERSISTENT', 'SCALE'}
+
+    @classmethod
+    def poll(cls, context):
+        return selected_world(context) is not None
+
+    def setup(self, context):
+        self._arrows = []
+        for axis, colour in _AXIS_COLOUR.items():
+            gz = self.gizmos.new("GIZMO_GT_arrow_3d")
+            gz.draw_style = 'NORMAL'
+            gz.length = GIZMO_ARROW_LENGTH
+            gz.line_width = 4.0
+            gz.color = colour
+            gz.alpha = 0.9
+            gz.color_highlight = tuple(min(1.0, c + 0.3) for c in colour)
+            gz.alpha_highlight = 1.0
+            gz.use_draw_modal = True
+            self._arrows.append((axis, gz))
+
+        dot = self.gizmos.new("GIZMO_GT_move_3d")
+        dot.draw_style = 'RING_2D'
+        dot.draw_options = {'ALIGN_VIEW'}
+        dot.scale_basis = GIZMO_DOT_SCALE
+        dot.color = (1.0, 1.0, 1.0)
+        dot.alpha = 0.7
+        dot.color_highlight = (1.0, 1.0, 1.0)
+        dot.alpha_highlight = 1.0
+        dot.use_draw_modal = True
+        self._dot = dot
+
+    def refresh(self, context):
+        pick = selected()
+        origin = selected_world(context)
+        if pick is None or origin is None:
+            return
+        bone, frame = pick
+        for axis, gz in self._arrows:
+            gz.matrix_basis = _axis_matrix(_AXES[axis], origin)
+            props = gz.target_set_operator("animatica.drag_motion_curve")
+            props.bone, props.frame, props.axis = bone, frame, axis
+        self._dot.matrix_basis = Matrix.Translation(origin)
+        props = self._dot.target_set_operator("animatica.drag_motion_curve")
+        props.bone, props.frame, props.axis = bone, frame, ""
+
+
+_classes = (ANIMATICA_OT_drag_motion_curve, ANIMATICA_GGT_curve_point)
 
 
 def register() -> None:
@@ -594,5 +779,6 @@ def register() -> None:
 def unregister() -> None:
     unregister_draw_handler()
     _clear()
+    clear_selection()
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)

@@ -1519,6 +1519,12 @@ def _draw_trail(settings, p) -> None:
         ).draw(line)
 
 
+#: The picked point: Blender's selection orange, and a size that reads as
+#: "this one" next to the key-pose markers it sits among.
+TRAIL_SELECTED_COLOR = (1.0, 0.62, 0.16, 1.0)
+TRAIL_SELECTED_RADIUS = 8.5
+
+
 def _diamond(x: float, y: float, r: float):
     return ((x, y + r), (x + r, y), (x, y - r), (x - r, y))
 
@@ -1540,9 +1546,14 @@ def _draw_trail_markers(settings, p, region, rv3d, current: int) -> None:
     if not trail["bones"] or len(frames) < 2:
         return
 
+    from . import curve_edit
+
     colors = _trail_color_list(settings, p, frames, current)
     key_frames = set(p["frames"])
     px = _px()
+    # The point a click has picked out, in Blender's own selection orange, so
+    # what the gizmo is about to move is never in doubt.
+    picked = curve_edit.selected()
 
     verts: list[tuple[float, float]] = []
     vert_colors: list[tuple[float, float, float, float]] = []
@@ -1556,7 +1567,9 @@ def _draw_trail_markers(settings, p, region, rv3d, current: int) -> None:
             co = view3d_utils.location_3d_to_region_2d(region, rv3d, points[i])
             if co is None:
                 continue        # behind the viewer
-            if frame == current:
+            if picked == (name, frame):
+                radius, color = TRAIL_SELECTED_RADIUS, TRAIL_SELECTED_COLOR
+            elif frame == current:
                 radius, color = TRAIL_CURRENT_RADIUS, TRAIL_CURRENT_COLOR
             elif frame in key_frames:
                 radius, color = TRAIL_KEY_RADIUS, colors[i]

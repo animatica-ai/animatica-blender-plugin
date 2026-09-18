@@ -364,7 +364,10 @@ class ANIMATICA_OT_pick_ghost(Operator):
                 return {'PASS_THROUGH'}
 
             # A point on a motion curve then wins over the ghost behind it: it
-            # is the smaller target and the more specific intent.
+            # is the smaller target and the more specific intent. Clicking it
+            # SELECTS it — the gizmo that appears is what moves it. A click
+            # that went straight into a drag meant every mis-grab moved the
+            # pose before the artist could see which point they had.
             grabbed = curve_edit.pick_point(
                 context, event.mouse_region_x, event.mouse_region_y,
             )
@@ -374,9 +377,29 @@ class ANIMATICA_OT_pick_ghost(Operator):
                     "xy": (event.mouse_region_x, event.mouse_region_y),
                     "hit": f"curve {bone}@{curve_frame}",
                 }
-                return bpy.ops.animatica.drag_motion_curve(
-                    'INVOKE_DEFAULT', bone=bone, frame=curve_frame,
+                already = curve_edit.selected()
+                if already == (bone, curve_frame):
+                    # Second press on the point already selected: that is
+                    # deliberate enough to be a drag. It also means the curve
+                    # can still be posed where the gizmo cannot be reached —
+                    # gizmos switched off in the viewport, say.
+                    return bpy.ops.animatica.drag_motion_curve(
+                        'INVOKE_DEFAULT', bone=bone, frame=curve_frame,
+                    )
+                curve_edit.select_point(bone, curve_frame)
+                key_poses.tag_redraw()
+                self.report(
+                    {'INFO'},
+                    f"{curve_edit._canonical(bone)} at frame {curve_frame} — "
+                    "drag a handle, or drag the point again. Shift: whole pose",
                 )
+                return {'FINISHED'}
+
+            # Clicking away from the curve lets it go, the way clicking empty
+            # space clears a selection everywhere else.
+            if curve_edit.selected() is not None:
+                curve_edit.clear_selection()
+                key_poses.tag_redraw()
             frame = key_poses.pick_frame(
                 context, event.mouse_region_x, event.mouse_region_y,
             )
