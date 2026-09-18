@@ -338,9 +338,15 @@ def _bone_lengths(arm):
     return out
 
 
-def _state_key(arm):
-    """Fingerprint of what would change the solve: every ENABLED control's transform + tolerance."""
-    out = []
+def _hands(arm):
+    """``{control: transform}`` for every ENABLED control — where the handles are.
+
+    ORIENTATION IS ALWAYS PART OF THIS. Rotating a control has to wake the live timer — that is
+    what auto-latches its rotation channel on. Tracking orientation only for non-position controls
+    (as this did) makes rotation work on demand but never live, which reads as "rotation is broken"
+    even though every other layer is correct.
+    """
+    out = {}
     for b in _controls(arm):
         if not b.ap_enabled:
             continue
@@ -348,16 +354,39 @@ def _state_key(arm):
         if pb is None:
             continue
         m = pb.matrix
-        out.extend(round(v, 5) for v in m.translation)
-        # ORIENTATION IS ALWAYS PART OF THE KEY. Rotating a control has to wake the live timer —
-        # that is what auto-latches its rotation channel on. Keying orientation only for non-position
-        # controls (as this did) makes rotation work on demand but never live, which reads as
-        # "rotation is broken" even though every other layer is correct.
-        out.extend(round(v, 4) for row in m.to_3x3() for v in row)
-        out.append(round(float(b.ap_tol_m), 5))
-        out.append(bool(b.ap_rot))
-        out.append(round(float(b.ap_rot_tol_m), 5))
-    return tuple(out)
+        out[b.name] = (tuple(round(v, 5) for v in m.translation),
+                       tuple(round(v, 4) for row in m.to_3x3() for v in row))
+    return out
+
+
+def _dials(arm):
+    """The rest of what changes a solve: which controls are on, and how tight."""
+    return tuple((b.name, bool(b.ap_enabled), round(float(b.ap_tol_m), 5),
+                  bool(b.ap_rot), round(float(b.ap_rot_tol_m), 5))
+                 for b in _controls(arm))
+
+
+def _state_key(arm):
+    """Fingerprint of everything that would change the solve, in two halves.
+
+    Split because they mean different things to the artist: the first half is where the handles
+    are — something they moved — and the second is how the solve is configured. Both should
+    re-solve; only the first is an edit worth keying.
+    """
+    return (tuple(sorted(_hands(arm).items())), _dials(arm))
+
+
+def _handle_moved(before, after) -> bool:
+    """Did the artist actually drag a handle between these two states?
+
+    Only controls present in BOTH states count. Adding a control, or switching one on, makes an
+    entry appear in the fingerprint without anything having moved — and keying that wrote a pose
+    the artist never posed.
+    """
+    if not before:
+        return False           # nothing to compare against: the first tick is not a drag
+    was = dict(before[0])
+    return any(name in was and was[name] != now for name, now in dict(after[0]).items())
 
 
 def _rot_effector(arm, joint, b, tol):
@@ -541,7 +570,13 @@ def _apply(arm, names, pos, r6):
         arm.pose.bones[nm].matrix_basis = basis
 
 
-def solve(context, report=None):
+def solve(context, report=None, *, moved: bool = False):
+    """Solve and apply one pose.
+
+    ``moved`` says the solve answers a handle the artist dragged. It is what tells the auto-key
+    apart from every other reason to solve — a tolerance nudged, a handle switched on, a control
+    added, the rig rebuilt — none of which should write a keyframe on their own.
+    """
     global _BUSY
     if _BUSY:
         return False
@@ -616,7 +651,7 @@ def solve(context, report=None):
         f"{len(eff)} eff | {_STATS['ms']:.0f} ms (~{1000 / max(_STATS['ms'], 1):.0f} Hz) | {err}")
     if AFTER_SOLVE is not None:
         try:
-            AFTER_SOLVE(context)
+            AFTER_SOLVE(context, moved=moved)
         except Exception as exc:                              # noqa: BLE001
             print(f"[Animatica] after-solve hook failed: {exc}")
     return True
@@ -726,8 +761,12 @@ def _tick():
         return 1.0 / max(scene.ap_rate, 1)
     key = _state_key(arm)
     if key != _LAST_KEY:
-        _LAST_KEY = key
-        solve(ctx)
+        moved = _handle_moved(_LAST_KEY, key)
+        solve(ctx, moved=moved)
+        # The baseline is taken AFTER the solve, not before it: solving moves things itself —
+        # disabled controls are put back on their joints, rotation references re-anchor — and
+        # reading that as the artist's next drag made the timer answer its own last answer.
+        _LAST_KEY = _state_key(arm)
     return 1.0 / max(scene.ap_rate, 1)
 
 
@@ -1071,6 +1110,7 @@ class AP_OT_build_rig(bpy.types.Operator):
             _BUILDING = False
         _restore_pose(arm, keep, context)
         _snap(arm, context)
+        sync_state(arm)          # the controls moved because we built them, not because anyone posed
         pre = arm.get("ap_prefix") or ""
         skipped = len(have) - len(drivable)
         self.report({"INFO"}, f"{len(made)} controls, driving {len(drivable)} joints"
@@ -1136,6 +1176,7 @@ class AP_OT_add_control(bpy.types.Operator):
         # Seat the new control on the joint's CURRENT pose and do NOT re-solve — adding a control
         # should not move the character (see _on_enabled). It joins in on the next drag.
         _snap(arm, context, names={name})
+        sync_state(arm)          # ...and the live timer must not read the new handle as a drag
         self.report({"INFO"}, f"added {name}")
         return {"FINISHED"}
 
@@ -1328,6 +1369,7 @@ class AP_OT_rest(bpy.types.Operator):
             arm.pose.bones[b.name].matrix_basis = mathutils.Matrix()
         context.view_layer.update()
         _snap(arm, context)
+        sync_state(arm)          # rest is where the artist asked to be, not a pose to solve back out of
         return {"FINISHED"}
 
 

@@ -48,8 +48,13 @@ def _target(scene):
     return properties._live_armature(settings.target_armature)
 
 
-def on_solved(context) -> None:
+def on_solved(context, *, moved: bool = False) -> None:
     """Hook for :data:`poser.AFTER_SOLVE`: capture now, write when it settles.
+
+    ``moved`` is the whole gate: a key is written when the artist drags a handle, and at no other
+    time. Solving happens for plenty of other reasons — a tolerance nudged, a handle switched on,
+    a control added, the rig built, the Pose button pressed — and keying those wrote poses nobody
+    made, including one back onto a frame whose keyframe had just been deleted.
 
     The capture cannot wait. A solve lives in ``matrix_basis``, and the next
     animation evaluation puts the action's pose back over it — so a write
@@ -62,6 +67,8 @@ def on_solved(context) -> None:
     """
     from . import pose_edit
 
+    if not moved:
+        return
     scene = getattr(context, "scene", None)
     arm = _target(scene) if scene is not None else None
     if arm is None:
