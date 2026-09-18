@@ -9,7 +9,7 @@ powerful GPU in Blender or any extra downloads.
 
 1. Make sure **Self-hosted** is **off**
 2. **Sign in** with your Animatica email and password
-3. Click **Connect** to see available models
+3. The addon connects on its own and lists the available models
 
 No account yet? Sign up at [animatica.ai](https://animatica.ai), then come back
 and sign in here.
@@ -20,7 +20,7 @@ Only if you already run motion generation on your computer or local network:
 
 1. Turn **Self-hosted** **on**
 2. Enter your server address (often `http://localhost:8000`)
-3. Click **Connect** — no Animatica sign-in needed
+3. It connects on its own — no Animatica sign-in needed
 
 Most artists can skip this and stay on Animatica Cloud.
 

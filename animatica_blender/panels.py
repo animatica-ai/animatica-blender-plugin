@@ -1,9 +1,10 @@
 """Blender UI panels for the Animatica addon.
 
-Sidebar panels in View3D > Sidebar > Animatica:
-  - Main: connect, model picker, armature, seed, generate buttons, preview
-  - Constraints: root path / effector / pose-keyframe controls
-  - Settings: quality / CFG / post-processing
+Sidebar panels in View3D > Sidebar > Animatica, named for the job:
+  - Animatica: the shot — model, character, generate, accept or reject
+  - Pose: the character — handles, what the overlay draws, what will be sent
+      - Paths & Pins: the other two constraint kinds, collapsed
+  - Settings: everything set once and left alone
 
 Server URL + auth live in Edit > Preferences > Add-ons > Animatica.
 """
@@ -48,10 +49,66 @@ def _draw_signin_hint(layout, context) -> bool:
         return False
     if getattr(prefs, "access_token", ""):
         return False
+    from . import mmcp_client
+
     box = layout.box()
-    box.label(text="Sign in to Animatica to generate", icon='USER')
+    # A session that ended by itself needs a reason, or signing in again looks
+    # like the addon forgetting things at random.
+    expired = mmcp_client.session_expired()
+    if expired:
+        row = box.row()
+        row.alert = True
+        row.label(text=expired.capitalize(), icon='ERROR')
+    else:
+        box.label(text="Sign in to Animatica to generate", icon='USER')
     box.operator("animatica.signin", icon='IMPORT', text="Sign in")
     return True
+
+
+def _draw_rig_held(layout, context, settings) -> None:
+    """Say when the Autoposer is holding the rig, and offer it back.
+
+    While it holds, the action is detached: the pose on screen is the solve,
+    frame changes do not move the character, and nothing is playing. That is a
+    state the artist has to be able to see and leave — without it, the addon
+    reads as stuck in editing with no way out.
+    """
+    from . import pose_edit
+
+    arm = properties._live_armature(settings.target_armature)
+    if arm is None or not pose_edit.autoposer_holds(arm):
+        return
+    box = layout.box()
+    box.label(text="Autoposer is holding this rig", icon='INFO')
+    note = box.row()
+    note.active = False
+    if pose_edit.stash_is_stale(arm):
+        note.label(text="its action has changed since — giving back keeps yours")
+    else:
+        note.label(text="its animation is detached while it poses")
+    box.operator("animatica.give_back_rig", icon='LOOP_BACK', text="Give Back Rig")
+
+
+def _draw_set_keyframe(layout, context, settings) -> None:
+    """The one button for committing a pose you posed by hand.
+
+    Sits with the pose-generation buttons because it answers the same
+    question — what is the pose at this frame — from the other direction: the
+    model proposes one, this one states one. It needs no server, so it is
+    drawn while disconnected too; everything else in that part of the panel
+    does, which is why this is a helper with two call sites rather than a line
+    in one place.
+    """
+    arm = properties._live_armature(settings.target_armature)
+    if arm is None:
+        return
+    row = layout.row(align=True)
+    row.scale_y = 1.2
+    row.operator("animatica.set_key_pose", icon='KEYFRAME_HLT', text="Set Keyframe")
+    # Record, next to the button it automates: on, posing with the handles keys
+    # itself; off, Set Keyframe is the only way a pose is written.
+    row.prop(settings, "auto_key_pose", text="", icon='REC', toggle=True)
+    _draw_rig_held(layout, context, settings)
 
 
 def _draw_duration_hint(layout, context, settings) -> None:
@@ -116,8 +173,15 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
     bl_idname = "ANIMATICA_PT_main"
 
     def draw(self, context):
+        from . import updater
+
         layout = self.layout
         settings = context.scene.animatica
+
+        # A newer build, if there is one. Drawn first and only when it exists:
+        # on a preview, the version someone is running is half of every bug
+        # report, and the sidebar is where they already are.
+        updater.draw_banner(layout, context)
 
         layout.operator(
             "animatica.open_discord_help",
@@ -157,15 +221,22 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
 
         # Soft prompt to connect first. Server URL + auth live in addon prefs.
         if mmcp_client.cached_capabilities() is None:
+            # Connecting happens by itself, so this says what is happening
+            # rather than asking for a click — and asks again on its own
+            # schedule, for a laptop that woke up or a VPN that came back.
+            mmcp_client.connect_async()
             box = layout.box()
             err = mmcp_client.last_connection_error()
-            if err:
-                box.label(text="Connection failed", icon='ERROR')
-                for line in err.split("\n")[:3]:
-                    box.label(text=line)
+            if mmcp_client.connecting() or not err:
+                box.label(text="Connecting…", icon='SORTTIME')
             else:
-                box.label(text="Connect to a server first", icon='INFO')
-            box.operator("animatica.connect", icon='URL', text="Connect")
+                box.label(text="Cannot reach the server", icon='ERROR')
+                for line in err.split("\n")[:2]:
+                    box.label(text=line)
+                box.operator("animatica.connect", icon='FILE_REFRESH', text="Try again")
+            # Keying a pose is local work — no reason to make it wait on a
+            # server the artist has not connected to yet.
+            _draw_set_keyframe(layout, context, settings)
             return
 
         # Connected — show model picker.
@@ -214,19 +285,6 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
                 icon='ARMATURE_DATA',
                 text="Re-import Animatic character",
             )
-
-        # Seed (frequently tweaked when regenerating — kept next to Generate)
-        row = layout.row(align=True)
-        row.prop(settings, "seed")
-        row.operator("animatica.randomize_seed", text="", icon='FILE_REFRESH')
-
-        # Offer to lock the concrete seed the last run used — only meaningful
-        # when Seed was left on auto (0) and the recorded value differs.
-        last_seed = int(getattr(settings, "last_used_seed", 0) or 0)
-        if last_seed > 0 and last_seed != int(settings.seed):
-            row = layout.row(align=True)
-            row.label(text=f"Last run used seed {last_seed}")
-            row.operator("animatica.lock_global_seed", text="Lock", icon='LOCKED')
 
         # Warn only if the clip exceeds the connected model's duration limits.
         _draw_duration_hint(layout, context, settings)
@@ -294,6 +352,8 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
                 row.scale_y = 1.2
                 row.operator("animatica.generate_pose", icon='ARMATURE_DATA', text=pose_text)
 
+            _draw_set_keyframe(col, context, settings)
+
             if in_preview:
                 layout.separator()
                 box = layout.box()
@@ -323,12 +383,127 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Constraints panel
+# Pose panel — the character: handles, what is drawn, and what will be sent
+#
+# This was three panels: Constraints (paths and pins), Ghosts (what the
+# overlay draws) and Posing (the control rig). They are one job — direct the
+# motion — and were separate only because they were built separately. The
+# rarely-touched half, paths and pins, is a collapsed child rather than a
+# fourth header.
 # ═══════════════════════════════════════════════════════════════════════════
 
-class ANIMATICA_PT_constraints(AnimaticaPanelBase, Panel):
-    bl_label = "Constraints"
-    bl_idname = "ANIMATICA_PT_constraints"
+_MAX_NAMED_DROPPED = 3
+
+
+class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
+    bl_label = "Pose"
+    bl_idname = "ANIMATICA_PT_pose"
+
+    def draw(self, context):
+        from . import key_poses, pose_edit
+        from .autoposer import engine, poser
+
+        layout = self.layout
+        settings = context.scene.animatica
+        arm = properties._live_armature(settings.target_armature)
+        if arm is None:
+            layout.label(text="Set a target armature first", icon='INFO')
+            return
+
+        # --- the handles ---------------------------------------------------
+        status = engine.status()
+        if not (status["runtime"] and status["model"]):
+            box = layout.box()
+            fetching = engine.fetch_state()
+            if fetching["running"]:
+                box.label(text=f"Downloading the poser… {engine.fetch_percent():.0f}%",
+                          icon='SORTTIME')
+            else:
+                box.label(text="The poser is setting itself up", icon='SORTTIME')
+            box.label(text="Preferences → Animatica for detail")
+        elif not poser.has_controls(arm):
+            layout.operator("autoposer.build_rig", icon='OUTLINER_OB_ARMATURE',
+                            text="Build Autoposer Rig")
+        else:
+            # The handles, in the artist's words rather than the rig's. Adding
+            # one belongs in the same block as picking one, so the + sits with
+            # them either way round.
+            controls = poser._controls(arm)
+            if settings.pose_details:
+                col = layout.column(align=True)
+                for b in controls:
+                    row = col.row(align=True)
+                    row.prop(b, "ap_enabled", text=poser.joint_label(b), toggle=True)
+                    sub = row.row(align=True)
+                    sub.active = b.ap_enabled
+                    sub.prop(b, "ap_rot", text="Rot", toggle=True)
+                    sub.prop(b, "ap_tol_m", text="")
+                col.operator("autoposer.add_control", text="Add Handle", icon='ADD')
+            else:
+                grid = layout.grid_flow(row_major=True, columns=4, align=True)
+                for b in controls:
+                    grid.prop(b, "ap_enabled", text=poser.joint_label(b), toggle=True)
+                grid.operator("autoposer.add_control", text="", icon='ADD')
+            row = layout.row(align=True)
+            row.prop(settings, "pose_tightness", slider=True)
+            row.prop(settings, "pose_details", text="", icon='OPTIONS')
+
+        # --- what is drawn --------------------------------------------------
+        layout.separator()
+        col = layout.column(align=True)
+        col.prop(settings, "key_pose_overlay", text="Show Plan", toggle=True,
+                 icon='HIDE_OFF' if settings.key_pose_overlay else 'HIDE_ON')
+        # What the plan is made of. Greyed rather than hidden when the master
+        # is off, so the way back is where the artist left it.
+        parts = col.column(align=True)
+        parts.active = settings.key_pose_overlay
+        row = parts.row(align=True)
+        row.prop(settings, "key_pose_ghosts", text="Ghosts", toggle=True)
+        row.prop(settings, "key_pose_trail", text="Trail", toggle=True)
+        row = parts.row(align=True)
+        row.active = key_poses.overlay_on(settings)
+        row.prop(settings, "key_pose_labels", text="Numbers", toggle=True)
+        row.prop(settings, "key_pose_xray", text="X-Ray", toggle=True)
+        if key_poses.ghosts_on(settings):
+            sub = col.row()
+            sub.active = False
+            sub.label(text="drag a curve · shift moves the pose")
+
+        # --- what will be sent ----------------------------------------------
+        plan = key_poses.plan(context.scene)
+        frames, entries = plan["frames"], plan["entries"]
+        dropped = [f for f in frames if not entries[f]["in_range"]]
+        layout.separator()
+        info = layout.column(align=True)
+        sent = len(frames) - len(dropped)
+        info.label(text=f"{sent} key pose{'' if sent == 1 else 's'} sent as constraints")
+        sub = info.row()
+        sub.active = False
+        sub.label(text=f"Generating frames {plan['range'][0]}–{plan['range'][1]}")
+        if dropped:
+            shown = ", ".join(str(f) for f in dropped[:_MAX_NAMED_DROPPED])
+            if len(dropped) > _MAX_NAMED_DROPPED:
+                shown += f" +{len(dropped) - _MAX_NAMED_DROPPED}"
+            warn = layout.row()
+            warn.alert = True
+            warn.label(text=f"Not sent: {shown}", icon='ERROR')
+        held = key_poses.refresh_held_by() if key_poses.overlay_on(settings) else ""
+        if held:
+            note = layout.row()
+            note.active = False
+            note.label(text=f"refreshing after {held}")
+
+        # A rig left detached by an older session; nothing here creates one.
+        if pose_edit.autoposer_holds(arm):
+            box = layout.box()
+            box.label(text="Autoposer is holding this rig", icon='INFO')
+            box.operator("animatica.give_back_rig", icon='LOOP_BACK', text="Give Back Rig")
+
+
+class ANIMATICA_PT_paths(AnimaticaPanelBase, Panel):
+    bl_label = "Paths & Pins"
+    bl_idname = "ANIMATICA_PT_paths"
+    bl_parent_id = "ANIMATICA_PT_pose"
     bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
@@ -336,61 +511,33 @@ class ANIMATICA_PT_constraints(AnimaticaPanelBase, Panel):
         scene = context.scene
         settings = scene.animatica
 
-        # Add row
         row = layout.row(align=True)
-        row.operator("animatica.add_root_path",       icon='OUTLINER_OB_CURVE',  text="Root path")
-        row.operator("animatica.add_effector_target", icon='EMPTY_SINGLE_ARROW', text="Effector pin")
+        row.operator("animatica.add_root_path", icon='OUTLINER_OB_CURVE', text="Root path")
+        row.operator("animatica.add_effector_target", icon='EMPTY_SINGLE_ARROW', text="Pin")
 
         found = constraints_ui.walk_scene_constraints(scene)
-        root_paths = found["root_paths"]
-        effectors  = found["effector_targets"]
+        root_paths, effectors = found["root_paths"], found["effector_targets"]
+        if not root_paths and not effectors:
+            note = layout.row()
+            note.active = False
+            note.label(text="a curve to travel along, an empty to pin a hand to")
+            return
 
-        # Root paths
-        layout.separator()
-        header = layout.row(align=True)
-        header.label(text=f"Root paths ({len(root_paths)})")
-        header.prop(settings, "preview_path_snap", text="Snap armature", toggle=True)
-        if not root_paths:
-            layout.label(text="    (none — add a curve to define a trajectory)", icon='INFO')
-        for obj in root_paths:
+        if root_paths:
+            layout.prop(settings, "preview_path_snap", text="Snap armature", toggle=True)
+        for obj in root_paths + effectors:
             row = layout.row(align=True)
-            label = obj.name
-            if obj.get("animatica_match_direction"):
-                label += "  ↗"
-            row.label(text=label, icon='OUTLINER_OB_CURVE')
+            if obj in effectors:
+                joint = obj.get("animatica_target_joint", "?")
+                keys = _count_location_keyframes(obj)
+                row.label(text=f"{joint} ({keys} keys)", icon='EMPTY_SINGLE_ARROW')
+            else:
+                label = obj.name + ("  ↗" if obj.get("animatica_match_direction") else "")
+                row.label(text=label, icon='OUTLINER_OB_CURVE')
             op = row.operator("animatica.focus_constraint_object", text="", icon='RESTRICT_SELECT_OFF')
             op.name = obj.name
             op = row.operator("animatica.remove_constraint_object", text="", icon='X')
             op.name = obj.name
-
-        # Effector pins
-        layout.separator()
-        layout.label(text=f"Effector pins ({len(effectors)})")
-        if not effectors:
-            layout.label(text="    (none — add an empty to pin a joint)", icon='INFO')
-        for obj in effectors:
-            row = layout.row(align=True)
-            joint = obj.get("animatica_target_joint", "?")
-            keys  = _count_location_keyframes(obj)
-            row.label(text=f"{joint} → {obj.name} ({keys} keys)", icon='EMPTY_SINGLE_ARROW')
-            op = row.operator("animatica.focus_constraint_object", text="", icon='RESTRICT_SELECT_OFF')
-            op.name = obj.name
-            op = row.operator("animatica.remove_constraint_object", text="", icon='X')
-            op.name = obj.name
-
-        # Pose keyframes derived from the source action.
-        layout.separator()
-        arm = settings.target_armature
-        if arm is not None and arm.animation_data and arm.animation_data.action:
-            ac = arm.animation_data.action
-            n = sum(
-                1 for fc in constraints_ui.iter_action_fcurves(ac)
-                if "rotation" in fc.data_path
-                for _ in fc.keyframe_points
-            )
-            layout.label(text=f"Pose keyframes: {n}  (sampled from {ac.name})", icon='KEYFRAME_HLT')
-        else:
-            layout.label(text="Pose keyframes: 0  (set a target armature)", icon='KEYFRAME')
 
 
 def _count_location_keyframes(obj: bpy.types.Object) -> int:
@@ -415,6 +562,20 @@ class ANIMATICA_PT_settings(AnimaticaPanelBase, Panel):
     def draw(self, context):
         layout = self.layout
         settings = context.scene.animatica
+        scene = context.scene
+
+        # Seed — set once for a shot, not reached for every generation, so it
+        # sits here rather than above the button you press constantly.
+        row = layout.row(align=True)
+        row.prop(settings, "seed")
+        row.operator("animatica.randomize_seed", text="", icon='FILE_REFRESH')
+        last_seed = int(getattr(settings, "last_used_seed", 0) or 0)
+        if last_seed > 0 and last_seed != int(settings.seed):
+            row = layout.row(align=True)
+            row.label(text=f"Last run used seed {last_seed}")
+            row.operator("animatica.lock_global_seed", text="Lock", icon='LOCKED')
+
+        layout.separator()
 
         # Quality
         layout.prop(settings, "quality_preset")
@@ -435,6 +596,22 @@ class ANIMATICA_PT_settings(AnimaticaPanelBase, Panel):
         # Motion cleanup — tightens keyframe pins and fixes foot skating.
         # Requires the server to have `motion_correction` installed.
         layout.prop(settings, "post_processing")
+
+        # --- the poser and the overlay: set once, then left alone ----------
+        layout.separator()
+        col = layout.column(align=True)
+        col.label(text="Posing")
+        col.prop(scene, "ap_floor", text="Floor is solid")
+        col.prop(settings, "key_pose_display", text="Ghosts show")
+        col.prop(settings, "key_pose_auto_refresh")
+        row = col.row(align=True)
+        row.operator("animatica.key_poses_refresh", text="Refresh Ghosts", icon='FILE_REFRESH')
+        row.operator("autoposer.rest", text="Rest Pose", icon='LOOP_BACK')
+        arm = properties._live_armature(settings.target_armature)
+        if arm is not None:
+            row = col.row(align=True)
+            row.prop(arm, "show_in_front", text="In front", icon='XRAY')
+            row.prop(scene, "ap_hide_deform", text="Hide skeleton", icon='HIDE_ON')
         # Note: the In-place toggle lives in the Preview box on the main
         # panel — it's only meaningful while reviewing a generation.
 
@@ -445,7 +622,8 @@ class ANIMATICA_PT_settings(AnimaticaPanelBase, Panel):
 
 _classes = (
     ANIMATICA_PT_main,
-    ANIMATICA_PT_constraints,
+    ANIMATICA_PT_pose,
+    ANIMATICA_PT_paths,
     ANIMATICA_PT_settings,
 )
 

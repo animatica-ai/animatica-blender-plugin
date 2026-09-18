@@ -16,6 +16,9 @@ from bpy.props import (
 )
 from bpy.types import AddonPreferences, PropertyGroup
 
+from . import autoposer
+from .autoposer import prefs as autoposer_prefs
+
 
 # ---------------------------------------------------------------------------
 # Per-armature prompt-block persistence
@@ -236,6 +239,21 @@ def reset_target_armature_state(settings) -> None:
     _redraw_animatica_editors()
 
 
+def mirror_autoposer_rig(settings) -> None:
+    """Point the Autoposer at the armature Animatica generates for.
+
+    One character, chosen once. The Autoposer's own ``ap_armature`` stays as
+    the mirror the ported module reads, rather than being torn out of it.
+    """
+    scene = getattr(settings, "id_data", None)
+    if scene is None or not hasattr(scene, "ap_armature"):
+        return
+    arm = _live_armature(settings.target_armature)
+    name = arm.name if arm is not None else ""
+    if scene.ap_armature != name:
+        scene.ap_armature = name
+
+
 def _target_armature_update(self, context):
     """Sync per-armature state when the picker changes.
 
@@ -252,6 +270,9 @@ def _target_armature_update(self, context):
     settings = context.scene.animatica
     new_arm = _live_armature(settings.target_armature)
     old_arm = _live_armature(settings.previous_target_armature)
+
+    # Whatever else happens below, the Autoposer follows the same character.
+    mirror_autoposer_rig(settings)
 
     if new_arm is None:
         reset_target_armature_state(settings)
@@ -298,6 +319,53 @@ def _inplace_update(self, context):
 
     # Tag the depsgraph so the viewport reflects the constraint change.
     arm.update_tag()
+
+
+# ---------------------------------------------------------------------------
+# Key-pose overlay update callbacks
+# ---------------------------------------------------------------------------
+#
+# Split by what each setting invalidates: the toggle owns the baked geometry,
+# the display mode changes what gets captured and needs a re-bake, and the
+# rest only change how the plan is drawn and need nothing but a redraw.
+# Baking from an update callback would be unsafe (it moves the playhead) —
+# ``key_poses`` defers onto a timer.
+
+def _key_poses_toggle_update(self, context):
+    from . import key_poses  # noqa: PLC0415 — lazy to avoid circular import
+
+    key_poses.on_toggle(self)
+
+
+def _key_poses_rebake_update(self, context):
+    from . import key_poses  # noqa: PLC0415 — lazy to avoid circular import
+
+    key_poses.on_rebake_setting(self)
+
+
+def _tightness_update(self, context):
+    """Push one number onto every control's own tolerance.
+
+    The poser reads a tolerance per control — metres of slack, and the IK
+    weight. Seven identical fields reading 0.005 is not seven decisions; it is
+    one, asked seven times. This is that one, and the per-control values stay
+    underneath for anyone who wants them from the bone properties.
+    """
+    from . import properties  # noqa: PLC0415 — self, for _live_armature
+    from .autoposer import poser  # noqa: PLC0415 — lazy to avoid circular import
+
+    arm = properties._live_armature(self.target_armature)
+    if arm is None:
+        return
+    for b in poser._controls(arm):
+        b.ap_tol_m = float(self.pose_tightness)
+        b.ap_rot_tol_m = float(self.pose_tightness)
+
+
+def _key_poses_redraw_update(self, context):
+    from . import key_poses  # noqa: PLC0415 — lazy to avoid circular import
+
+    key_poses.on_redraw_setting(self)
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +433,35 @@ class PromptBlock(PropertyGroup):
 CLOUD_API_URL = "https://api.animatica.ai"
 
 
+def _draw_model_details(layout, caps) -> None:
+    """What the connected server says it can do — one model per box.
+
+    Kept out of the way rather than deleted: when a generation is refused for
+    a reason that makes no sense, this is the page that explains it.
+    """
+    layout.label(text=f"MMCP {caps.get('protocol_version', '?')}"
+                      f"  ·  {caps.get('coordinate_system', '?')}"
+                      f"  ·  {caps.get('units', '?')}")
+    for m in caps.get("models", []):
+        box = layout.box()
+        box.label(text=m.get("id", "?"), icon='OUTLINER_OB_ARMATURE')
+        joints = len(m.get("canonical_skeleton", {}).get("joints", []))
+        retarget = "yes" if m.get("supports_retargeting") else "no"
+        col = box.column(align=True)
+        col.active = False
+        col.label(text=f"{joints} joints @ {m.get('fps', '?')} fps  ·  retargeting: {retarget}")
+        col.label(text="segments: " + (", ".join(m.get("supported_segments") or []) or "—"))
+        col.label(text="constraints: " + (", ".join(m.get("supported_constraints") or []) or "—"))
+        limits = m.get("limits") or {}
+        parts = []
+        if m.get("recommended_max_duration_seconds") is not None:
+            parts.append(f"recommended ≤ {m['recommended_max_duration_seconds']:g}s")
+        if limits.get("max_duration_seconds") is not None:
+            parts.append(f"max {limits['max_duration_seconds']:g}s")
+        if parts:
+            col.label(text="  ·  ".join(parts))
+
+
 class AnimaticaAddonPreferences(AddonPreferences):
     """Addon-level preferences — edit in ``Edit > Preferences > Add-ons > Animatica``."""
 
@@ -383,6 +480,26 @@ class AnimaticaAddonPreferences(AddonPreferences):
         name="Server URL",
         default="http://localhost:8000",
         description="Base URL of your self-hosted MMCP server",
+    )
+
+    # --- Updates ----------------------------------------------------------
+    # A preview moves faster than anyone will reinstall by hand, so the addon
+    # looks at its own releases page. Checking is automatic; installing is not.
+    check_updates: BoolProperty(
+        name="Check for updates",
+        default=True,
+        description=(
+            "Ask GitHub once a day whether a newer build has been released. "
+            "Nothing is downloaded or installed until you press Update"
+        ),
+    )
+    update_previews: BoolProperty(
+        name="Include previews",
+        default=True,
+        description=(
+            "Offer pre-release builds as well as final ones. While Animatica "
+            "is itself a preview, this is where the fixes are"
+        ),
     )
 
     # --- Animatica Cloud session (populated by /auth/login) ----------------
@@ -412,90 +529,110 @@ class AnimaticaAddonPreferences(AddonPreferences):
         description="Animatica plan tier (free / pro / team / admin)",
     )
 
+    # The Autoposer's own settings — model source, token, cache, threads —
+    # merged in below the class body. Blender allows one AddonPreferences per
+    # addon, and the Autoposer is part of this one now; its property names and
+    # defaults are unchanged, so a machine that already fetched the model
+    # through the standalone addon keeps using what it downloaded.
+
     def draw(self, context):
-        from . import mmcp_client
+        """Three questions, in the order anyone opening this page has them.
+
+        Who am I, what am I talking to, and is the poser on this machine
+        ready. Everything else — protocol details, model sources, caches,
+        thread counts — is recovery equipment, and it is folded away: needed
+        on the day something breaks, noise on every other day.
+        """
+        from . import mmcp_client, updater
 
         layout = self.layout
 
-        # --- Server selection -------------------------------------------------
-        col = layout.column(align=True)
-        col.label(text="Server", icon='WORLD_DATA')
+        # --- This build -------------------------------------------------------
+        updater.check_async()
+        updater.draw_preferences(layout, context)
 
-        # Cloud URL: always visible, never editable.
-        row = col.row(align=True)
-        row.enabled = False
-        row.label(text=f"Animatica Cloud — {CLOUD_API_URL}/")
-
-        col.prop(self, "self_hosted")
-        if self.self_hosted:
-            col.prop(self, "server_url", text="Override URL")
-
-        # --- Connection status + connect/reconnect ----------------------------
+        # --- Account ----------------------------------------------------------
         layout.separator()
-        caps = mmcp_client.cached_capabilities()
+        layout.label(text="Account", icon='USER')
         box = layout.box()
-        if caps is None:
-            err = mmcp_client.last_connection_error()
-            if err:
-                box.label(text="Connection failed", icon='ERROR')
-                for line in err.split("\n")[:3]:
-                    box.label(text=line)
-            else:
-                box.label(text="Not connected", icon='UNLINKED')
-            box.operator("animatica.connect", icon='URL', text="Connect")
-        else:
-            n_models = len(caps.get("models", []))
-            row = box.row()
-            row.label(text=f"Connected — {n_models} model(s)", icon='LINKED')
-            row.operator("animatica.connect", icon='FILE_REFRESH', text="Reconnect")
-
-            proto = caps.get("protocol_version", "?")
-            box.label(text=f"MMCP {proto} · {caps.get('coordinate_system', '?')} · {caps.get('units', '?')}")
-
-            for m in caps.get("models", []):
-                mbox = box.box()
-                mbox.label(text=m.get("id", "?"), icon='OUTLINER_OB_ARMATURE')
-                joints = len(m.get("canonical_skeleton", {}).get("joints", []))
-                fps = m.get("fps", "?")
-                retarget = "yes" if m.get("supports_retargeting") else "no"
-                mbox.label(text=f"{joints} joints @ {fps} fps · retargeting: {retarget}")
-
-                segs = ", ".join(m.get("supported_segments") or []) or "—"
-                mbox.label(text=f"segments: {segs}")
-                cons = ", ".join(m.get("supported_constraints") or []) or "—"
-                mbox.label(text=f"constraints: {cons}")
-
-                limits = m.get("limits") or {}
-                max_dur = limits.get("max_duration_seconds")
-                rec_dur = m.get("recommended_max_duration_seconds")
-                if max_dur is not None or rec_dur is not None:
-                    parts = []
-                    if rec_dur is not None:
-                        parts.append(f"recommended ≤ {rec_dur:g}s")
-                    if max_dur is not None:
-                        parts.append(f"max {max_dur:g}s")
-                    mbox.label(text=" · ".join(parts))
-
-        layout.separator()
-
-        # --- Auth section -----------------------------------------------------
         if self.self_hosted:
-            box = layout.box()
-            box.label(text="Self-hosted: sign-in not required", icon='INFO')
-            return
-
-        if self.access_token:
-            box = layout.box()
-            row = box.row()
-            row.label(text=f"Signed in: {self.email}", icon='CHECKMARK')
-            if self.tier:
-                row.label(text=f"({self.tier})")
-            row = box.row()
+            box.label(text="Self-hosted — no sign-in needed", icon='INFO')
+        elif self.access_token:
+            # Split rather than a plain row: an even share would give signing
+            # out half the width, and it is not half the point of the row.
+            row = box.split(factor=0.75)
+            who = self.email or "signed in"
+            row.label(text=who + (f"  ·  {self.tier}" if self.tier else ""), icon='CHECKMARK')
             row.operator("animatica.signout", icon='X', text="Sign out")
         else:
-            box = layout.box()
-            box.label(text="Animatica Cloud — sign in", icon='USER')
+            expired = mmcp_client.session_expired()
+            if expired:
+                row = box.row()
+                row.alert = True
+                row.label(text=expired.capitalize(), icon='ERROR')
+            else:
+                box.label(text="Sign in to generate motion", icon='USER')
             box.operator("animatica.signin", icon='IMPORT', text="Sign in")
+
+        # --- Server -----------------------------------------------------------
+        layout.separator()
+        layout.label(text="Server", icon='WORLD_DATA')
+        box = layout.box()
+        caps = mmcp_client.cached_capabilities()
+        row = box.split(factor=0.75)
+        if caps is None:
+            mmcp_client.connect_async()
+            err = mmcp_client.last_connection_error()
+            if mmcp_client.connecting() or not err:
+                row.label(text="Connecting…", icon='SORTTIME')
+                row.label(text="")              # keep the split's second column filled
+            else:
+                row.alert = True
+                row.label(text="Cannot reach the server", icon='ERROR')
+                row.operator("animatica.connect", icon='FILE_REFRESH', text="Try again")
+                for line in err.split("\n")[:2]:
+                    sub = box.row()
+                    sub.active = False
+                    sub.label(text=line[:70])
+        else:
+            models = caps.get("models", [])
+            row.label(text=f"Connected  ·  {len(models)} model"
+                           + ("" if len(models) == 1 else "s"), icon='LINKED')
+            row.operator("animatica.connect", icon='FILE_REFRESH', text="Reconnect")
+
+        sub = box.row()
+        sub.active = False
+        sub.label(text=("your own server" if self.self_hosted
+                        else f"Animatica Cloud · {CLOUD_API_URL}"))
+        box.prop(self, "self_hosted")
+        if self.self_hosted:
+            box.prop(self, "server_url", text="URL")
+
+        # What each model can do: true, occasionally needed, and nobody's first
+        # question. Folded.
+        if caps is not None and caps.get("models"):
+            header, body = layout.panel("animatica_prefs_models", default_closed=True)
+            header.label(text="Models and protocol")
+            if body is not None:
+                _draw_model_details(body, caps)
+
+        # --- The poser --------------------------------------------------------
+        layout.separator()
+        layout.label(text="Poser", icon='ARMATURE_DATA')
+        clash = autoposer.superseded_addons()
+        if clash:
+            warn = layout.row()
+            warn.alert = True
+            warn.label(text=f"disable the standalone {', '.join(clash)} addon",
+                       icon='ERROR')
+        autoposer_prefs.draw(layout, self, context)
+
+
+# Merged after the class body: annotations are read at registration, so adding
+# them here gives the Autoposer's fields to Animatica's preferences without
+# restating them in two places.
+for _name, _prop in autoposer_prefs.PROPERTIES.items():
+    AnimaticaAddonPreferences.__annotations__[_name] = _prop
 
 
 def _model_id_items(self, context):
@@ -649,6 +786,114 @@ class AnimaticaSettings(PropertyGroup):
             "0 = hard cut between blocks"
         ),
         default=5, min=0, max=30,
+    )
+
+    # -- Key-pose overlay --
+    #
+    # Each pose the artist keys becomes one full-body ``pose_keyframe``
+    # constraint in the request. These settings control the viewport view of
+    # that plan — which poses exist, where, and which the request will carry.
+    # See ``key_poses.py``.
+    # One switch for the whole overlay, so it can go away in a click instead
+    # of three. It sits with the toggles it governs — the same switch in the
+    # Pose panel's *header* read as switching posing off, which it never did.
+    key_pose_overlay: BoolProperty(
+        name="Show Plan",
+        description=(
+            "Draw the motion plan in the viewport at all. Off hides the "
+            "ghosts, the trail and the frame numbers in one go, and remembers "
+            "which of them were on for when you switch it back"
+        ),
+        default=True,
+        update=_key_poses_toggle_update,
+    )
+    key_pose_ghosts: BoolProperty(
+        name="Ghosts",
+        description=(
+            "Draw the body at each pose you keyed. Independent of the motion "
+            "trail — either can be shown on its own"
+        ),
+        default=True,
+        update=_key_poses_toggle_update,
+    )
+    key_pose_display: EnumProperty(
+        name="Show As",
+        description="What each key pose is drawn as",
+        items=[
+            ("AUTO", "Auto", "Skinned mesh if the rig has one, bones otherwise"),
+            ("MESH", "Mesh", "Meshes deformed by the rig, as a translucent body"),
+            ("BONES", "Bones", "The skeleton as sticks — clearer on a dense character"),
+        ],
+        default="AUTO",
+        update=_key_poses_rebake_update,
+    )
+    key_pose_labels: BoolProperty(
+        name="Frame Numbers",
+        description="Label each key pose with the frame it sits on",
+        default=True,
+        update=_key_poses_redraw_update,
+    )
+    key_pose_trail: BoolProperty(
+        name="Motion Trail",
+        description=(
+            "Trace the path the motion actually takes, frame by frame, "
+            "coloured by the prompt block driving each stretch and marked at "
+            "every pose you keyed. Follows the joints the model is steered "
+            "by: the hands and feet, the root, and the head"
+        ),
+        default=True,
+        update=_key_poses_toggle_update,
+    )
+    key_pose_xray: BoolProperty(
+        name="X-Ray",
+        description="Draw the key poses through the character instead of behind it",
+        default=False,
+        update=_key_poses_redraw_update,
+    )
+    editing_key_pose_frame: IntProperty(
+        name="Editing Key Pose",
+        description=(
+            "Frame of the key pose currently being edited, or -1. Set by "
+            "clicking a ghost; cleared by Apply or Cancel"
+        ),
+        default=-1,
+        options={"SKIP_SAVE"},
+    )
+    pose_tightness: FloatProperty(
+        name="Tightness",
+        description=(
+            "How exactly the poser must obey a control. Tight puts the joint "
+            "where you put the handle; loose makes it a hint the model may "
+            "overrule to keep the body natural"
+        ),
+        default=0.005, min=0.001, max=0.2, precision=3, step=1,
+        update=_tightness_update,
+    )
+    auto_key_pose: BoolProperty(
+        name="Auto Key",
+        description=(
+            "Write a keyframe whenever you pose with the Autoposer handles. "
+            "Off: posing still works and still shows, but nothing is recorded "
+            "until you press Set Keyframe — the way to try a pose out without "
+            "it landing in the action"
+        ),
+        default=True,
+    )
+    pose_details: BoolProperty(
+        name="Per-Handle Settings",
+        description=(
+            "Show each handle's own tightness and whether it sends its "
+            "rotation, instead of the compact row of on/off toggles"
+        ),
+        default=False,
+    )
+    key_pose_auto_refresh: BoolProperty(
+        name="Auto Refresh",
+        description=(
+            "Re-bake the ghosts when you key a pose or move the rig. Turn off "
+            "on a heavy character and refresh by hand instead"
+        ),
+        default=True,
     )
 
     default_prompt: StringProperty(

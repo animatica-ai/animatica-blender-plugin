@@ -214,6 +214,7 @@ def sign_in(email: str, password: str) -> dict[str, Any]:
         p.refresh_token = data.get("refresh_token", "")
         p.email = data.get("email", email)
         p.tier = data.get("tier", "")
+    clear_session_expired()
     return data
 
 
@@ -226,6 +227,52 @@ def sign_out() -> None:
         p.refresh_token = ""
         p.email = ""
         p.tier = ""
+
+
+#: Why the session ended, when it ended by itself rather than by a click. Read
+#: by the panels so the artist is told what happened where they would look.
+_EXPIRED: dict = {"reason": ""}
+
+
+def session_expired() -> str:
+    return _EXPIRED["reason"]
+
+
+def clear_session_expired() -> None:
+    _EXPIRED["reason"] = ""
+
+
+def expire_session(reason: str = "your session has expired") -> None:
+    """The server says this token is no good, and refreshing it did not help.
+
+    Keeping a token the server rejects signs the artist in on paper only: the
+    panel says "Signed in", every generation fails the same way, and the one
+    action that would fix it — sign in again — is not offered because we still
+    look signed in. So the token goes, and the sign-in prompt comes back with
+    a sentence saying why it is there.
+
+    Called from worker threads, so the actual write is handed to the main
+    thread: preferences are Blender data like anything else.
+    """
+    if not (get_access_token() or get_refresh_token()):
+        return                      # nothing to expire; a self-hosted server, most likely
+    _EXPIRED["pending"] = reason
+    if not bpy.app.timers.is_registered(_apply_expiry):
+        bpy.app.timers.register(_apply_expiry, first_interval=0.0)
+
+
+def _apply_expiry():
+    """The main-thread half of ``expire_session``."""
+    reason = _EXPIRED.pop("pending", "")
+    if not reason:
+        return None
+    sign_out()
+    _EXPIRED["reason"] = reason
+    wm = getattr(bpy.context, "window_manager", None)
+    for window in getattr(wm, "windows", ()):
+        for area in window.screen.areas:
+            area.tag_redraw()
+    return None
 
 
 def refresh_access_token() -> bool:
@@ -326,6 +373,82 @@ def clear_capabilities(error: str = "") -> None:
 
 def last_connection_error() -> str:
     return _LAST_ERROR
+
+
+# ---------------------------------------------------------------------------
+# Connecting, without being asked
+#
+# Fetching /capabilities is not a decision — it is how the addon finds out
+# which models exist so it can show them. Making the artist press Connect
+# first put a step in front of everything else that could only ever be
+# answered one way. It happens on its own now: at startup, after a file load,
+# after signing in, and again on its own schedule if the network was not there
+# the first time.
+# ---------------------------------------------------------------------------
+
+#: Seconds before a failed attempt is worth repeating. Long enough not to
+#: hammer a server that is down, short enough that coming back from a dropped
+#: network or a VPN does not need a click.
+CONNECT_RETRY_SECONDS = 20.0
+
+_CONNECT = {"running": False, "at": 0.0}
+
+
+def connecting() -> bool:
+    return bool(_CONNECT["running"])
+
+
+def connect_async(*, force: bool = False) -> bool:
+    """Fetch capabilities on a worker thread. True if an attempt started.
+
+    Safe to call from anywhere, including a draw callback: it starts a thread
+    and touches no Blender data. The result is applied on the main thread.
+    """
+    import threading
+    import time as _time
+
+    if _CONNECT["running"] or (_CAPABILITIES is not None and not force):
+        return False
+    if not force and _time.monotonic() - _CONNECT["at"] < CONNECT_RETRY_SECONDS:
+        return False        # tried recently and it did not work
+    _CONNECT["running"] = True
+    _CONNECT["at"] = _time.monotonic()
+    url = get_mmcp_url()
+
+    def _work():
+        caps, error = None, ""
+        try:
+            caps = MmcpClient(url, timeout=30).capabilities(refresh=True)
+        except Exception as exc:                            # noqa: BLE001
+            error = str(exc)
+        _CONNECT["running"] = False
+        bpy.app.timers.register(
+            lambda: _apply_connection(caps, error, url), first_interval=0.0)
+
+    threading.Thread(target=_work, daemon=True).start()
+    return True
+
+
+def _apply_connection(caps, error: str, url: str):
+    """Land the result on the main thread, where Blender data may be touched."""
+    if caps is None:
+        clear_capabilities(error=error or f"no answer from {url}")
+    else:
+        store_capabilities(caps)
+        models = [m.get("id") for m in caps.get("models", []) if m.get("id")]
+        for scene in getattr(bpy.data, "scenes", ()):
+            settings = getattr(scene, "animatica", None)
+            if settings is None or not models or settings.model_id in models:
+                continue
+            try:
+                settings.model_id = models[0]
+            except TypeError:
+                pass
+    wm = getattr(bpy.context, "window_manager", None)
+    for window in getattr(wm, "windows", ()):
+        for area in window.screen.areas:
+            area.tag_redraw()
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -443,9 +566,17 @@ class MmcpClient:
                 resp = _post()
             except HTTPError as exc:
                 # Refresh-and-retry once on 401 (auth-proxy session expired).
-                if exc.code == 401 and refresh_access_token():
-                    resp = _post()
+                if exc.code != 401:
+                    raise
+                if refresh_access_token():
+                    try:
+                        resp = _post()
+                    except HTTPError as retry_exc:
+                        if retry_exc.code == 401:
+                            expire_session("your session expired — sign in again")
+                        raise
                 else:
+                    expire_session("your session expired — sign in again")
                     raise
             with resp:
                 if resp.status == 200:
@@ -482,6 +613,8 @@ class MmcpClient:
                         continue
                     raise MmcpError.from_response(resp.status, resp.read())
             except HTTPError as exc:
+                if exc.code == 401 and not refresh_access_token():
+                    expire_session("your session expired — sign in again")
                 raise MmcpError.from_response(exc.code, exc.read()) from exc
         raise MmcpError(code="timeout", message=f"async job at {url} did not complete in {self.timeout}s")
 
@@ -498,9 +631,17 @@ class MmcpClient:
             try:
                 resp = _get()
             except HTTPError as exc:
-                if exc.code == 401 and refresh_access_token():
-                    resp = _get()
+                if exc.code != 401:
+                    raise
+                if refresh_access_token():
+                    try:
+                        resp = _get()
+                    except HTTPError as retry_exc:
+                        if retry_exc.code == 401:
+                            expire_session("your session expired — sign in again")
+                        raise
                 else:
+                    expire_session("your session expired — sign in again")
                     raise
             with resp:
                 if resp.status != 200:

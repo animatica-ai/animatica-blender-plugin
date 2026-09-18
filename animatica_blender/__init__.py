@@ -13,12 +13,23 @@ optimisation runs on the backend server.
 bl_info = {
     "name": "Animatica — AI Motion Generation",
     "author": "Animatica",
-    "version": (0, 5, 3),
+    "version": (0, 6, 0),
     "blender": (5, 0, 0),
     "location": "View3D > Sidebar > Animatica",
     "description": "AI motion generation — select armature, set keyframes, generate",
+    # Blender shows this beside the addon in Preferences, with a warning icon.
+    # An early preview should say so where it is installed, not only in the
+    # name of the file it came in.
+    "warning": "Early preview — things will change; please report what breaks",
     "category": "Animation",
 }
+
+#: The release this build came from. ``bl_info["version"]`` carries numbers
+#: only, so on its own it cannot tell preview1 from preview2 — and the updater
+#: comparing two builds that both call themselves 0.6.0 would never offer the
+#: newer one. The zip target rewrites this line; a source checkout is the
+#: final release of its number, which is the conservative reading.
+VERSION_TAG = "v0.6.0"
 
 import bpy
 from bpy.app.handlers import persistent
@@ -29,9 +40,15 @@ from . import operators
 from . import canonical_skeleton
 from . import constraints_ui
 from . import panels
+from . import autoposer
+from . import autopose_sync
+from . import curve_edit
+from . import key_poses
+from . import pose_edit
 from . import path_follow
 from . import timeline_overlay
 from . import timeline_operators
+from . import updater
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +83,14 @@ def _animatica_load_post(dummy):
     # ones, so it would find nothing on an unmigrated file.
     migrate.run()
 
+    # Ghosts baked from the previous file's rig would otherwise hang in the
+    # viewport until something else invalidated them.
+    key_poses.clear()
+    key_poses.invalidate_plan()
+
+    from . import mmcp_client
+    mmcp_client.connect_async()
+
     for scene in bpy.data.scenes:
         settings = getattr(scene, "animatica", None)
         if settings is None:
@@ -77,6 +102,7 @@ def _animatica_load_post(dummy):
         try:
             properties.load_blocks_from_armature(arm, settings)
             settings.previous_target_armature = arm
+            properties.mirror_autoposer_rig(settings)
         except Exception:
             pass
 
@@ -130,10 +156,28 @@ def register():
     constraints_ui.register()
     panels.register()
     path_follow.register()
+    autoposer.register()
+    autopose_sync.register()
+    key_poses.register()
+    pose_edit.register()
+    curve_edit.register()
     timeline_operators.register()
     timeline_overlay.register_draw_handler()
+    updater.register()
 
     _reset_runtime_flags()
+
+    # Connecting is not a decision — it is how the addon learns which models
+    # exist. Deferred a moment so preferences (server URL, token) are readable.
+    def _connect_when_ready():
+        from . import mmcp_client
+        mmcp_client.connect_async()
+        # ...and ask, quietly, whether there is a newer build. Once a day, on a
+        # worker thread; it changes nothing until someone presses Update.
+        updater.check_async()
+        return None
+
+    bpy.app.timers.register(_connect_when_ready, first_interval=1.0)
 
     # Install persistent handlers, purging any stale copies from prior loads.
     _purge_stale_handlers(bpy.app.handlers.save_pre, "_animatica_save_pre")
@@ -146,8 +190,14 @@ def unregister():
     _purge_stale_handlers(bpy.app.handlers.save_pre, "_animatica_save_pre")
     _purge_stale_handlers(bpy.app.handlers.load_post, "_animatica_load_post")
 
+    updater.unregister()
     timeline_overlay.unregister_draw_handler()
     timeline_operators.unregister()
+    curve_edit.unregister()
+    pose_edit.unregister()
+    key_poses.unregister()
+    autopose_sync.unregister()
+    autoposer.unregister()
     path_follow.unregister()
     panels.unregister()
     constraints_ui.unregister()

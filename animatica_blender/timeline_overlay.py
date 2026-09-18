@@ -62,6 +62,14 @@ FRAME_NUM_COLOR_DISABLED = (0.6, 0.6, 0.6, 0.3)
 # Inline-edit cursor
 CURSOR_COLOR = (1.0, 1.0, 1.0, 0.85)
 
+# Key-pose markers — one per user-authored pose, i.e. per full-body constraint
+# the request will carry. Drawn over the strips so the artist can see which
+# instruction each pose falls under.
+KEY_POSE_COLOR = (0.96, 0.96, 0.99, 0.95)
+KEY_POSE_DROPPED_COLOR = (1.0, 0.45, 0.35, 0.95)   # outside the generation range
+KEY_POSE_STEM_COLOR = (0.96, 0.96, 0.99, 0.35)
+KEY_POSE_MARKER_SIZE = 4          # pixels, half-diagonal of the diamond
+
 # Seed-lock badge (a pinned block keeps its seed through a full Generate)
 LOCK_BADGE_COLOR = (1.0, 0.82, 0.28, 0.97)   # gold padlock
 LOCK_BADGE_BACKDROP = (0.0, 0.0, 0.0, 0.40)  # dark backing for contrast
@@ -321,7 +329,9 @@ def draw_timeline_strips():
             inline_edit_state["index"] = -1
             _schedule_target_reset(scene)
         return
-    if len(props.prompt_blocks) == 0:
+    from . import key_poses  # noqa: PLC0415 — lazy, key_poses reads our colours
+    key_pose_ticks, _window = key_poses.timeline_ticks(scene)
+    if len(props.prompt_blocks) == 0 and not key_pose_ticks:
         return
 
     region = context.region
@@ -454,8 +464,46 @@ def draw_timeline_strips():
         if int(getattr(fr, "seed", 0) or 0) > 0:
             _draw_lock_badge(shader, x_start_draw, x_end_draw, y_bottom, y_top)
 
+    # --- Key poses: one marker per pose the artist authored. Drawn last so
+    # they sit on top of every strip, since they are what the strips are
+    # being generated around. ---
+    _draw_key_pose_ticks(shader, region, view2d, key_pose_ticks, y_bottom, y_top)
+
     # Restore GPU state
     gpu.state.blend_set("NONE")
+
+
+def _draw_key_pose_ticks(shader, region, view2d, ticks, y_bottom, y_top):
+    """Mark each authored key pose on the lane.
+
+    A stem across the strip height says *where* in time the pose sits; the
+    diamond on top is the marker the eye picks up while scanning. A pose that
+    falls outside the generation window is drawn in the warning colour,
+    because the request will not carry it.
+    """
+    if not ticks:
+        return
+
+    for frame, in_range in ticks:
+        x, _ = view2d.view_to_region(frame, 0, clip=False)
+        if x < -KEY_POSE_MARKER_SIZE or x > region.width + KEY_POSE_MARKER_SIZE:
+            continue
+
+        stem = batch_for_shader(
+            shader, "LINES", {"pos": ((x, y_bottom), (x, y_top))},
+        )
+        shader.uniform_float("color", KEY_POSE_STEM_COLOR)
+        stem.draw(shader)
+
+        s = KEY_POSE_MARKER_SIZE
+        diamond = ((x, y_top - s), (x + s, y_top), (x, y_top + s), (x - s, y_top))
+        batch = batch_for_shader(
+            shader, "TRIS", {"pos": diamond}, indices=((0, 1, 2), (0, 2, 3)),
+        )
+        shader.uniform_float(
+            "color", KEY_POSE_COLOR if in_range else KEY_POSE_DROPPED_COLOR,
+        )
+        batch.draw(shader)
 
 
 def _draw_lane_label(lane_y0, lane_y1):
@@ -810,16 +858,19 @@ def _draw_strip_text_editing(text, cursor_pos, x_start, x_end, y_bottom, y_top,
 # ---------------------------------------------------------------------------
 
 def register_draw_handler():
-    """Install the POST_PIXEL draw handler, but only once — even across
-    module reloads.  The handle lives on ``bpy.app.driver_namespace`` so
-    subsequent imports find and reuse it."""
+    """Install the POST_PIXEL draw handler, replacing any left by an earlier
+    module load.  The handle lives on ``bpy.app.driver_namespace`` so a reload
+    finds it instead of stacking a second one — but it is replaced, not
+    reused: the callback Blender holds belongs to the old module and would go
+    on drawing from its globals."""
     global _draw_handle
     ns = bpy.app.driver_namespace
-    existing = ns.get(_NS_KEY)
-    if existing is not None:
-        # Previous module load already installed one — reuse.
-        _draw_handle = existing
-        return
+    stale = ns.pop(_NS_KEY, None)
+    if stale is not None:
+        try:
+            bpy.types.SpaceDopeSheetEditor.draw_handler_remove(stale, "WINDOW")
+        except (ValueError, RuntimeError):
+            pass
     _draw_handle = bpy.types.SpaceDopeSheetEditor.draw_handler_add(
         draw_timeline_strips, (), "WINDOW", "POST_PIXEL",
     )

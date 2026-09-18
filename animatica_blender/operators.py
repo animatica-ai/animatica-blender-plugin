@@ -1550,6 +1550,10 @@ class ANIMATICA_OT_signin(Operator):
         msg = f"Signed in as {data.get('email', self.email)}"
         if tier:
             msg += f" ({tier})"
+        # Signing in changes what the server will tell us, so ask it again
+        # rather than leaving the artist on a stale "cannot reach" or an empty
+        # model list.
+        mmcp_client.connect_async(force=True)
         self.report({'INFO'}, msg)
         return {'FINISHED'}
 
@@ -1561,6 +1565,9 @@ class ANIMATICA_OT_signout(Operator):
 
     def execute(self, context):
         mmcp_client.sign_out()
+        # Signing out on purpose is not an expired session; drop any notice
+        # left by one, or the sign-in prompt keeps explaining itself.
+        mmcp_client.clear_session_expired()
         self.report({'INFO'}, "Signed out")
         return {'FINISHED'}
 

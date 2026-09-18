@@ -1,0 +1,325 @@
+{
+ "source": "atelier.rig.control_rig",
+ "controls": [
+  {
+   "name": "C_root_CTRL",
+   "joint": "Hips",
+   "kind": "root",
+   "side": "C",
+   "shape": "double_ring",
+   "colour": [
+    0.13,
+    0.77,
+    0.37
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": false
+  },
+  {
+   "name": "C_cog_CTRL",
+   "joint": "Hips",
+   "kind": "cog",
+   "side": "C",
+   "shape": "cube",
+   "colour": [
+    0.92,
+    0.7,
+    0.03
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": true
+  },
+  {
+   "name": "C_spine_01_CTRL",
+   "joint": "Spine1",
+   "kind": "pos",
+   "side": "C",
+   "shape": "circle",
+   "colour": [
+    0.92,
+    0.7,
+    0.03
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": false
+  },
+  {
+   "name": "C_spine_02_CTRL",
+   "joint": "Spine2",
+   "kind": "pos",
+   "side": "C",
+   "shape": "circle",
+   "colour": [
+    0.92,
+    0.7,
+    0.03
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": false
+  },
+  {
+   "name": "C_chest_CTRL",
+   "joint": "Chest",
+   "kind": "pos",
+   "side": "C",
+   "shape": "circle",
+   "colour": [
+    0.92,
+    0.7,
+    0.03
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": true
+  },
+  {
+   "name": "C_neck_CTRL",
+   "joint": "Neck1",
+   "kind": "pos",
+   "side": "C",
+   "shape": "circle",
+   "colour": [
+    0.92,
+    0.7,
+    0.03
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": false
+  },
+  {
+   "name": "C_head_CTRL",
+   "joint": "Head",
+   "kind": "pos",
+   "side": "C",
+   "shape": "circle",
+   "colour": [
+    0.92,
+    0.7,
+    0.03
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": false
+  },
+  {
+   "name": "C_head_AIM_CTRL",
+   "joint": "Head",
+   "kind": "aim",
+   "side": "C",
+   "shape": "arrow",
+   "colour": [
+    0.92,
+    0.7,
+    0.03
+   ],
+   "ety": 2,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": false
+  },
+  {
+   "name": "L_clavicle_CTRL",
+   "joint": "LeftShoulder",
+   "kind": "pos",
+   "side": "L",
+   "shape": "circle",
+   "colour": [
+    0.94,
+    0.27,
+    0.27
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": false
+  },
+  {
+   "name": "L_arm_IK_CTRL",
+   "joint": "LeftHand",
+   "kind": "ik",
+   "side": "L",
+   "shape": "square",
+   "colour": [
+    0.94,
+    0.27,
+    0.27
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": true
+  },
+  {
+   "name": "L_elbow_CTRL",
+   "joint": "LeftForeArm",
+   "kind": "guide",
+   "side": "L",
+   "shape": "triangle",
+   "colour": [
+    0.94,
+    0.27,
+    0.27
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": false
+  },
+  {
+   "name": "R_clavicle_CTRL",
+   "joint": "RightShoulder",
+   "kind": "pos",
+   "side": "R",
+   "shape": "circle",
+   "colour": [
+    0.15,
+    0.39,
+    0.92
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": false
+  },
+  {
+   "name": "R_arm_IK_CTRL",
+   "joint": "RightHand",
+   "kind": "ik",
+   "side": "R",
+   "shape": "square",
+   "colour": [
+    0.15,
+    0.39,
+    0.92
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": true
+  },
+  {
+   "name": "R_elbow_CTRL",
+   "joint": "RightForeArm",
+   "kind": "guide",
+   "side": "R",
+   "shape": "triangle",
+   "colour": [
+    0.15,
+    0.39,
+    0.92
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": false
+  },
+  {
+   "name": "L_foot_IK_CTRL",
+   "joint": "LeftFoot",
+   "kind": "ik",
+   "side": "L",
+   "shape": "square",
+   "colour": [
+    0.94,
+    0.27,
+    0.27
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": true
+  },
+  {
+   "name": "L_knee_CTRL",
+   "joint": "LeftShin",
+   "kind": "guide",
+   "side": "L",
+   "shape": "triangle",
+   "colour": [
+    0.94,
+    0.27,
+    0.27
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": false
+  },
+  {
+   "name": "L_toe_CTRL",
+   "joint": "LeftToeBase",
+   "kind": "pos",
+   "side": "L",
+   "shape": "diamond",
+   "colour": [
+    0.94,
+    0.27,
+    0.27
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": false
+  },
+  {
+   "name": "R_foot_IK_CTRL",
+   "joint": "RightFoot",
+   "kind": "ik",
+   "side": "R",
+   "shape": "square",
+   "colour": [
+    0.15,
+    0.39,
+    0.92
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": true
+  },
+  {
+   "name": "R_knee_CTRL",
+   "joint": "RightShin",
+   "kind": "guide",
+   "side": "R",
+   "shape": "triangle",
+   "colour": [
+    0.15,
+    0.39,
+    0.92
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": false
+  },
+  {
+   "name": "R_toe_CTRL",
+   "joint": "RightToeBase",
+   "kind": "pos",
+   "side": "R",
+   "shape": "diamond",
+   "colour": [
+    0.15,
+    0.39,
+    0.92
+   ],
+   "ety": 0,
+   "tol": 0.005,
+   "rot_tol": 0.005,
+   "default_on": false
+  }
+ ]
+}

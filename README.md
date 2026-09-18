@@ -12,6 +12,7 @@ armature. Not happy? **Reject** and try again.
 - **Full clips** — generate motion across a frame range from text prompts and key poses
 - **Single poses** — **Generate Pose @ Frame** for one frame without replacing your whole action
 - **Direct the performance** — prompt blocks on the timeline, floor paths, pinned hands/feet
+- **See the plan** — your key poses ghosted in the viewport, colour-matched to their prompt blocks
 - **Your character** — work on your own armature, or import our reference skeleton to start fast
 - **Preview before committing** — review the result, then **Accept** or **Reject**
 
@@ -32,7 +33,7 @@ You need **Blender 5.0+** and a free [Animatica](https://animatica.ai) account.
 ## Get started in Blender
 
 1. **Edit → Preferences → Add-ons → Animatica** — sign in with your Animatica account
-2. Open the **N** panel in the 3D View (**Animatica** tab) → **Connect** → choose a model
+2. Open the **N** panel in the 3D View (**Animatica** tab) — it connects on its own → choose a model
 3. Pick your **target armature** (or **Import skeleton** if you're starting from ours)
 4. Add prompts and constraints, then **Generate Motion**
 5. **Accept** to keep the animation, or **Reject** to undo

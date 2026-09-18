@@ -959,6 +959,52 @@ def _evaluated_local_basis(pb: bpy.types.PoseBone) -> 'Matrix':
     return parent_offset @ pb.parent.matrix.inverted() @ pb.matrix
 
 
+def authored_pose_frames(
+    source_action: bpy.types.Action | None,
+    *,
+    frame_range: tuple[int, int] | None = None,
+) -> tuple[list[int], set[str]]:
+    """The frames the user authored a pose on, and the rotation-keyed bones.
+
+    A frame counts as authored when some bone's rotation channel carries a
+    keyframe point there whose type is **not** ``GENERATED``. A motion bake
+    tags its dense samples ``GENERATED`` and leaves the user's anchors as
+    real keys, so the type is the exact signal for "did a human put this
+    here" — which the action's NAME is not: an action can hold both once a
+    generated take has been edited or spliced into.
+
+    This is the single definition of "user-defined keyframe" in the addon:
+    :func:`sample_pose_keyframes` turns each of these frames into one
+    ``pose_keyframe`` constraint, and ``key_poses`` draws exactly the same
+    frames in the viewport — so the plan the artist sees is the plan the
+    request carries.
+
+    ``frame_range`` is inclusive on both ends; ``None`` means no limit.
+    Returns ``(sorted authored frames, bones with rotation F-curves)``. Note
+    the bone set is *every* rotation-keyed bone, generated samples included —
+    callers use it to answer "is there a body pose here at all", which the
+    keyframe type has no bearing on.
+    """
+    frames: set[int] = set()
+    keyed_bones: set[str] = set()
+    if source_action is None:
+        return [], keyed_bones
+    for fc in iter_action_fcurves(source_action):
+        bone_name = _bone_name_from_data_path(fc.data_path)
+        if bone_name is None:
+            continue
+        if "rotation" not in fc.data_path:
+            continue
+        keyed_bones.add(bone_name)
+        for kp in fc.keyframe_points:
+            if kp.type == 'GENERATED':
+                continue
+            f = int(round(kp.co.x))
+            if frame_range is None or frame_range[0] <= f <= frame_range[1]:
+                frames.add(f)
+    return sorted(frames), keyed_bones
+
+
 def sample_pose_keyframes(
     armature_obj: bpy.types.Object,
     *,
@@ -1004,34 +1050,20 @@ def sample_pose_keyframes(
     # only keyframes are root-bone location keys (the path_follow sync case)
     # therefore emits zero pose_keyframes; the root location flows through
     # root_path instead.
-    interesting_frames: set[int] = set()
-    keyed_bones: set[str] = set()
-    for fc in iter_action_fcurves(source_action):
-        bone_name = _bone_name_from_data_path(fc.data_path)
-        if bone_name is None:
-            continue
-        if "rotation" not in fc.data_path:
-            continue
-        keyed_bones.add(bone_name)
-        for kp in fc.keyframe_points:
-            # Never pin the model's own output back at it. A bake tags its
-            # dense samples GENERATED and leaves the user's anchors as real
-            # keys, so the type is the exact signal for "did a human put this
-            # here" — which the action's NAME is not: an action can hold both
-            # once a generated take has been edited or spliced into.
-            if kp.type == 'GENERATED':
-                continue
-            f = int(round(kp.co.x))
-            if frame_range[0] <= f <= frame_range[1]:
-                interesting_frames.add(f)
-    if not interesting_frames or not keyed_bones:
+    authored, keyed_bones = authored_pose_frames(
+        source_action, frame_range=frame_range,
+    )
+    if not authored or not keyed_bones:
         return []
 
     # In control-rig mode the user keys controls; the deform bones (what
     # we serialize) get their pose from the constraint stack. Sample those.
     # In direct mode the user keys the deform bones themselves; sample the
     # bones that actually have rotation keyframes.
-    sample_bone_names = deform_bones if is_control_rig else keyed_bones
+    # Intersected with what the skeleton carries: a keyed helper bone is still
+    # not a joint the server knows.
+    sample_bone_names = (deform_bones if is_control_rig else keyed_bones) & (
+        request_builder.request_joint_set(armature_obj))
 
     # Temporarily attach the source action so frame evaluation hits the
     # user's authored poses.
@@ -1071,7 +1103,7 @@ def sample_pose_keyframes(
     constraints: list[dict[str, Any]] = []
     sampled_pbs = [pb for pb in armature_obj.pose.bones if pb.name in sample_bone_names]
     try:
-        for f in sorted(interesting_frames):
+        for f in authored:
             scene.frame_set(f)
             # Force depsgraph re-evaluation — ``scene.frame_set`` alone
             # doesn't always propagate through drivers / constraint stacks /
@@ -1171,14 +1203,12 @@ def sample_pose_at_frame(
 
     from . import request_builder  # noqa: PLC0415 — module-load circular
 
-    deform_bones = request_builder.detect_deform_bones(armature_obj)
+    # Only joints the skeleton will carry. Sampling every pose bone put the
+    # rig's control handles into joint_rotations the moment one existed, and
+    # the server rejects a constraint naming a joint it was never given.
+    sample_bone_names = set(request_builder.request_joint_set(armature_obj))
+    deform_bones = request_builder.emitted_deform_bones(armature_obj)
     is_control_rig = request_builder.is_control_rig(armature_obj)
-
-    sample_bone_names = (
-        deform_bones
-        if is_control_rig
-        else {pb.name for pb in armature_obj.pose.bones}
-    )
     if bone_names is not None:
         sample_bone_names = sample_bone_names & bone_names
     if not sample_bone_names:
