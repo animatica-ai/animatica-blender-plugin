@@ -24,6 +24,13 @@ bl_info = {
     "category": "Animation",
 }
 
+#: The release this build came from. ``bl_info["version"]`` carries numbers
+#: only, so on its own it cannot tell preview1 from preview2 — and the updater
+#: comparing two builds that both call themselves 0.6.0 would never offer the
+#: newer one. The zip target rewrites this line; a source checkout is the
+#: final release of its number, which is the conservative reading.
+VERSION_TAG = "v0.6.0"
+
 import bpy
 from bpy.app.handlers import persistent
 

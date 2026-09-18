@@ -16,6 +16,11 @@ DIST          := dist
 # for a build that is not a release.
 VERSION_SUFFIX ?=
 ZIP           := $(DIST)/animatica-blender-$(VERSION)$(VERSION_SUFFIX).zip
+# What this build calls itself to the updater: v0.6.0, or v0.6.0-preview2.
+VERSION_TAG   := v$(VERSION)$(VERSION_SUFFIX)
+STAMP_TAG      = python3 -c 'import re,sys,pathlib;p=pathlib.Path(sys.argv[1]);\
+p.write_text(re.sub(r"^VERSION_TAG = .*$$", "VERSION_TAG = \"$(VERSION_TAG)\"", \
+p.read_text(), count=1, flags=re.M))' 
 
 # macOS default Blender 5.x addon path. Override on Linux/Windows.
 BLENDER_ADDONS_DIR ?= $(HOME)/Library/Application Support/Blender/5.0/scripts/addons
@@ -37,6 +42,7 @@ zip-with-model:
 	@rm -rf $(DIST)/.stage && mkdir -p $(DIST)/.stage
 	@find $(ADDON) -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 	@cp -R $(ADDON) $(DIST)/.stage/$(ADDON)
+	@$(STAMP_TAG) $(DIST)/.stage/$(ADDON)/__init__.py
 	@mkdir -p $(DIST)/.stage/$(ADDON)/autoposer/model
 	@cp "$(MODEL_DIR)"/poser.onnx "$(MODEL_DIR)"/ik.onnx "$(MODEL_DIR)"/meta.json 		$(DIST)/.stage/$(ADDON)/autoposer/model/
 	@rm -f $(ZIP)
@@ -44,10 +50,18 @@ zip-with-model:
 	@rm -rf $(DIST)/.stage
 	@echo "→ $(ZIP) (with model)"
 
+# Staged rather than zipped in place, so the build can stamp its own release
+# tag into the copy without touching the working tree. The updater compares
+# that tag, which is the only way preview2 can know it is newer than preview1.
 $(ZIP): $(shell find $(ADDON) -name '*.py' -not -path '*/__pycache__/*')
 	@mkdir -p $(DIST)
+	@rm -rf $(DIST)/.stage && mkdir -p $(DIST)/.stage
 	@find $(ADDON) -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
-	zip -r $(ZIP) $(ADDON) -x '*/__pycache__/*' -x '*.pyc'
+	@cp -R $(ADDON) $(DIST)/.stage/$(ADDON)
+	@$(STAMP_TAG) $(DIST)/.stage/$(ADDON)/__init__.py
+	@rm -f $(ZIP)
+	@cd $(DIST)/.stage && zip -qr ../$(notdir $(ZIP)) $(ADDON) -x '*/__pycache__/*' -x '*.pyc'
+	@rm -rf $(DIST)/.stage
 	@echo "→ $(ZIP)"
 
 install:

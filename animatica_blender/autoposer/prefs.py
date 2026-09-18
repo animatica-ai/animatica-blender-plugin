@@ -162,50 +162,40 @@ PROPERTIES = {
 
 
 def draw(layout, prefs, context):
-    lay = layout
-    st = engine.status()
+    """The poser, in one line — and everything it took to get there, folded.
 
-    box = lay.box()
-    row = box.row()
-    row.label(text="Inference runtime",
-              icon="CHECKMARK" if st["runtime"] else "ERROR")
+    Both halves install themselves now, so the page's job is no longer to hand
+    someone the buttons for that. It is to say whether the poser is ready, and
+    to keep the tools for when it is not within reach but out of the way.
+    """
+    st = engine.status()
     installing = engine.install_state()
-    if st["runtime"]:
-        row.label(text="ready")
+    fetching = engine.fetch_state()
+
+    box = layout.box()
+    row = box.row(align=True)
+    if st["runtime"] and st["model"]:
+        row.label(text="Ready" + (f"  ·  model step {st['step']}" if st["step"] else ""),
+                  icon='CHECKMARK')
+    elif fetching["running"]:
+        row.label(text=f"Downloading the model…  {engine.fetch_percent():.0f}%", icon='SORTTIME')
     elif installing["running"]:
-        row.label(text="installing…")
+        row.label(text="Installing the inference runtime…", icon='SORTTIME')
+    elif installing["error"] or fetching["error"]:
+        row.alert = True
+        row.label(text=(installing["error"] or fetching["error"])[:60], icon='ERROR')
     else:
-        row.label(text="not installed")
-    if not st["runtime"]:
-        if installing["running"]:
-            box.label(text="fetching onnxruntime in the background, ~75 MB",
-                      icon="SORTTIME")
-        else:
-            if installing["error"]:
-                err = box.row()
-                err.alert = True
-                err.label(text=installing["error"][:70], icon="ERROR")
-            box.operator("autoposer.install_runtime", icon="IMPORT")
-            box.label(text="onnxruntime, ~75 MB, once per machine", icon="INFO")
+        row.label(text="Not set up yet", icon='ERROR')
     box.prop(prefs, "auto_install_runtime")
 
-    box = lay.box()
-    fetching = engine.fetch_state()
-    row = box.row()
-    row.label(text="Model", icon="CHECKMARK" if st["model"] else "ERROR")
-    if st["model"]:
-        row.label(text=f"step {st['step']}" if st["step"] else "ready")
-    elif fetching["running"]:
-        row.label(text=f"downloading… {engine.fetch_percent():.0f}%")
-    else:
-        row.label(text="not downloaded")
-    if not st["model"] and fetching["running"]:
-        box.label(text="fetching the model in the background, ~150 MB", icon="SORTTIME")
-    elif fetching["error"] and not st["model"]:
-        err = box.row()
-        err.alert = True
-        err.label(text=fetching["error"][:70], icon="ERROR")
-    col = box.column(align=True)
+    header, body = layout.panel("animatica_prefs_poser_advanced", default_closed=True)
+    header.label(text="Advanced")
+    if body is None:
+        return
+
+    # Where the model comes from. Only meaningful when someone is overriding
+    # the default, which is the whole reason this is behind a fold.
+    col = body.column(align=True)
     col.prop(prefs, "model_source", expand=True)
     if prefs.model_source == "HF":
         col.prop(prefs, "hf_repo")
@@ -215,26 +205,27 @@ def draw(layout, prefs, context):
         col.prop(prefs, "hf_token")
     elif prefs.model_source == "LOCAL":
         col.prop(prefs, "local_path")
-    row = box.row(align=True)
-    row.operator("autoposer.get_model", icon="IMPORT")
-    row.operator("autoposer.check", icon="CHECKMARK")
+
     if st["model"]:
-        box.label(text=st["model_dir"], icon="FILE_FOLDER")
+        where = body.column(align=True)
+        where.active = False
+        where.label(text=st["model_dir"], icon='FILE_FOLDER')
         if st["model_source"]:
-            box.label(text=f"from {st['model_source']}")
-        box.operator("autoposer.forget_model", icon="TRASH")
+            where.label(text=f"from {st['model_source']}")
 
-    box = lay.box()
-    box.label(text="Storage")
-    box.prop(prefs, "cache_dir")
-    box.prop(prefs, "threads")
-    box.label(text=st["data_dir"], icon="FILE_FOLDER")
-    hint = engine.env_hint()
-    if hint:
-        box.label(text=f"environment in use: {hint}", icon="INFO")
-    lay.label(text="Nothing is sent anywhere: every solve runs in this process.",
-              icon="LOCKED")
+    row = body.row(align=True)
+    row.operator("autoposer.get_model", icon='IMPORT',
+                 text="Download" if not st["model"] else "Re-download")
+    row.operator("autoposer.check", icon='CHECKMARK', text="Self-test")
+    row = body.row(align=True)
+    if not st["runtime"]:
+        row.operator("autoposer.install_runtime", icon='IMPORT')
+    if st["model"]:
+        row.operator("autoposer.forget_model", icon='TRASH')
 
+    body.separator()
+    body.prop(prefs, "cache_dir")
+    body.prop(prefs, "threads")
 
 
 CLASSES = (AP_OT_install_runtime, AP_OT_get_model, AP_OT_check, AP_OT_forget_model)

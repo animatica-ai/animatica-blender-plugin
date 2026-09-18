@@ -433,6 +433,35 @@ class PromptBlock(PropertyGroup):
 CLOUD_API_URL = "https://api.animatica.ai"
 
 
+def _draw_model_details(layout, caps) -> None:
+    """What the connected server says it can do — one model per box.
+
+    Kept out of the way rather than deleted: when a generation is refused for
+    a reason that makes no sense, this is the page that explains it.
+    """
+    layout.label(text=f"MMCP {caps.get('protocol_version', '?')}"
+                      f"  ·  {caps.get('coordinate_system', '?')}"
+                      f"  ·  {caps.get('units', '?')}")
+    for m in caps.get("models", []):
+        box = layout.box()
+        box.label(text=m.get("id", "?"), icon='OUTLINER_OB_ARMATURE')
+        joints = len(m.get("canonical_skeleton", {}).get("joints", []))
+        retarget = "yes" if m.get("supports_retargeting") else "no"
+        col = box.column(align=True)
+        col.active = False
+        col.label(text=f"{joints} joints @ {m.get('fps', '?')} fps  ·  retargeting: {retarget}")
+        col.label(text="segments: " + (", ".join(m.get("supported_segments") or []) or "—"))
+        col.label(text="constraints: " + (", ".join(m.get("supported_constraints") or []) or "—"))
+        limits = m.get("limits") or {}
+        parts = []
+        if m.get("recommended_max_duration_seconds") is not None:
+            parts.append(f"recommended ≤ {m['recommended_max_duration_seconds']:g}s")
+        if limits.get("max_duration_seconds") is not None:
+            parts.append(f"max {limits['max_duration_seconds']:g}s")
+        if parts:
+            col.label(text="  ·  ".join(parts))
+
+
 class AnimaticaAddonPreferences(AddonPreferences):
     """Addon-level preferences — edit in ``Edit > Preferences > Add-ons > Animatica``."""
 
@@ -507,117 +536,95 @@ class AnimaticaAddonPreferences(AddonPreferences):
     # through the standalone addon keeps using what it downloaded.
 
     def draw(self, context):
+        """Three questions, in the order anyone opening this page has them.
+
+        Who am I, what am I talking to, and is the poser on this machine
+        ready. Everything else — protocol details, model sources, caches,
+        thread counts — is recovery equipment, and it is folded away: needed
+        on the day something breaks, noise on every other day.
+        """
         from . import mmcp_client, updater
 
         layout = self.layout
 
-        # --- Version + updates ------------------------------------------------
-        # First, because "which build am I running" is the first question asked
-        # of anyone reporting something odd.
+        # --- This build -------------------------------------------------------
         updater.check_async()
         updater.draw_preferences(layout, context)
+
+        # --- Account ----------------------------------------------------------
         layout.separator()
-
-        # --- Server selection -------------------------------------------------
-        col = layout.column(align=True)
-        col.label(text="Server", icon='WORLD_DATA')
-
-        # Cloud URL: always visible, never editable.
-        row = col.row(align=True)
-        row.enabled = False
-        row.label(text=f"Animatica Cloud — {CLOUD_API_URL}/")
-
-        col.prop(self, "self_hosted")
-        if self.self_hosted:
-            col.prop(self, "server_url", text="Override URL")
-
-        # --- Connection status + connect/reconnect ----------------------------
-        layout.separator()
-        caps = mmcp_client.cached_capabilities()
+        layout.label(text="Account", icon='USER')
         box = layout.box()
-        if caps is None:
-            mmcp_client.connect_async()
-            err = mmcp_client.last_connection_error()
-            if mmcp_client.connecting() or not err:
-                box.label(text="Connecting…", icon='SORTTIME')
-            else:
-                box.label(text="Cannot reach the server", icon='ERROR')
-                for line in err.split("\n")[:3]:
-                    box.label(text=line)
-                box.operator("animatica.connect", icon='FILE_REFRESH', text="Try again")
-        else:
-            n_models = len(caps.get("models", []))
-            row = box.row()
-            row.label(text=f"Connected — {n_models} model(s)", icon='LINKED')
-            row.operator("animatica.connect", icon='FILE_REFRESH', text="Reconnect")
-
-            proto = caps.get("protocol_version", "?")
-            box.label(text=f"MMCP {proto} · {caps.get('coordinate_system', '?')} · {caps.get('units', '?')}")
-
-            for m in caps.get("models", []):
-                mbox = box.box()
-                mbox.label(text=m.get("id", "?"), icon='OUTLINER_OB_ARMATURE')
-                joints = len(m.get("canonical_skeleton", {}).get("joints", []))
-                fps = m.get("fps", "?")
-                retarget = "yes" if m.get("supports_retargeting") else "no"
-                mbox.label(text=f"{joints} joints @ {fps} fps · retargeting: {retarget}")
-
-                segs = ", ".join(m.get("supported_segments") or []) or "—"
-                mbox.label(text=f"segments: {segs}")
-                cons = ", ".join(m.get("supported_constraints") or []) or "—"
-                mbox.label(text=f"constraints: {cons}")
-
-                limits = m.get("limits") or {}
-                max_dur = limits.get("max_duration_seconds")
-                rec_dur = m.get("recommended_max_duration_seconds")
-                if max_dur is not None or rec_dur is not None:
-                    parts = []
-                    if rec_dur is not None:
-                        parts.append(f"recommended ≤ {rec_dur:g}s")
-                    if max_dur is not None:
-                        parts.append(f"max {max_dur:g}s")
-                    mbox.label(text=" · ".join(parts))
-
-        layout.separator()
-
-        # --- Auth section -----------------------------------------------------
-        # An if/elif chain rather than an early return: the Autoposer section
-        # below is about work that happens on this machine and has to be
-        # reachable whether or not the cloud is signed into.
         if self.self_hosted:
-            box = layout.box()
-            box.label(text="Self-hosted: sign-in not required", icon='INFO')
+            box.label(text="Self-hosted — no sign-in needed", icon='INFO')
         elif self.access_token:
-            box = layout.box()
-            row = box.row()
-            row.label(text=f"Signed in: {self.email}", icon='CHECKMARK')
-            if self.tier:
-                row.label(text=f"({self.tier})")
-            row = box.row()
+            # Split rather than a plain row: an even share would give signing
+            # out half the width, and it is not half the point of the row.
+            row = box.split(factor=0.75)
+            who = self.email or "signed in"
+            row.label(text=who + (f"  ·  {self.tier}" if self.tier else ""), icon='CHECKMARK')
             row.operator("animatica.signout", icon='X', text="Sign out")
         else:
-            box = layout.box()
             expired = mmcp_client.session_expired()
             if expired:
                 row = box.row()
                 row.alert = True
                 row.label(text=expired.capitalize(), icon='ERROR')
             else:
-                box.label(text="Animatica Cloud — sign in", icon='USER')
+                box.label(text="Sign in to generate motion", icon='USER')
             box.operator("animatica.signin", icon='IMPORT', text="Sign in")
 
-        # --- Autoposer --------------------------------------------------------
+        # --- Server -----------------------------------------------------------
         layout.separator()
-        header = layout.row()
-        header.label(text="Autoposer — poses solved on this machine", icon='ARMATURE_DATA')
+        layout.label(text="Server", icon='WORLD_DATA')
+        box = layout.box()
+        caps = mmcp_client.cached_capabilities()
+        row = box.split(factor=0.75)
+        if caps is None:
+            mmcp_client.connect_async()
+            err = mmcp_client.last_connection_error()
+            if mmcp_client.connecting() or not err:
+                row.label(text="Connecting…", icon='SORTTIME')
+                row.label(text="")              # keep the split's second column filled
+            else:
+                row.alert = True
+                row.label(text="Cannot reach the server", icon='ERROR')
+                row.operator("animatica.connect", icon='FILE_REFRESH', text="Try again")
+                for line in err.split("\n")[:2]:
+                    sub = box.row()
+                    sub.active = False
+                    sub.label(text=line[:70])
+        else:
+            models = caps.get("models", [])
+            row.label(text=f"Connected  ·  {len(models)} model"
+                           + ("" if len(models) == 1 else "s"), icon='LINKED')
+            row.operator("animatica.connect", icon='FILE_REFRESH', text="Reconnect")
+
+        sub = box.row()
+        sub.active = False
+        sub.label(text=("your own server" if self.self_hosted
+                        else f"Animatica Cloud · {CLOUD_API_URL}"))
+        box.prop(self, "self_hosted")
+        if self.self_hosted:
+            box.prop(self, "server_url", text="URL")
+
+        # What each model can do: true, occasionally needed, and nobody's first
+        # question. Folded.
+        if caps is not None and caps.get("models"):
+            header, body = layout.panel("animatica_prefs_models", default_closed=True)
+            header.label(text="Models and protocol")
+            if body is not None:
+                _draw_model_details(body, caps)
+
+        # --- The poser --------------------------------------------------------
+        layout.separator()
+        layout.label(text="Poser", icon='ARMATURE_DATA')
         clash = autoposer.superseded_addons()
         if clash:
             warn = layout.row()
             warn.alert = True
-            warn.label(
-                text=f"Disable the standalone addon: {', '.join(clash)}",
-                icon='ERROR',
-            )
+            warn.label(text=f"disable the standalone {', '.join(clash)} addon",
+                       icon='ERROR')
         autoposer_prefs.draw(layout, self, context)
 
 

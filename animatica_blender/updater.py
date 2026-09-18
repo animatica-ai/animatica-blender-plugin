@@ -104,6 +104,20 @@ def current_version() -> tuple:
     return tuple(bl_info["version"])
 
 
+def current_tag() -> str:
+    """The release tag this build was cut from, e.g. ``v0.6.0-preview1``.
+
+    Stamped into ``__init__`` by the zip target. Without it every preview of
+    0.6.0 looks like every other one, and a tester on preview1 is never told
+    about preview2 — which is most of the point of having an updater during a
+    preview.
+    """
+    from . import VERSION_TAG
+
+    tag = (VERSION_TAG or "").strip()
+    return tag or "v" + ".".join(str(v) for v in current_version())
+
+
 def _sort_key(tag: str):
     parsed = parse_tag(tag)
     return parsed if parsed is not None else ((0, 0, 0), 0, 0)
@@ -112,15 +126,16 @@ def _sort_key(tag: str):
 def is_newer(tag: str) -> bool:
     """Is ``tag`` a build the artist does not have?
 
-    The installed build has no suffix to compare — bl_info carries numbers
-    only — so it is treated as a final release of its version. That is the
-    conservative reading: it means a preview of the SAME number is not offered
-    as an upgrade to someone already running that number.
+    Both sides are read the same way, so preview2 is newer than preview1 and
+    the final release is newer than either. A build whose own tag cannot be
+    parsed falls back to "the final release of its version number", which
+    offers nothing older and nothing sideways.
     """
     parsed = parse_tag(tag)
     if parsed is None:
         return False
-    return parsed > (current_version(), 1, 0)
+    mine = parse_tag(current_tag()) or (current_version(), 1, 0)
+    return parsed > mine
 
 
 # ---------------------------------------------------------------------------
