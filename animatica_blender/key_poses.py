@@ -1389,6 +1389,29 @@ def pick_frame(context, x: float, y: float) -> int | None:
     return best_frame
 
 
+def _depth_only(draw, *, xray: bool) -> None:
+    """Lay one ghost's nearest surface into the depth buffer, drawing no colour.
+
+    Alpha adds up. A translucent body drawn straight has one layer of tint over
+    the chest, two where an arm crosses it and three across a hand — the shape
+    reads as blotches rather than a body. The cure is the standard one: write
+    this ghost's depth first, then shade only the fragments that match it, so
+    every pixel is tinted exactly once no matter how much of the body stacks up
+    behind it.
+
+    ``ALWAYS`` under X-Ray, because there the ghost is meant to ignore the
+    scene's depth; the nearest-surface test then becomes last-triangle-wins
+    within the ghost, which is uniform all the same.
+    """
+    gpu.state.color_mask_set(False, False, False, False)
+    gpu.state.depth_mask_set(True)
+    gpu.state.depth_test_set('ALWAYS' if xray else 'LESS_EQUAL')
+    draw()
+    gpu.state.depth_mask_set(False)
+    gpu.state.color_mask_set(True, True, True, True)
+    gpu.state.depth_test_set('EQUAL')
+
+
 def _draw_geometry():
     """POST_VIEW callback: the key-pose ghosts and the motion trail."""
     context = bpy.context
@@ -1408,10 +1431,13 @@ def _draw_geometry():
     shader = _shader()
     ghosts = _ghosts["ghosts"]
 
+    xray = settings.key_pose_xray
+    scene_depth = 'NONE' if xray else 'LESS_EQUAL'
+
     gpu.state.blend_set('ALPHA')
-    gpu.state.depth_test_set('NONE' if settings.key_pose_xray else 'LESS_EQUAL')
-    # Test against the scene's depth but don't write to it: a translucent
-    # ghost that wrote depth would punch a hole in every ghost after it.
+    gpu.state.depth_test_set(scene_depth)
+    # Nothing writes depth except each ghost's own pre-pass, which turns the
+    # mask on for exactly as long as it takes (see _depth_only).
     gpu.state.depth_mask_set(False)
     try:
         if trail_ready:
@@ -1431,7 +1457,9 @@ def _draw_geometry():
                 # Back faces would double the alpha wherever the silhouette
                 # folds over itself and turn the ghost into a solid blob.
                 gpu.state.face_culling_set('BACK')
-                batches["tris"].draw(shader)
+                _depth_only(lambda: batches["tris"].draw(shader), xray=xray)
+                batches["tris"].draw(shader)          # now depth-test EQUAL
+                gpu.state.depth_test_set(scene_depth)
                 gpu.state.face_culling_set('NONE')
             if batches["lines"] is not None:
                 line_shader = _line_uniform_shader()
@@ -1441,10 +1469,18 @@ def _draw_geometry():
                 line_shader.uniform_float(
                     "color", (*rgb, min(1.0, alpha * BONE_ALPHA_BOOST)),
                 )
+                if batches["tris"] is None:
+                    # Sticks cross each other as readily as limbs do, so they
+                    # get the same single-layer treatment — but only when they
+                    # are the whole ghost. Alongside a mesh they would sit
+                    # behind its surface and fail the equality test entirely.
+                    _depth_only(lambda: batches["lines"].draw(line_shader), xray=xray)
                 batches["lines"].draw(line_shader)
+                gpu.state.depth_test_set(scene_depth)
                 shader.bind()
     finally:
         gpu.state.blend_set('NONE')
+        gpu.state.color_mask_set(True, True, True, True)
         gpu.state.depth_mask_set(True)
         gpu.state.depth_test_set('NONE')
         gpu.state.face_culling_set('NONE')
