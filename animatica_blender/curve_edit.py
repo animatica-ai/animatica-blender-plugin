@@ -550,8 +550,11 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         default=False,
     )
     axis: bpy.props.StringProperty(
-        name="Axis",
-        description="Constrain the move to a world axis: X, Y, Z, or empty for the view plane",
+        name="Constraint",
+        description=(
+            "What the move is confined to: one world axis (X, Y, Z), a world "
+            "plane (XY, YZ, ZX), or empty for the plane facing the viewer"
+        ),
         default="",
     )
 
@@ -579,9 +582,6 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             "frame": int(self.frame), "origin": origin, "target": origin.copy(),
             "points": None, "parents": None, "solve": None, "error": "",
         })
-        # Drag in the plane facing the viewer through the grabbed point — the
-        # depth the artist cannot see is the one they should not be changing
-        # by accident.
         self._plane_no = context.region_data.view_rotation @ Vector((0.0, 0.0, 1.0))
         self._solve(context, event)
         context.area.header_text_set(
@@ -611,11 +611,19 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         co = (event.mouse_region_x, event.mouse_region_y)
         origin = view3d_utils.region_2d_to_origin_3d(region, rv3d, co)
         direction = view3d_utils.region_2d_to_vector_3d(region, rv3d, co)
-        if self.axis:
+        if len(self.axis) == 1:
             hit = _closest_on_axis(_drag["origin"], _AXES[self.axis], origin, direction)
             return hit or _drag["origin"]
+        if len(self.axis) == 2:
+            a, b = (_AXES[c] for c in self.axis)
+            normal = a.cross(b)
+        else:
+            # The plane facing the viewer, through the grabbed point — the
+            # depth the artist cannot see is the one they should not be
+            # changing by accident.
+            normal = self._plane_no
         hit = intersect_line_plane(
-            origin, origin + direction * 10000.0, _drag["origin"], self._plane_no,
+            origin, origin + direction * 10000.0, _drag["origin"], normal,
         )
         return hit or _drag["origin"]
 
@@ -686,15 +694,34 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 
 #: Blender's own axis colours, so the handles mean what they mean everywhere else.
-_AXIS_COLOUR = {"X": (0.93, 0.25, 0.30), "Y": (0.51, 0.78, 0.13), "Z": (0.15, 0.42, 0.93)}
-# Sized against Blender's own move gizmo: big enough to aim at without the
-# handles swallowing the curve they sit on.
-GIZMO_ARROW_LENGTH = 1.7
-GIZMO_DOT_SCALE = 0.26
+#: Blender's translate gizmo, part for part: an arrow per axis, a plane handle
+#: per pair, and a ring in the middle for the view plane. Built from the same
+#: gizmo primitives Blender's own is, so it takes the theme's axis colours and
+#: the artist's gizmo size rather than inventing a look of its own.
+_AXIS_ORDER = ("X", "Y", "Z")
+#: Each plane handle by the axis it is perpendicular to — which is also the
+#: colour Blender gives it.
+_PLANES = {"X": "YZ", "Y": "ZX", "Z": "XY"}
+
+ARROW_LENGTH = 1.0
+PLANE_OFFSET = 0.42          # along each of the plane's own two axes
+PLANE_SCALE = 0.16
+RING_SCALE = 0.22
 
 
-def _axis_matrix(axis: Vector, origin: Vector) -> Matrix:
-    """Place an arrow gizmo — which points along its own +Z — onto a world axis."""
+def _theme_axis_colours():
+    """The viewport's own axis colours, so X is the red the artist's X is."""
+    try:
+        ui = bpy.context.preferences.themes[0].user_interface
+        return {"X": tuple(ui.axis_x)[:3],
+                "Y": tuple(ui.axis_y)[:3],
+                "Z": tuple(ui.axis_z)[:3]}
+    except Exception:                       # noqa: BLE001 — a theme is not worth a traceback
+        return {"X": (0.96, 0.26, 0.31), "Y": (0.55, 0.77, 0.15), "Z": (0.16, 0.45, 0.94)}
+
+
+def _orient(axis: Vector, origin: Vector) -> Matrix:
+    """Place a gizmo that points along its own +Z onto a world axis."""
     up = Vector((0.0, 0.0, 1.0))
     dot = axis.dot(up)
     if dot > 0.9999:
@@ -709,48 +736,59 @@ def _axis_matrix(axis: Vector, origin: Vector) -> Matrix:
 
 
 class ANIMATICA_GGT_curve_point(bpy.types.GizmoGroup):
-    """Handles on the selected trail point.
+    """The translate gizmo, standing on the selected trail point.
 
-    Three axis arrows for a move you can be exact about, and a ring in the
-    middle for the free view-plane drag the click used to start on its own.
-    Every one of them runs the same operator — the gizmo decides only whether
-    an axis constrains it.
+    Blender's own transform gizmo drives an object or a bone; a point on a
+    motion curve is neither, so the same primitives are assembled here — arrow,
+    plane, ring — in the same arrangement and the same theme colours. Every
+    handle runs one operator; the handle says only what constrains the move.
     """
 
     bl_idname = "ANIMATICA_GGT_curve_point"
     bl_label = "Motion Curve Point"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'WINDOW'
-    bl_options = {'3D', 'PERSISTENT', 'SCALE'}
+    # No 'SCALE': Blender's transform gizmo keeps its screen size as you zoom,
+    # and a handle that grew with the view would cover the curve it edits.
+    bl_options = {'3D', 'PERSISTENT'}
 
     @classmethod
     def poll(cls, context):
         return selected_world(context) is not None
 
     def setup(self, context):
-        self._arrows = []
-        for axis, colour in _AXIS_COLOUR.items():
-            gz = self.gizmos.new("GIZMO_GT_arrow_3d")
-            gz.draw_style = 'NORMAL'
-            gz.length = GIZMO_ARROW_LENGTH
-            gz.line_width = 4.0
-            gz.color = colour
-            gz.alpha = 0.9
-            gz.color_highlight = tuple(min(1.0, c + 0.3) for c in colour)
-            gz.alpha_highlight = 1.0
-            gz.use_draw_modal = True
-            self._arrows.append((axis, gz))
+        colours = _theme_axis_colours()
+        self._handles = []
 
-        dot = self.gizmos.new("GIZMO_GT_move_3d")
-        dot.draw_style = 'RING_2D'
-        dot.draw_options = {'ALIGN_VIEW'}
-        dot.scale_basis = GIZMO_DOT_SCALE
-        dot.color = (1.0, 1.0, 1.0)
-        dot.alpha = 0.7
-        dot.color_highlight = (1.0, 1.0, 1.0)
-        dot.alpha_highlight = 1.0
-        dot.use_draw_modal = True
-        self._dot = dot
+        for axis in _AXIS_ORDER:
+            colour = colours[axis]
+            arrow = self.gizmos.new("GIZMO_GT_arrow_3d")
+            arrow.draw_style = 'NORMAL'
+            arrow.length = ARROW_LENGTH
+            arrow.line_width = 2.0
+            self._paint(arrow, colour, 1.0)
+            self._handles.append((axis, arrow))
+
+            plane = self.gizmos.new("GIZMO_GT_primitive_3d")
+            plane.draw_style = 'PLANE'
+            plane.scale_basis = PLANE_SCALE
+            self._paint(plane, colour, 0.6)
+            self._handles.append((_PLANES[axis], plane))
+
+        ring = self.gizmos.new("GIZMO_GT_move_3d")
+        ring.draw_style = 'RING_2D'
+        ring.draw_options = {'ALIGN_VIEW'}
+        ring.scale_basis = RING_SCALE
+        self._paint(ring, (1.0, 1.0, 1.0), 0.6)
+        self._handles.append(("", ring))
+
+    @staticmethod
+    def _paint(gz, colour, alpha: float) -> None:
+        gz.color = colour
+        gz.alpha = alpha
+        gz.color_highlight = (1.0, 1.0, 1.0)
+        gz.alpha_highlight = 1.0
+        gz.use_draw_modal = True
 
     def refresh(self, context):
         pick = selected()
@@ -758,13 +796,20 @@ class ANIMATICA_GGT_curve_point(bpy.types.GizmoGroup):
         if pick is None or origin is None:
             return
         bone, frame = pick
-        for axis, gz in self._arrows:
-            gz.matrix_basis = _axis_matrix(_AXES[axis], origin)
+        for constraint, gz in self._handles:
+            gz.matrix_basis = self._place(constraint, origin)
             props = gz.target_set_operator("animatica.drag_motion_curve")
-            props.bone, props.frame, props.axis = bone, frame, axis
-        self._dot.matrix_basis = Matrix.Translation(origin)
-        props = self._dot.target_set_operator("animatica.drag_motion_curve")
-        props.bone, props.frame, props.axis = bone, frame, ""
+            props.bone, props.frame, props.axis = bone, frame, constraint
+
+    @staticmethod
+    def _place(constraint: str, origin: Vector) -> Matrix:
+        if len(constraint) == 1:                       # an axis arrow
+            return _orient(_AXES[constraint], origin)
+        if len(constraint) == 2:                       # a plane handle, offset into its corner
+            a, b = (_AXES[c] for c in constraint)
+            corner = origin + (a + b) * PLANE_OFFSET
+            return _orient(a.cross(b), corner)
+        return Matrix.Translation(origin)              # the view-plane ring
 
 
 _classes = (ANIMATICA_OT_drag_motion_curve, ANIMATICA_GGT_curve_point)
