@@ -403,19 +403,27 @@ class ANIMATICA_OT_open_releases(bpy.types.Operator):
 def draw_banner(layout, context) -> None:
     """The update row for the sidebar: only when there is something to say."""
     if _state["installed"]:
-        row = layout.row()
-        row.label(text=f"Updated to {_state['installed']} — restart to be sure",
-                  icon='CHECKMARK')
+        box = layout.box()
+        col = box.column(align=True)
+        col.label(text=f"Updated to {_state['installed']}", icon='CHECKMARK')
+        sub = col.row()
+        sub.active = False
+        sub.label(text="restart Blender if anything looks odd")
         return
     if not update_available():
         return
     box = layout.box()
-    row = box.row(align=True)
-    row.label(text=f"{_state['tag']} is available", icon='IMPORT')
+    col = box.column(align=True)
+    # Two rows rather than one: the sidebar is narrow, and a label sharing a
+    # row with a button loses its tail — "v0.6.1-previe…" told nobody which
+    # build was on offer.
+    col.label(text=f"New version: {_state['tag']}", icon='IMPORT')
     if _state["downloading"]:
-        row.label(text="downloading…")
+        sub = col.row()
+        sub.active = False
+        sub.label(text="downloading…")
     else:
-        row.operator("animatica.update", text="Update")
+        col.operator("animatica.update", text="Update")
     if _state["error"]:
         err = box.row()
         err.alert = True
@@ -436,12 +444,16 @@ def draw_preferences(layout, context) -> None:
         box.label(text=f"updated to {_state['installed']} — restart Blender if anything "
                        "looks odd", icon='CHECKMARK')
     elif update_available():
-        row = box.row(align=True)
-        mb = _state["size"] / (1024 * 1024) if _state["size"] else 0.0
-        label = f"{_state['tag']} available" + (f" · {mb:.1f} MB" if mb else "")
-        row.label(text=label, icon='IMPORT')
-        row.operator("animatica.open_releases", text="", icon='URL')
+        # The version gets a line of its own here too: sharing one with two
+        # buttons is how "v0.6.1-preview2" became "v0.6.1…".
+        col = box.column(align=True)
+        # No size here: the panel is as narrow as the artist has made it, and
+        # the confirm dialog states the size anyway. The version is the part
+        # that must survive being elided.
+        col.label(text=f"New version: {_state['tag']}", icon='IMPORT')
+        row = col.row(align=True)
         row.operator("animatica.update", text="Update")
+        row.operator("animatica.open_releases", text="", icon='URL')
         if _state["notes"]:
             note = box.column(align=True)
             note.active = False
