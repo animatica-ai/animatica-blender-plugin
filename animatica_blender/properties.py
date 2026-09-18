@@ -453,6 +453,26 @@ class AnimaticaAddonPreferences(AddonPreferences):
         description="Base URL of your self-hosted MMCP server",
     )
 
+    # --- Updates ----------------------------------------------------------
+    # A preview moves faster than anyone will reinstall by hand, so the addon
+    # looks at its own releases page. Checking is automatic; installing is not.
+    check_updates: BoolProperty(
+        name="Check for updates",
+        default=True,
+        description=(
+            "Ask GitHub once a day whether a newer build has been released. "
+            "Nothing is downloaded or installed until you press Update"
+        ),
+    )
+    update_previews: BoolProperty(
+        name="Include previews",
+        default=True,
+        description=(
+            "Offer pre-release builds as well as final ones. While Animatica "
+            "is itself a preview, this is where the fixes are"
+        ),
+    )
+
     # --- Animatica Cloud session (populated by /auth/login) ----------------
     # Auth is NOT part of the MMCP protocol — it lives at the cloud's proxy
     # in front of /generate. Self-hosted servers ignore the Authorization
@@ -487,9 +507,16 @@ class AnimaticaAddonPreferences(AddonPreferences):
     # through the standalone addon keeps using what it downloaded.
 
     def draw(self, context):
-        from . import mmcp_client
+        from . import mmcp_client, updater
 
         layout = self.layout
+
+        # --- Version + updates ------------------------------------------------
+        # First, because "which build am I running" is the first question asked
+        # of anyone reporting something odd.
+        updater.check_async()
+        updater.draw_preferences(layout, context)
+        layout.separator()
 
         # --- Server selection -------------------------------------------------
         col = layout.column(align=True)

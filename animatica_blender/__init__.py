@@ -41,6 +41,7 @@ from . import pose_edit
 from . import path_follow
 from . import timeline_overlay
 from . import timeline_operators
+from . import updater
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +156,7 @@ def register():
     curve_edit.register()
     timeline_operators.register()
     timeline_overlay.register_draw_handler()
+    updater.register()
 
     _reset_runtime_flags()
 
@@ -163,6 +165,9 @@ def register():
     def _connect_when_ready():
         from . import mmcp_client
         mmcp_client.connect_async()
+        # ...and ask, quietly, whether there is a newer build. Once a day, on a
+        # worker thread; it changes nothing until someone presses Update.
+        updater.check_async()
         return None
 
     bpy.app.timers.register(_connect_when_ready, first_interval=1.0)
@@ -178,6 +183,7 @@ def unregister():
     _purge_stale_handlers(bpy.app.handlers.save_pre, "_animatica_save_pre")
     _purge_stale_handlers(bpy.app.handlers.load_post, "_animatica_load_post")
 
+    updater.unregister()
     timeline_overlay.unregister_draw_handler()
     timeline_operators.unregister()
     curve_edit.unregister()

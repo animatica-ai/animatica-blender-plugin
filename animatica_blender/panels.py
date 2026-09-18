@@ -163,8 +163,15 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
     bl_idname = "ANIMATICA_PT_main"
 
     def draw(self, context):
+        from . import updater
+
         layout = self.layout
         settings = context.scene.animatica
+
+        # A newer build, if there is one. Drawn first and only when it exists:
+        # on a preview, the version someone is running is half of every bug
+        # report, and the sidebar is where they already are.
+        updater.draw_banner(layout, context)
 
         layout.operator(
             "animatica.open_discord_help",
