@@ -1081,13 +1081,15 @@ class AP_OT_build_rig(bpy.types.Operator):
 
 
 # The handles an animator meets on a fresh rig. The taxonomy carries its own
-# ``default_on``, but that is the research rig's opening set: it has a chest
-# handle (the spine follows well enough without one) and no head aim (where a
-# character looks is one of the first things you pose). This is ours.
+# ``default_on``, but that is the research rig's opening set: it steers the
+# torso by the chest and leaves the head out entirely. Ours goes the other
+# way — the spine follows well enough on its own, while where the head sits
+# and where it looks are among the first things anyone poses.
 DEFAULT_CONTROLS = {
     "C_cog_CTRL",                               # hips
     "L_arm_IK_CTRL", "R_arm_IK_CTRL",           # hands
     "L_foot_IK_CTRL", "R_foot_IK_CTRL",         # feet
+    "C_head_CTRL",                              # head
     "C_head_AIM_CTRL",                          # look at
 }
 

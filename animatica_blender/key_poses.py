@@ -1667,22 +1667,32 @@ def _purge_stale_handlers(handler_list, fn_name: str) -> None:
 
 
 def register_draw_handlers() -> None:
+    """Install the two draw handlers, replacing any the previous module load
+    left behind.
+
+    Reusing an existing handle is not enough: the callback Blender holds is
+    the *old module's* function, and it keeps drawing from that module's
+    globals. After a reload it reads properties that no longer exist, raises
+    inside the draw loop, and the overlay silently goes blank. Drop it and
+    bind the handler to the code that is running now.
+    """
     global _geometry_handle, _label_handle
     ns = bpy.app.driver_namespace
-    if ns.get(_NS_GEOMETRY) is None:
-        _geometry_handle = bpy.types.SpaceView3D.draw_handler_add(
-            _draw_geometry, (), 'WINDOW', 'POST_VIEW',
-        )
-        ns[_NS_GEOMETRY] = _geometry_handle
-    else:
-        _geometry_handle = ns[_NS_GEOMETRY]
-    if ns.get(_NS_LABELS) is None:
-        _label_handle = bpy.types.SpaceView3D.draw_handler_add(
-            _draw_screen, (), 'WINDOW', 'POST_PIXEL',
-        )
-        ns[_NS_LABELS] = _label_handle
-    else:
-        _label_handle = ns[_NS_LABELS]
+    for key in (_NS_GEOMETRY, _NS_LABELS):
+        stale = ns.pop(key, None)
+        if stale is not None:
+            try:
+                bpy.types.SpaceView3D.draw_handler_remove(stale, 'WINDOW')
+            except (ValueError, RuntimeError):
+                pass
+    _geometry_handle = bpy.types.SpaceView3D.draw_handler_add(
+        _draw_geometry, (), 'WINDOW', 'POST_VIEW',
+    )
+    ns[_NS_GEOMETRY] = _geometry_handle
+    _label_handle = bpy.types.SpaceView3D.draw_handler_add(
+        _draw_screen, (), 'WINDOW', 'POST_PIXEL',
+    )
+    ns[_NS_LABELS] = _label_handle
 
 
 def unregister_draw_handlers() -> None:

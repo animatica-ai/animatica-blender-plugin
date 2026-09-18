@@ -858,16 +858,19 @@ def _draw_strip_text_editing(text, cursor_pos, x_start, x_end, y_bottom, y_top,
 # ---------------------------------------------------------------------------
 
 def register_draw_handler():
-    """Install the POST_PIXEL draw handler, but only once — even across
-    module reloads.  The handle lives on ``bpy.app.driver_namespace`` so
-    subsequent imports find and reuse it."""
+    """Install the POST_PIXEL draw handler, replacing any left by an earlier
+    module load.  The handle lives on ``bpy.app.driver_namespace`` so a reload
+    finds it instead of stacking a second one — but it is replaced, not
+    reused: the callback Blender holds belongs to the old module and would go
+    on drawing from its globals."""
     global _draw_handle
     ns = bpy.app.driver_namespace
-    existing = ns.get(_NS_KEY)
-    if existing is not None:
-        # Previous module load already installed one — reuse.
-        _draw_handle = existing
-        return
+    stale = ns.pop(_NS_KEY, None)
+    if stale is not None:
+        try:
+            bpy.types.SpaceDopeSheetEditor.draw_handler_remove(stale, "WINDOW")
+        except (ValueError, RuntimeError):
+            pass
     _draw_handle = bpy.types.SpaceDopeSheetEditor.draw_handler_add(
         draw_timeline_strips, (), "WINDOW", "POST_PIXEL",
     )
