@@ -597,7 +597,13 @@ class AnimaticaAddonPreferences(AddonPreferences):
             row.operator("animatica.signout", icon='X', text="Sign out")
         else:
             box = layout.box()
-            box.label(text="Animatica Cloud — sign in", icon='USER')
+            expired = mmcp_client.session_expired()
+            if expired:
+                row = box.row()
+                row.alert = True
+                row.label(text=expired.capitalize(), icon='ERROR')
+            else:
+                box.label(text="Animatica Cloud — sign in", icon='USER')
             box.operator("animatica.signin", icon='IMPORT', text="Sign in")
 
         # --- Autoposer --------------------------------------------------------

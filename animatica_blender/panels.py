@@ -49,8 +49,18 @@ def _draw_signin_hint(layout, context) -> bool:
         return False
     if getattr(prefs, "access_token", ""):
         return False
+    from . import mmcp_client
+
     box = layout.box()
-    box.label(text="Sign in to Animatica to generate", icon='USER')
+    # A session that ended by itself needs a reason, or signing in again looks
+    # like the addon forgetting things at random.
+    expired = mmcp_client.session_expired()
+    if expired:
+        row = box.row()
+        row.alert = True
+        row.label(text=expired.capitalize(), icon='ERROR')
+    else:
+        box.label(text="Sign in to Animatica to generate", icon='USER')
     box.operator("animatica.signin", icon='IMPORT', text="Sign in")
     return True
 

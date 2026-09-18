@@ -1565,6 +1565,9 @@ class ANIMATICA_OT_signout(Operator):
 
     def execute(self, context):
         mmcp_client.sign_out()
+        # Signing out on purpose is not an expired session; drop any notice
+        # left by one, or the sign-in prompt keeps explaining itself.
+        mmcp_client.clear_session_expired()
         self.report({'INFO'}, "Signed out")
         return {'FINISHED'}
 

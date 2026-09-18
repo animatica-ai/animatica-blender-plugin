@@ -15,12 +15,14 @@ Three things this deliberately does NOT do:
   the link with a copy, and the next edit in the working tree silently does
   nothing — which is a very confusing hour. If the addon directory is a
   symlink, updating refuses and says why.
-* **Pretend a hot swap always works.** The swap — disable, install, enable —
+* **Pretend a hot swap is a restart.** The swap — disable, install, enable —
   is genuine and usually clean, because unregister() removes the handlers and
   timers this addon owns. But Python modules already imported stay imported,
-  and anything holding a reference to the old code keeps it. So the report
-  always names the restart, and anything that goes wrong during the swap turns
-  into "restart Blender" rather than a traceback.
+  and anything holding a reference to the old code keeps it. So the answer is
+  always the same sentence, whether the swap went well or badly: restart
+  Blender. Hedging it into "if anything looks odd" asks the artist to judge
+  something they have no way to judge, and the half of the addon still running
+  the old code will not announce itself.
 """
 
 from __future__ import annotations
@@ -345,8 +347,8 @@ class ANIMATICA_OT_check_update(bpy.types.Operator):
 class ANIMATICA_OT_update(bpy.types.Operator):
     bl_idname = "animatica.update"
     bl_label = "Update Animatica"
-    bl_description = ("Download the newer build and install it over this one. "
-                      "Blender is reloaded in place; restart if anything looks odd")
+    bl_description = ("Download the newer build and install it over this one, "
+                      "then restart Blender to finish")
     bl_options = {'REGISTER'}
 
     @classmethod
@@ -363,8 +365,8 @@ class ANIMATICA_OT_update(bpy.types.Operator):
                           + (f" ({mb:.1f} MB)" if mb else "") + "?", icon='IMPORT')
         col = layout.column(align=True)
         col.active = False
-        col.label(text="The addon is reloaded in place — your scene is untouched.")
-        col.label(text="If anything looks odd afterwards, restart Blender.")
+        col.label(text="Your scene is untouched — only the addon is replaced.")
+        col.label(text="Restart Blender afterwards to finish the update.")
 
     def execute(self, context):
         settings = getattr(context.scene, "animatica", None)
@@ -406,9 +408,7 @@ def draw_banner(layout, context) -> None:
         box = layout.box()
         col = box.column(align=True)
         col.label(text=f"Updated to {_state['installed']}", icon='CHECKMARK')
-        sub = col.row()
-        sub.active = False
-        sub.label(text="restart Blender if anything looks odd")
+        col.label(text="Restart Blender to finish", icon='INFO')
         return
     if not update_available():
         return
@@ -441,8 +441,9 @@ def draw_preferences(layout, context) -> None:
     if _state["checking"]:
         box.label(text="checking for updates…", icon='SORTTIME')
     elif _state["installed"]:
-        box.label(text=f"updated to {_state['installed']} — restart Blender if anything "
-                       "looks odd", icon='CHECKMARK')
+        col = box.column(align=True)
+        col.label(text=f"Updated to {_state['installed']}", icon='CHECKMARK')
+        col.label(text="Restart Blender to finish the update", icon='INFO')
     elif update_available():
         # The version gets a line of its own here too: sharing one with two
         # buttons is how "v0.6.1-preview2" became "v0.6.1…".
