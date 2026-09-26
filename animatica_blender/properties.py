@@ -904,7 +904,7 @@ class AnimaticaSettings(PropertyGroup):
 
     last_pose_prompt: StringProperty(
         name="Last pose prompt",
-        default="a person stands in a neutral pose",
+        default="",
         description=(
             "Most-recent prompt used in the Generate Pose dialog. "
             "Pre-fills the dialog the next time it opens so the user "

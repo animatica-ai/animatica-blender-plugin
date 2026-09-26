@@ -1205,6 +1205,48 @@ class ANIMATICA_OT_reject(Operator):
 # Pose generator (single keyframe at current frame, additive)
 # ═══════════════════════════════════════════════════════════════════════════
 
+#: Poses the model answers cleanly, for a dialog that no longer arrives
+#: pre-filled. Each is a shape, not a motion — this generates one frame.
+EXAMPLE_POSES = (
+    ("a person crouches low", "Crouch"),
+    ("a person stands with both arms raised overhead", "Arms overhead"),
+    ("a person sits cross-legged on the floor", "Sit cross-legged"),
+    ("a person in a boxing guard, fists up", "Fighting guard"),
+    ("a person reaches up with their right hand", "Reach up"),
+    ("a person leans forward with hands on knees", "Hands on knees"),
+)
+
+
+def _pose_example_items(self, context):
+    return [(prompt, label, prompt) for prompt, label in EXAMPLE_POSES]
+
+
+class ANIMATICA_OT_use_example_pose(Operator):
+    bl_idname = "animatica.use_example_pose"
+    bl_label = "Use Example Pose"
+    bl_description = "Put this example in the prompt field"
+    bl_options = {"REGISTER", "INTERNAL"}
+
+    example: StringProperty()
+
+    def execute(self, context):
+        # The dialog reads its pre-fill from last_pose_prompt on open, so
+        # writing there and reopening is how an example lands in the field.
+        context.scene.animatica.last_pose_prompt = self.example
+        return bpy.ops.animatica.generate_pose('INVOKE_DEFAULT')
+
+
+class ANIMATICA_MT_example_poses(bpy.types.Menu):
+    bl_idname = "ANIMATICA_MT_example_poses"
+    bl_label = "Try an Example"
+
+    def draw(self, context):
+        layout = self.layout
+        for prompt, label in EXAMPLE_POSES:
+            layout.operator("animatica.use_example_pose",
+                            text=label).example = prompt
+
+
 class ANIMATICA_OT_generate_pose(Operator):
     bl_idname = "animatica.generate_pose"
     bl_label = "Generate Pose at Current Frame"
@@ -1217,7 +1259,11 @@ class ANIMATICA_OT_generate_pose(Operator):
     prompt: StringProperty(
         name="Prompt",
         description="Text describing the pose to generate",
-        default="a person stands in a neutral pose",
+        # Empty on purpose. A pre-filled "a person stands in a neutral pose"
+        # is a prompt nobody chose: press Generate on it and the character
+        # goes to a pose indistinguishable from doing nothing, which reads as
+        # the feature being broken. The examples below are the way in.
+        default="",
     )
     seed: IntProperty(name="Seed", default=42, min=0, max=999999)
     preserve_height: BoolProperty(
@@ -1301,6 +1347,9 @@ class ANIMATICA_OT_generate_pose(Operator):
             cls._pending_seed = None
         layout = self.layout
         layout.prop(self, "prompt")
+        if not (self.prompt or "").strip():
+            layout.menu("ANIMATICA_MT_example_poses",
+                        text="Try an example", icon='PRESET')
         row = layout.row(align=True)
         row.prop(self, "seed")
         row.operator("animatica.randomize_pose_seed", text="", icon='FILE_REFRESH')
@@ -1666,6 +1715,8 @@ _classes = (
     ANIMATICA_OT_connect,
     ANIMATICA_OT_generate,
     ANIMATICA_OT_generate_pose,
+    ANIMATICA_OT_use_example_pose,
+    ANIMATICA_MT_example_poses,
     ANIMATICA_OT_accept,
     ANIMATICA_OT_reject,
     ANIMATICA_OT_cancel_generation,

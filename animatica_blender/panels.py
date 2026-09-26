@@ -328,8 +328,16 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
                 if not has_prompt:
                     box = layout.box()
                     box.label(text="Add a prompt to generate", icon='INFO')
-                    box.label(text="Double-click the Timeline to add a block,")
-                    box.label(text="then double-click it to type a prompt.")
+                    # The example is the short path: one click writes a prompt
+                    # across the scene and the next one generates. Finding the
+                    # Timeline, drawing a block and typing into it is three
+                    # discoveries before anything moves.
+                    box.menu("ANIMATICA_MT_example_prompts",
+                             text="Try an example", icon='PRESET')
+                    sub = box.column(align=True)
+                    sub.active = False
+                    sub.label(text="or double-click the Timeline to add a block,")
+                    sub.label(text="then double-click it to type your own.")
 
             # Why this cannot be sent, asked of the same function the send
             # asks — so the button greys out for exactly the reasons a click

@@ -1100,6 +1100,70 @@ class ANIMATICA_OT_edit_strip_prompt(bpy.types.Operator):
 # Add / remove / regenerate (hooked by header buttons and context menu)
 # ---------------------------------------------------------------------------
 
+#: Prompts that come back well on this model, for someone who has just
+#: installed the addon and has no idea what it responds to. Six, covering the
+#: shapes it does best: travel, a beat of effort, a combination, a change of
+#: level, an isolated gesture, and a stop.
+EXAMPLE_PROMPTS = (
+    ("a person walks forward at a steady pace", "Walk"),
+    ("a person runs forward and comes to a stop", "Run, then stop"),
+    ("a person jumps straight up and lands", "Jump"),
+    ("a person throws a jab followed by a cross", "Jab, cross"),
+    ("a person sits down on a chair", "Sit down"),
+    ("a person waves hello with their right hand", "Wave"),
+)
+
+
+def _example_items(self, context):
+    return [(prompt, label, prompt) for prompt, label in EXAMPLE_PROMPTS]
+
+
+class ANIMATICA_OT_use_example_prompt(bpy.types.Operator):
+    bl_idname = "animatica.use_example_prompt"
+    bl_label = "Try an Example"
+    bl_description = ("Fill the timeline with a prompt that works well on this "
+                      "model — the shortest path from an empty scene to motion")
+    bl_options = {"REGISTER", "UNDO"}
+
+    example: bpy.props.EnumProperty(name="Example", items=_example_items)
+
+    def execute(self, context):
+        scene = context.scene
+        props = scene.animatica
+        text = (self.example or "").strip()
+        if not text:
+            return {'CANCELLED'}
+
+        # Reuse an empty block rather than stacking another one on top: the
+        # addon seeds one across the scene when an armature is picked, and a
+        # first-time user pressing this has exactly that block and no other.
+        target = next((b for b in props.prompt_blocks
+                       if not (b.prompt or "").strip()), None)
+        if target is None:
+            target = props.prompt_blocks.add()
+        target.prompt = text
+        target.frame_start = int(scene.frame_start)
+        target.frame_end = int(scene.frame_end)
+        target.enabled = True
+        props.active_block_index = len(props.prompt_blocks) - 1
+
+        from .properties import save_blocks_to_armature
+        save_blocks_to_armature(props.target_armature, props)
+        self.report({'INFO'}, f"prompt set — press Generate: {text}")
+        return {'FINISHED'}
+
+
+class ANIMATICA_MT_example_prompts(bpy.types.Menu):
+    bl_idname = "ANIMATICA_MT_example_prompts"
+    bl_label = "Try an Example"
+
+    def draw(self, context):
+        layout = self.layout
+        for prompt, label in EXAMPLE_PROMPTS:
+            layout.operator("animatica.use_example_prompt",
+                            text=label).example = prompt
+
+
 class ANIMATICA_OT_add_prompt_block(bpy.types.Operator):
     """Add a new prompt block in the first available gap."""
 
@@ -1546,6 +1610,8 @@ _classes = (
     ANIMATICA_OT_add_prompt_block,
     ANIMATICA_OT_remove_prompt_block,
     ANIMATICA_OT_regenerate_block,
+    ANIMATICA_OT_use_example_prompt,
+    ANIMATICA_MT_example_prompts,
 )
 
 
