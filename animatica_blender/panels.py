@@ -567,8 +567,14 @@ def _draw_review(layout, context, settings, arm) -> None:
     # A row a character: its version, and (several) keep / throw away / again.
     col = box.column(align=True)
     for a in arms:
-        row = col.row(align=True)
-        left = row.row(align=True)
+        # A fixed split, so the buttons line up in a column whatever the
+        # name's length (a row sized them by their labels, and short names
+        # let the arrows run over them).
+        if single:
+            left = col.row(align=True)
+        else:
+            split = col.split(factor=0.72, align=True)
+            left, row = split.row(align=True), split.row(align=True)
         take = variations.take_of(a)
         if take is not None:
             variations.draw(left, a, character="" if single else a.name,
