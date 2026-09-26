@@ -14,9 +14,9 @@ jumps on every wrap. Three steps close it, after the bake:
    the first is spread over the last few frames, on every joint and on the
    root's height, so the last frame lands exactly on the first pose.
 3. **Repeat.** Cycles modifiers on the curves play the loop past its end in
-   Blender. In place, the root repeats as it is; travelling, its travel
-   repeats with offset, so a walking loop keeps walking forward rather than
-   snapping back (see set_root_mode).
+   Blender. The root's travel repeats with offset, so a walking loop keeps
+   walking forward rather than snapping back, and In place holds it on the
+   spot (see close_root).
 
 Keys keep their GENERATED type, so Reject still strips the take.
 """
@@ -98,7 +98,7 @@ def _smooth(t):
     return t * t * (3 - 2 * t)
 
 
-def apply(arm, action, frame_range, in_place=False) -> dict:
+def apply(arm, action, frame_range) -> dict:
     """Close *action* into a loop over part of *frame_range*. Returns what was done."""
     if arm is None or action is None:
         return {}
@@ -118,12 +118,12 @@ def apply(arm, action, frame_range, in_place=False) -> dict:
     if root_loc is not None and len(root_loc) != 3:
         root_loc = None
     if root_loc is not None:
-        # Worked in armature space, not per channel: a root bone can rest
+        # Worked in world space, not per channel: a root bone can rest
         # tilted (Cesium Man's, 4.6 degrees), and then "forward" in its own
         # axes also points a little down -- per channel, a walking loop sank
-        # 8 cm a cycle. `rest` takes a location to armature space.
-        rest = root.bone.matrix_local.to_3x3()
-        where_it_began = rest @ Vector([fc.evaluate(lo) for fc in root_loc])
+        # 8 cm a cycle. `to_world` takes a location offset to world space.
+        to_world = arm.matrix_world.to_3x3() @ root.bone.matrix_local.to_3x3()
+        where_it_began = to_world @ Vector([fc.evaluate(lo) for fc in root_loc])
 
     # 1. Keep only the loop: drop what comes before its start and after its
     #    end, and slide it back so it begins where the block begins.
@@ -169,9 +169,9 @@ def apply(arm, action, frame_range, in_place=False) -> dict:
     # The root: it starts where the character stood, and it closes the way
     # the loop will play (in place or travelling, below).
     if root_loc is not None:
-        back = where_it_began - rest @ Vector([fc.evaluate(lo) for fc in root_loc])
+        back = where_it_began - to_world @ Vector([fc.evaluate(lo) for fc in root_loc])
         back.z = 0.0
-        local_back = rest.inverted() @ back
+        local_back = to_world.inverted() @ back
         for f in range(lo, cut + 1):
             for fc, d in zip(root_loc, local_back):
                 _set(fc, f, fc.evaluate(f) + d)
@@ -185,7 +185,7 @@ def apply(arm, action, frame_range, in_place=False) -> dict:
             mod.mode_before = mod.mode_after = 'REPEAT'
             fc.update()
     if root_loc is not None:
-        set_root_mode(arm, action, in_place)
+        close_root(arm, action)
     return {"start": start, "cut": cut, "frames": cut - lo, "blend": k,
             "seam_deg_before": math.degrees(seam_before), "turned_deg": turned}
 
@@ -201,20 +201,15 @@ def is_looped(arm, action) -> bool:
     return bool(loc) and any(m.type == 'CYCLES' for m in loc[0].modifiers)
 
 
-def set_root_mode(arm, action, in_place) -> None:
-    """Close the root's loop for how it will play: on the spot, or travelling.
+def close_root(arm, action) -> None:
+    """Close the root's height over the loop, and repeat its travel with offset.
 
-    The two want different things of a root bone that rests tilted (Cesium
-    Man's, 4.6 degrees, so its "forward" also points down):
-
-    * **In place** pins the root's own X and Z and leaves its Y free, and on
-      a tilted root Y is nearly vertical. So Y returns to where it started and
-      simply repeats. Offset like the others, an in-place loop climbed 8 cm a
-      cycle. X and Z keep their travel under the pin.
-    * **Travelling** closes the height in armature space and repeats all three
-      channels with offset, so each cycle adds travel on the ground alone.
-
-    Called by apply(), and again when In place is toggled on a looped preview.
+    In world space: the height is made the same at both ends of the loop, and
+    all three location channels repeat with offset, so each cycle adds travel
+    on the ground and nothing else. The same loop then works travelling and in
+    place (In place pins the root's world X and Y and keeps its height), and
+    on a root bone that rests tilted, where one of its own channels carries
+    both travel and height.
     """
     root = next((pb for pb in arm.pose.bones if pb.parent is None), None)
     loc = _bone_curves(action).get((root.name, "location")) if root is not None else None
@@ -224,25 +219,18 @@ def set_root_mode(arm, action, in_place) -> None:
     if lo is None or cut - lo < 8:
         return
     k = max(4, min(BLEND_FRAMES, (cut - lo) // 3))
-    rest = root.bone.matrix_local.to_3x3()
-    if in_place:
-        # Only the channel In place leaves free. X and Z keep their travel,
-        # pinned out of sight by the constraint, so turning In place off again
-        # brings the walk back; closing them too erased it for good.
-        gaps = [0.0, loc[1].evaluate(lo) - loc[1].evaluate(cut), 0.0]
-    else:
-        at = lambda f: rest @ Vector([fc.evaluate(f) for fc in loc])      # noqa: E731
-        gaps = list(rest.inverted() @ Vector((0.0, 0.0, at(lo).z - at(cut).z)))
+    to_world = arm.matrix_world.to_3x3() @ root.bone.matrix_local.to_3x3()
+    at = lambda f: to_world @ Vector([fc.evaluate(f) for fc in loc])      # noqa: E731
+    gaps = list(to_world.inverted() @ Vector((0.0, 0.0, at(lo).z - at(cut).z)))
     for f in range(cut - k, cut + 1):
         w = _smooth((f - (cut - k)) / k)
         for fc, g in zip(loc, gaps):
-            if abs(g) > 1e-7:
+            if abs(g) > 1e-9:
                 _set(fc, f, fc.evaluate(f) + g * w)
-    for i, fc in enumerate(loc):
+    for fc in loc:
         for mod in fc.modifiers:
             if mod.type == 'CYCLES':
-                free = in_place and i == 1          # the channel In place does not pin
-                mod.mode_before = mod.mode_after = 'REPEAT' if free else 'REPEAT_OFFSET'
+                mod.mode_before = mod.mode_after = 'REPEAT_OFFSET'
         fc.update()
 
 
@@ -267,8 +255,11 @@ def _straighten(arm, root, curves, lo, cut) -> float:
     rot = curves.get((root.name, "rotation_quaternion"))
     if not loc or len(loc) != 3 or not rot or len(rot) != 4:
         return 0.0
-    rest = root.bone.matrix_local.to_3x3()
-    at = lambda f: rest @ Vector([fc.evaluate(f) for fc in loc])      # noqa: E731
+    # World space throughout: the ground is world XY whatever the armature
+    # object is turned to (an imported Mixamo rig stands rotated 90 degrees).
+    to_world = arm.matrix_world.to_3x3() @ root.bone.matrix_local.to_3x3()
+    from_world = to_world.inverted()
+    at = lambda f: to_world @ Vector([fc.evaluate(f) for fc in loc])      # noqa: E731
     travel = at(cut) - at(lo)
     travel.z = 0.0
     if travel.length < 0.2:
@@ -279,15 +270,15 @@ def _straighten(arm, root, curves, lo, cut) -> float:
     # Travelling toward +X of -Y is a positive angle; turning back onto -Y is
     # clockwise, the negative of it.
     turn = Quaternion((0.0, 0.0, 1.0), -angle)
-    rest_q = rest.to_quaternion()
-    inv_rest, inv_rest_q = rest.inverted(), rest_q.inverted()
+    frame_q = arm.matrix_world.to_quaternion() @ root.bone.matrix_local.to_quaternion()
+    frame_q_inv = frame_q.inverted()
     pivot = at(lo)
     pivot.z = 0.0
     turn_m = turn.to_matrix()
     for f in range(lo, cut + 1):
-        # Rotation: the root's orientation in armature space is rest @ basis.
+        # Rotation: the root's world orientation is frame_q @ basis.
         q = _quat(rot, f)
-        new = (inv_rest_q @ turn @ rest_q @ q).normalized()
+        new = (frame_q_inv @ turn @ frame_q @ q).normalized()
         if new.dot(q) < 0:
             new.negate()
         for fc, value in zip(rot, new):
@@ -296,6 +287,6 @@ def _straighten(arm, root, curves, lo, cut) -> float:
         p = at(f)
         moved = pivot + turn_m @ (p - pivot)
         moved.z = p.z
-        for fc, value in zip(loc, inv_rest @ moved):
+        for fc, value in zip(loc, from_world @ moved):
             _set(fc, f, value)
     return math.degrees(angle)

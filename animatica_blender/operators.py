@@ -21,6 +21,7 @@ import threading
 import time
 
 import bpy
+from mathutils import Vector
 from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
 from bpy.types import Operator
 
@@ -282,17 +283,20 @@ _INPLACE_CONSTRAINT_NAME = "Animatica_InPlace"
 
 
 def _apply_inplace_constraint(armature_obj, enabled: bool) -> None:
-    """Add or remove a Limit Location constraint on the armature's root bone
-    that pins bone-local X / Z to 0.
+    """Add or remove a Limit Location constraint that holds the root bone's
+    head at its rest position on the ground plane, in world space.
 
-    Non-destructive — fcurves remain untouched, so flipping the toggle off
-    restores the original travel without re-generating. Y is left
-    unconstrained so vertical motion (jumps, crouches) still plays.
+    World space, not the bone's own axes. It used to pin the root's local X
+    and Z to 0, which is the ground plane only when the root bone rests level.
+    Cesium Man's rests tilted 4.6 degrees, so its "forward" channel also
+    carries height: zeroing it took the travel away and lifted the body up to
+    8 cm, and the feet floated. Pinning world X and Y leaves every bit of
+    height alone.
 
-    Used for live preview-time toggling. At Accept, the constraint is
-    "baked" by zeroing the X/Z fcurve values on the per-block actions and
-    then removing the constraint, so the final motion data is genuinely
-    travel-free without relying on a constraint persisting on the rig.
+    Non-destructive: fcurves remain untouched, so flipping the toggle off
+    restores the original travel without re-generating. At Accept the result
+    is baked into the actions by :func:`_zero_root_xz_keyframes` and the
+    constraint removed.
     """
     if armature_obj is None or armature_obj.type != 'ARMATURE':
         return
@@ -307,20 +311,14 @@ def _apply_inplace_constraint(armature_obj, enabled: bool) -> None:
     if enabled:
         con = existing or root_bone.constraints.new('LIMIT_LOCATION')
         con.name = _INPLACE_CONSTRAINT_NAME
-        # Pin X = 0 (bone-local).
-        con.use_min_x = True
-        con.use_max_x = True
-        con.min_x = 0.0
-        con.max_x = 0.0
-        # Pin Z = 0.
-        con.use_min_z = True
-        con.use_max_z = True
-        con.min_z = 0.0
-        con.max_z = 0.0
-        # Y unconstrained — vertical motion stays.
-        con.use_min_y = False
-        con.use_max_y = False
-        con.owner_space = 'LOCAL'
+        spot = armature_obj.matrix_world @ root_bone.bone.head_local
+        con.owner_space = 'WORLD'
+        con.use_min_x = con.use_max_x = True
+        con.min_x = con.max_x = spot.x
+        con.use_min_y = con.use_max_y = True
+        con.min_y = con.max_y = spot.y
+        # World Z free: every bit of height (jumps, crouches, the bob) stays.
+        con.use_min_z = con.use_max_z = False
         con.influence = 1.0
         con.mute = False
     else:
@@ -329,27 +327,40 @@ def _apply_inplace_constraint(armature_obj, enabled: bool) -> None:
 
 
 def _zero_root_xz_keyframes(action, armature_obj) -> int:
-    """Set every root-bone X / Z location keyframe in ``action`` to 0.
+    """Take the root's travel on the ground out of ``action``, keeping its height.
 
-    Used at Accept time when the In-place toggle is on, so the final per-
-    block actions don't carry the original travel as inert keyframe data.
-    Returns the number of fcurves modified.
+    Used at Accept time when In place is on, so the final actions carry no
+    travel as inert keyframe data. Worked out in world space from all three
+    location channels together, for the same reason as the live constraint:
+    on a root bone that rests tilted, zeroing two of its own channels also
+    changed its height. Returns the number of fcurves modified.
     """
     target_path = _root_location_data_path(armature_obj)
-    if target_path is None:
+    root = next((pb for pb in armature_obj.pose.bones if pb.parent is None), None)
+    if target_path is None or root is None:
         return 0
-    n = 0
-    for fc in constraints_ui.iter_action_fcurves(action):
-        if fc.data_path == target_path and fc.array_index in (0, 2):
-            for kp in fc.keyframe_points:
-                kp.co[1] = 0.0
-                # Flatten handles too, otherwise easing curves might wobble
-                # around the new 0.
-                kp.handle_left[1] = 0.0
-                kp.handle_right[1] = 0.0
-            fc.update()
-            n += 1
-    return n
+    curves = {fc.array_index: fc for fc in constraints_ui.iter_action_fcurves(action)
+              if fc.data_path == target_path}
+    if set(curves) != {0, 1, 2}:
+        return 0
+    to_world = armature_obj.matrix_world.to_3x3() @ root.bone.matrix_local.to_3x3()
+    from_world = to_world.inverted()
+    frames = sorted({round(k.co.x) for fc in curves.values() for k in fc.keyframe_points})
+    new = {}
+    for f in frames:
+        offset = to_world @ Vector([curves[i].evaluate(f) for i in range(3)])
+        new[f] = from_world @ Vector((0.0, 0.0, offset.z))
+    for i, fc in curves.items():
+        for kp in fc.keyframe_points:
+            v = new.get(round(kp.co.x))
+            if v is None:
+                continue
+            d = v[i] - kp.co[1]
+            kp.co[1] = v[i]
+            kp.handle_left[1] += d
+            kp.handle_right[1] += d
+        fc.update()
+    return len(curves)
 
 
 def _split_action_into_blocks(
@@ -845,8 +856,7 @@ class ANIMATICA_OT_generate(Operator):
             # A cycle, if asked for: last, so it closes the motion as it will play.
             if getattr(settings, "loop", False):
                 from . import loop
-                done = loop.apply(arm, action, (gen_start, gen_end),
-                                  in_place=bool(getattr(settings, "inplace", False)))
+                done = loop.apply(arm, action, (gen_start, gen_end))
                 if done:
                     # Play whole cycles. Left at the generating range, playback
                     # wrapped mid-cycle and stepped a frame backwards each time.

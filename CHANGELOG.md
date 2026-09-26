@@ -32,7 +32,12 @@ Proscenium, and keep the identifiers those releases actually shipped.
   Generate Motion. Set before generating, it is a choice the bake acts on
   rather than a constraint added at once: pinning the root straight away also
   pinned any root keys you had authored, and key poses read their root
-  position through the pin.
+  position through the pin. In place also no longer lifts the character off
+  the ground. It pinned two of the root bone's own axes, which is the ground
+  plane only when that bone rests level. On a tilted one (Cesium Man's rests
+  at 4.6 degrees) that removed some height along with the travel, and the feet
+  floated. It now holds the root on the ground plane in world space and keeps
+  every bit of height, live and when baked on Accept.
 
 - **See the plan before you generate.** The poses you key are the direction the
   model is given — each one becomes a full-body `pose_keyframe` constraint the

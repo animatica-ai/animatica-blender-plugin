@@ -336,12 +336,7 @@ def _inplace_update(self, context):
     # constraint to add now: pinning the root would pin keys the artist
     # authored, and key poses read their root position through it.
     operators._apply_inplace_constraint(arm, enabled=bool(self.inplace and self.is_previewing))
-    # A looped preview closes its root differently in place and travelling.
-    ad = arm.animation_data
-    if self.is_previewing and ad is not None and ad.action is not None:
-        from . import loop
-        if loop.is_looped(arm, ad.action):
-            loop.set_root_mode(arm, ad.action, bool(self.inplace))
+
 
     # Tag the depsgraph so the viewport reflects the constraint change.
     arm.update_tag()
