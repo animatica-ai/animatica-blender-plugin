@@ -6,7 +6,9 @@ request (``options.num_samples``): same prompts, poses and constraints,
 performed differently, in one generation. The server answers with one glTF
 holding one animation per sample. The first is baked as usual; the answer is
 kept here, with what the bake needs, so another one can be baked in its place
-without asking the server again. Accept keeps the one showing.
+without asking the server again. Accept keeps the one showing. The same for
+each character of a batch, where the review switches them one at a time or
+all together.
 
 Kept in memory only, for the take being previewed: a take that waits across a
 reload of the file keeps the version it shows, and loses the switcher.
@@ -17,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import bpy
-from bpy.props import IntProperty
+from bpy.props import IntProperty, StringProperty
 from bpy.types import Operator
 
 from . import properties
@@ -101,35 +103,57 @@ class ANIMATICA_OT_show_variation(Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     step: IntProperty(default=1)
+    character: StringProperty(
+        default="",
+        description="The character whose take to switch: empty for the active one, "
+                    "\"*\" for every character in the batch review",
+    )
 
     @classmethod
     def poll(cls, context):
+        return not context.scene.animatica.is_generating
+
+    def _targets(self, context) -> list:
         s = context.scene.animatica
-        return (not s.is_generating and s.is_previewing
-                and take_of(properties._live_armature(s.target_armature)) is not None)
+        if self.character == "*":
+            from . import batch
+            names = batch.pending(s)
+        elif self.character:
+            names = [self.character]
+        else:
+            arm = properties._live_armature(s.target_armature)
+            names = [arm.name] if arm is not None and s.is_previewing else []
+        arms = [properties._live_armature(bpy.data.objects.get(n)) for n in names]
+        return [a for a in arms if take_of(a) is not None]
 
     def execute(self, context):
-        arm = properties._live_armature(context.scene.animatica.target_armature)
-        take = take_of(arm)
-        try:
-            show(context, arm, take.index + self.step)
-        except Exception as exc:  # noqa: BLE001 — surfaced to the UI
-            self.report({'ERROR'}, f"Could not switch: {exc}")
+        targets = self._targets(context)
+        if not targets:
+            self.report({'WARNING'}, "No variations to switch between")
             return {'CANCELLED'}
+        for arm in targets:
+            try:
+                show(context, arm, take_of(arm).index + self.step)
+            except Exception as exc:  # noqa: BLE001 — surfaced to the UI
+                self.report({'ERROR'}, f"{arm.name}: could not switch: {exc}")
+                return {'CANCELLED'}
         return {'FINISHED'}
 
 
-def draw(layout, arm) -> None:
-    """Variation k of N, with a way to the neighbours."""
+def draw(layout, arm, *, character: str = "", text: str | None = None) -> None:
+    """Variation k of N, with a way to the neighbours. ``character`` as the
+    operator takes it; ``text`` in place of the label."""
     take = take_of(arm)
     if take is None:
         return
     row = layout.row(align=True)
-    row.operator("animatica.show_variation", text="", icon='TRIA_LEFT').step = -1
+    op = row.operator("animatica.show_variation", text="", icon='TRIA_LEFT')
+    op.step, op.character = -1, character
     mid = row.row(align=True)
     mid.alignment = 'CENTER'
-    mid.label(text=f"Variation {take.index + 1} of {take.count}")
-    row.operator("animatica.show_variation", text="", icon='TRIA_RIGHT').step = 1
+    mid.label(text=text if text is not None else f"Variation {take.index + 1} of {take.count}")
+    op = row.operator("animatica.show_variation", text="", icon='TRIA_RIGHT')
+    op.step, op.character = 1, character
 
 
 def register():

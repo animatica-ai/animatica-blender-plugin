@@ -19,6 +19,10 @@ Two ways to direct them:
   they would pull everyone to the same spot; each character's own key poses
   still go.
 
+Variations apply per character: with Variations at 3 each character comes
+back with three versions, flipped through in the review one character at a
+time or all together, and Accept All keeps the version each one shows.
+
 Every character is one generation against the quota, and the panel says how
 many before the button is pressed.
 """
@@ -33,7 +37,7 @@ from types import SimpleNamespace
 import bpy
 from bpy.types import Operator
 
-from . import constraints_ui, mmcp_client, properties, request_builder
+from . import constraints_ui, mmcp_client, properties, request_builder, variations
 
 #: requests in flight at once; the rest queue behind them
 MAX_PARALLEL = 6
@@ -199,8 +203,6 @@ class ANIMATICA_OT_generate_batch(Operator):
                 continue
             finally:
                 settings.seed = base_seed
-            # One version per character: the switcher is for a single take.
-            req.setdefault("options", {})["num_samples"] = 1
             gen_start, gen_end = request_builder.compute_frame_range(blocks, arm, scene)
             act = arm.animation_data.action if arm.animation_data and arm.animation_data.action else None
             source = act if act is not None and not operators._is_motion_bake_action(act) else None
@@ -257,13 +259,18 @@ class ANIMATICA_OT_generate_batch(Operator):
                     raise RuntimeError("the character was deleted")
                 if arm.animation_data is None:
                     arm.animation_data_create()
-                operators.bake_take(
-                    context, settings, arm, result,
+                bake = dict(
                     prompt_blocks=job.blocks, gen_start=job.gen_start, gen_end=job.gen_end,
-                    anchor_frames=job.anchors,
-                    splice_target=bpy.data.actions.get(job.splice_target_name),
-                    server_looped=job.looped, source_action_name=job.source_name,
+                    anchor_frames=job.anchors, server_looped=job.looped,
+                    source_action_name=job.source_name,
                 )
+                action, _ = operators.bake_take(
+                    context, settings, arm, result,
+                    splice_target=bpy.data.actions.get(job.splice_target_name), **bake,
+                )
+                # Its variations, to flip through in the review.
+                variations.remember(arm, result, action,
+                                    splice_target_name=job.splice_target_name, **bake)
                 source = bpy.data.actions.get(job.source_name)
                 if source is not None:
                     # Kept alive while the take waits: nothing else uses it,

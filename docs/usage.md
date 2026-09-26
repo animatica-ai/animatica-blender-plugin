@@ -198,8 +198,12 @@ server takes batches):
   its own seed, starting from where it stands: variations on one action, for a
   crowd. Waypoints and pins are left out.
 
+With **Variations** above 1, each character comes back with that many
+versions: the review has arrows per character, and **All: next variation** to
+flip the whole crowd at once.
+
 The takes wait together: **Accept All** keeps each on its own character's NLA
-track, **Reject All** throws them all away. Waypoints and pins belong to the
+track (the version it shows), **Reject All** throws them all away. Waypoints and pins belong to the
 character that was active when you made them.
 
 ## Single pose at one frame

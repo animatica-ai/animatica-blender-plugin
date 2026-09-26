@@ -423,12 +423,26 @@ def _draw_batch(layout, context, settings) -> None:
         n = len(names)
         box.label(text=f"Batch · {n} take{'' if n == 1 else 's'} to review" if n
                   else "Batch · no takes made")
+        from . import variations
+        arms = {name: properties._live_armature(bpy.data.objects.get(name)) for name in names}
+        varied = [name for name in names if variations.take_of(arms[name]) is not None]
+        if len(varied) >= 2:
+            # A crowd: flip every character at once.
+            variations.draw(box, arms[varied[0]], character="*", text="All: next variation")
         col = box.column(align=True)
-        col.active = False
         for name in names[:6]:
-            col.label(text=name, icon='ARMATURE_DATA')
+            if name in varied:
+                variations.draw(col, arms[name], character=name,
+                                text=f"{name} · {variations.take_of(arms[name]).index + 1}"
+                                     f" of {variations.take_of(arms[name]).count}")
+            else:
+                sub = col.row()
+                sub.active = False
+                sub.label(text=name, icon='ARMATURE_DATA')
         if n > 6:
-            col.label(text=f"+{n - 6} more")
+            sub = col.row()
+            sub.active = False
+            sub.label(text=f"+{n - 6} more")
         for line in failed[:3]:
             row = box.row()
             row.alert = True
@@ -459,7 +473,8 @@ def _draw_batch(layout, context, settings) -> None:
                  icon='PLAY')
     note = box.row()
     note.active = False
-    note.label(text=f"{len(chars)} generations")
+    each = int(settings.variations)
+    note.label(text=f"{len(chars)} generations" + (f" · {each} variations each" if each > 1 else ""))
 
 
 def _draw_take_options(layout, context, settings, model, in_preview) -> None:

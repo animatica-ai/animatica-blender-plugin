@@ -30,7 +30,9 @@ Proscenium, and keep the identifiers those releases actually shipped.
   model makes that many versions of the same take — same prompts, poses and
   constraints, performed differently. The take box shows "Variation 1 of N"
   with arrows to flip between them, no new generation; Accept keeps the one
-  showing. Variations are for a single take: a batch makes one per character.
+  showing. A batch honours it too: each character comes back with that many
+  versions, and the batch review flips them one character at a time or all
+  together; Accept All keeps the version each one shows.
 - **Waypoints and pins belong to their character.** Made while a character is
   active, they steer that one only — listed, drawn and sent for it — so a route
   set for one character no longer steers the next one you select, or every
