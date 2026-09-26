@@ -1205,15 +1205,17 @@ class ANIMATICA_OT_reject(Operator):
 # Pose generator (single keyframe at current frame, additive)
 # ═══════════════════════════════════════════════════════════════════════════
 
-#: Poses the model answers cleanly, for a dialog that no longer arrives
-#: pre-filled. Each is a shape, not a motion — this generates one frame.
+#: The same ladder as the motion examples, for shapes rather than motion:
+#: symmetric and upright first, then a change of level, then asymmetry, then
+#: a pose that has to hold its own balance, then contact with the floor. Each
+#: is a shape — this generates one frame.
 EXAMPLE_POSES = (
-    ("a person crouches low", "Crouch"),
     ("a person stands with both arms raised overhead", "Arms overhead"),
-    ("a person sits cross-legged on the floor", "Sit cross-legged"),
-    ("a person in a boxing guard, fists up", "Fighting guard"),
-    ("a person reaches up with their right hand", "Reach up"),
+    ("a person crouches low", "Crouch"),
+    ("a person reaches up with their right hand", "Reach up with one arm"),
     ("a person leans forward with hands on knees", "Hands on knees"),
+    ("a person in a boxing guard, fists up", "Boxing guard"),
+    ("a person sits cross-legged on the floor", "Sit cross-legged"),
 )
 
 

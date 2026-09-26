@@ -1100,22 +1100,36 @@ class ANIMATICA_OT_edit_strip_prompt(bpy.types.Operator):
 # Add / remove / regenerate (hooked by header buttons and context menu)
 # ---------------------------------------------------------------------------
 
-#: Prompts that come back well on this model, for someone who has just
-#: installed the addon and has no idea what it responds to. Six, covering the
-#: shapes it does best: travel, a beat of effort, a combination, a change of
-#: level, an isolated gesture, and a stop.
+#: A ladder, not a list. Read top to bottom it is a short course in what the
+#: model does: one gesture, then travel, then a beat of effort, then two
+#: actions in a row, then a change of speed, then a change of direction, then
+#: a sequence with three beats in it. Lengths climb with the ideas — two
+#: seconds for a wave, eight for a creep — so picking them also teaches that
+#: a clip is as long as what happens in it, which is the thing new users get
+#: wrong first by generating everything at the scene's full length.
+#:
+#: (prompt, menu label, seconds)
 EXAMPLE_PROMPTS = (
-    ("a person walks forward at a steady pace", "Walk"),
-    ("a person runs forward and comes to a stop", "Run, then stop"),
-    ("a person jumps straight up and lands", "Jump"),
-    ("a person throws a jab followed by a cross", "Jab, cross"),
-    ("a person sits down on a chair", "Sit down"),
-    ("a person waves hello with their right hand", "Wave"),
+    ("a person waves hello with their right hand",              "Wave",                  2.0),
+    ("a person walks forward at a steady pace",                 "Walk",                  3.0),
+    ("a person jumps straight up and lands",                    "Jump",                  2.5),
+    ("a person throws a jab followed by a cross",               "Jab, then cross",       3.0),
+    ("a person runs forward then slows to a stop",              "Run, then stop",        5.0),
+    ("a person walks forward, turns around, and walks back",    "Walk, turn, walk back", 7.0),
+    ("a person crouches, creeps forward slowly, then stands up", "Crouch, creep, stand", 8.0),
 )
+
+#: Where the ladder changes subject, for a separator in the menu.
+_EXAMPLE_TIERS = (1, 3, 5)
+
+#: Less room than this after the last block and an example has nowhere
+#: useful to go — better to say so than to key a third of a second.
+MIN_EXAMPLE_FRAMES = 12
 
 
 def _example_items(self, context):
-    return [(prompt, label, prompt) for prompt, label in EXAMPLE_PROMPTS]
+    return [(prompt, f"{label}  ·  {seconds:g}s", prompt)
+            for prompt, label, seconds in EXAMPLE_PROMPTS]
 
 
 class ANIMATICA_OT_use_example_prompt(bpy.types.Operator):
@@ -1126,6 +1140,7 @@ class ANIMATICA_OT_use_example_prompt(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     example: bpy.props.EnumProperty(name="Example", items=_example_items)
+    seconds: bpy.props.FloatProperty(name="Seconds", default=0.0, min=0.0)
 
     def execute(self, context):
         scene = context.scene
@@ -1134,6 +1149,11 @@ class ANIMATICA_OT_use_example_prompt(bpy.types.Operator):
         if not text:
             return {'CANCELLED'}
 
+        # The example's own length, in this scene's frames. Falling back to
+        # the whole scene only when an example arrives without one.
+        fps = float(scene.render.fps or 24) / float(scene.render.fps_base or 1.0)
+        want = int(round(self.seconds * fps)) if self.seconds else 0
+
         # An empty block gets filled — the addon seeds one across the scene
         # when an armature is picked, and a first-time user pressing this has
         # exactly that block and no other. Once something is written, an
@@ -1141,21 +1161,27 @@ class ANIMATICA_OT_use_example_prompt(bpy.types.Operator):
         # over the top of the first one.
         target = next((b for b in props.prompt_blocks
                        if not (b.prompt or "").strip()), None)
+        start = int(scene.frame_start)
         if target is not None:
-            target.frame_start = int(scene.frame_start)
-            target.frame_end = int(scene.frame_end)
+            pass                            # filled below, from the scene start
         else:
-            gap = find_gap(props.prompt_blocks, min_length=10,
-                           scene_end=int(scene.frame_end) or 250)
-            if gap is not None:
+            # Placed by hand rather than through find_gap, which answers a
+            # different question: it hunts the first hole big enough for a
+            # block and caps it at fifty frames, which turned an eight-second
+            # example into two seconds and started it on the previous block's
+            # last frame. An example knows how long it wants to be.
+            last_end = max((int(b.frame_end) for b in props.prompt_blocks),
+                           default=int(scene.frame_start) - 1)
+            start = max(last_end + 1, int(scene.frame_start))
+            room = int(scene.frame_end) - start + 1
+            if room >= MIN_EXAMPLE_FRAMES:
                 target = props.prompt_blocks.add()
-                target.frame_start, target.frame_end = gap[0], gap[1]
             else:
                 # No room, which is the usual shape after the first example:
                 # one block covering the scene. Swapping one example for
                 # another is what the artist meant — swapping out something
                 # they wrote is not, so that is where this stops.
-                known = {p for p, _label in EXAMPLE_PROMPTS}
+                known = {p for p, _label, _secs in EXAMPLE_PROMPTS}
                 idx = min(max(int(props.active_block_index), 0),
                           len(props.prompt_blocks) - 1)
                 active = props.prompt_blocks[idx]
@@ -1168,6 +1194,15 @@ class ANIMATICA_OT_use_example_prompt(bpy.types.Operator):
                                 "clear one to try an example")
                     return {'CANCELLED'}
                 target = replaceable
+                start = int(target.frame_start)
+
+        # One length rule for all three paths, so the block always says how
+        # long the example is. A swap used to keep the old block's span, and
+        # an eight-second idea landed in a three-second box — which teaches
+        # the opposite of what the lengths are here to teach.
+        room = max(1, int(scene.frame_end) - start + 1)
+        target.frame_start = start
+        target.frame_end = start + min(want or room, room) - 1
         target.prompt = text
         target.enabled = True
         props.active_block_index = len(props.prompt_blocks) - 1
@@ -1184,9 +1219,13 @@ class ANIMATICA_MT_example_prompts(bpy.types.Menu):
 
     def draw(self, context):
         layout = self.layout
-        for prompt, label in EXAMPLE_PROMPTS:
-            layout.operator("animatica.use_example_prompt",
-                            text=label).example = prompt
+        for i, (prompt, label, seconds) in enumerate(EXAMPLE_PROMPTS):
+            if i in _EXAMPLE_TIERS:
+                layout.separator()
+            op = layout.operator("animatica.use_example_prompt",
+                                 text=f"{label}  ·  {seconds:g}s")
+            op.example = prompt
+            op.seconds = seconds
 
 
 class ANIMATICA_OT_add_prompt_block(bpy.types.Operator):
