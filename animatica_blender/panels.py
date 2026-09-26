@@ -12,7 +12,7 @@ Server URL + auth live in Edit > Preferences > Add-ons > Animatica.
 import bpy
 from bpy.types import Panel
 
-from . import constraints_ui, mmcp_client, properties
+from . import constraints_ui, examples, mmcp_client, properties
 
 
 class AnimaticaPanelBase:
@@ -333,8 +333,9 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
                 # about.
                 if has_prompt or in_preview:
                     row = layout.row(align=True)
-                    row.menu("ANIMATICA_MT_example_prompts",
+                    row.menu("ANIMATICA_MT_examples",
                              text="Try an example", icon='PRESET')
+                    examples.draw_status(layout)
                 else:
                     box = layout.box()
                     box.label(text="Add a prompt to generate", icon='INFO')
@@ -342,12 +343,16 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
                     # across the scene and the next one generates. Finding the
                     # Timeline, drawing a block and typing into it is three
                     # discoveries before anything moves.
-                    box.menu("ANIMATICA_MT_example_prompts",
+                    box.menu("ANIMATICA_MT_examples",
                              text="Try an example", icon='PRESET')
+                    examples.draw_status(box)
                     sub = box.column(align=True)
                     sub.active = False
                     sub.label(text="or double-click the Timeline to add a block,")
                     sub.label(text="then double-click it to type your own.")
+                # An example's character may need attribution; this is where
+                # the file that uses it gives it.
+                examples.draw_credit(layout, context.scene)
 
             # Why this cannot be sent, asked of the same function the send
             # asks — so the button greys out for exactly the reasons a click
