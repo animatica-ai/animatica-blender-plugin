@@ -251,6 +251,48 @@ EXAMPLES = [
      "lesson": "Pins where the hands take the box and where they leave it; the box "
                "follows the hands in between. Move the table and its pins, and "
                "generate again."},
+    {"id": "pistol",         "title": "Aim and fire a pistol", "tier": 3, "seconds": 4.25,
+     # The pistol follows the right forearm, so it stays in the hand in any
+     # take; the words make the arms hold it like a pistol. Any block that
+     # said "pistol" came back as the aim stance, so the ones either side do
+     # not: with them, it starts at the side (0.81 m), raises by frame 42,
+     # fires at 1.47 m and lowers to 1.01 m by the end.
+     "blocks": [("a person stands still with arms relaxed at their sides", 0.75),
+                ("a person raises a pistol with their right hand and aims forward", 1.0),
+                ("a person fires a pistol twice", 1.25),
+                ("a person lowers both arms to their sides and relaxes", 1.25)],
+     # Riding the forearm, not the hand: the model's hands come back flat
+     # and bent 40 degrees up at the wrist, and a pistol on the hand aimed
+     # at the ceiling. The forearm points where the character aims.
+     "weapons": [{"kind": "pistol", "hand": "Right", "follow": "forearm", "upright": True}],
+     "character": "hero",   "set": "ring",    "travel": 0.4,
+     "lesson": "A prop in the hand is just parented to the hand bone, so it follows "
+               "whatever you generate. The blocks do the rest: raise, fire, lower."},
+    {"id": "sword",          "title": "Sword combo",           "tier": 3, "seconds": 4.0,
+     "blocks": [("a person slashes a sword from right to left", 1.25),
+                ("a person slashes a sword from left to right", 1.25),
+                ("a person thrusts a sword forward", 1.5)],
+     # On the forearm, like the guns: the generated hand came back bent 90
+     # degrees up at the wrist mid-thrust, and a sword on the hand pointed at
+     # the sky. Tilted 60 degrees toward the forearm, the blade runs 30
+     # degrees off the arm's line, so a thrust points where it goes.
+     "weapons": [{"kind": "sword", "hand": "Right", "follow": "forearm", "tilt": 60}],
+     "character": "hero",   "set": "dusk",    "travel": 0.8,
+     "lesson": "A combo is a block per strike. Retime a block to make a strike "
+               "faster or slower, or add one."},
+    {"id": "rifle",          "title": "Walk, then aim a rifle", "tier": 4, "seconds": 4.0,
+     # Two hands on one gun: the rifle rides the right hand and points at the
+     # left, so it lines up with however the model held it. The waypoints give
+     # the walk a route and a place to stop.
+     "blocks": [("a person walks forward holding a rifle", 2.0),
+                ("a person stops and aims a rifle", 1.0),
+                ("a person holds a rifle aimed forward", 1.0)],
+     "weapons": [{"kind": "rifle", "hand": "Right", "aim_at": "LeftHand", "upright": True}],
+     "waypoints": [(1, (0.0, 0.0)), (60, (0.0, -1.8)), (96, (0.0, -1.85))],
+     "face_along_path": True,
+     "character": "hero",   "set": "outdoor", "travel": 1.9,
+     "lesson": "Two hands on one prop: the rifle rides the right hand and aims at "
+               "the left, so it sits in both hands whatever you generate."},
     {"id": "walk-sit",       "title": "Walk to the chair, sit", "tier": 4, "seconds": 5.5,
      # The whole pipeline, as the Animatica skill lays it out: block out, then
      # prompt, then constrain, then generate. The two key poses are made with
@@ -533,6 +575,126 @@ def _carry(arm, box, rest, carry):
                     k.interpolation = "CONSTANT"
 
 
+def _weapon_parts(kind):
+    """Boxes for a weapon, in the grip's frame.
+
+    +Y runs along the hand, wrist to knuckles: where a barrel points when the
+    wrist is straight. +Z crosses the palm toward the index finger: where a
+    blade leaves the fist, and away from where a pistol grip runs. The origin
+    is the middle of the fist.
+    """
+    if kind == "pistol":
+        return [((0.0, 0.05, 0.05), (0.028, 0.19, 0.034)),       # slide and barrel
+                ((0.0, -0.005, -0.02), (0.026, 0.034, 0.11))], (0.12, 0.12, 0.13)
+    if kind == "sword":
+        return [((0.0, 0.0, 0.0), (0.03, 0.03, 0.17)),            # handle, through the fist
+                ((0.0, 0.0, 0.095), (0.03, 0.2, 0.02)),           # guard
+                ((0.0, 0.0, 0.53), (0.008, 0.045, 0.85)),         # blade
+                ((0.0, 0.0, -0.1), (0.04, 0.04, 0.04))], (0.7, 0.72, 0.76)
+    if kind == "rifle":
+        return [((0.0, -0.005, -0.02), (0.03, 0.04, 0.11)),       # pistol grip
+                ((0.0, 0.12, 0.05), (0.045, 0.42, 0.07)),         # receiver and handguard
+                ((0.0, 0.55, 0.06), (0.022, 0.46, 0.022)),        # barrel
+                ((0.0, -0.24, 0.035), (0.04, 0.3, 0.11))], (0.16, 0.17, 0.16)
+    raise ValueError(kind)
+
+
+def _hand_frame(arm, side, along_forearm=False):
+    """World matrix of the grip frame on *side*'s hand, as the rig stands now.
+
+    *along_forearm* points the frame's +Y down the forearm instead of the
+    hand. For a gun that is the aim: the model's hands come back flat and
+    often bent at the wrist (40 degrees up in a two-handed pistol stance)
+    while the forearm points straight at the target.
+    """
+    from animatica_blender import constraints_ui
+
+    hand = constraints_ui.resolve_effector_bone(arm, f"{side}Hand")
+    mw = arm.matrix_world
+
+    def at(suffix):
+        pb = next(b for b in arm.pose.bones if b.name.split(":")[-1] == f"{side}Hand{suffix}")
+        return mw @ pb.head
+
+    wrist = mw @ hand.head
+    knuckles = at("Middle1")
+    along = (knuckles - wrist).normalized()
+    if along_forearm:
+        along = (wrist - mw @ hand.parent.head).normalized()
+    across = at("Index1") - at("Pinky1")
+    across = (across - across.dot(along) * along).normalized()   # toward the index finger
+    palm = along.cross(across)
+    if palm.z > 0:                     # at rest the palms face the floor
+        palm = -palm
+    centre = wrist.lerp(knuckles, 0.55) + palm * 0.035          # inside the curled fingers
+    rot = Matrix((along.cross(across), along, across)).transposed()
+    return hand, Matrix.Translation(centre) @ rot.to_4x4()
+
+
+def _add_weapon(arm, spec):
+    """A weapon in the hand, parented to the hand bone so it follows any take."""
+    parts, rgb = _weapon_parts(spec["kind"])
+    weapon = _box_mesh(spec["kind"].title(), parts, rgb, roughness=0.45)
+    forearm = spec.get("follow") == "forearm"
+    hand, frame = _hand_frame(arm, spec.get("hand", "Right"), along_forearm=forearm)
+    weapon.parent = arm
+    weapon.parent_type = "BONE"
+    weapon.parent_bone = hand.parent.name if forearm else hand.name
+    bpy.context.view_layer.update()
+    if spec.get("tilt"):
+        # Lean the weapon's +Z (the blade) toward +Y (down the forearm): a
+        # sword held in a fist leaves it at a shallow angle to the arm, not
+        # square to it, which is what makes a thrust point where it goes.
+        frame = frame @ Matrix.Rotation(-math.radians(spec["tilt"]), 4, "X")
+    weapon.matrix_world = frame
+    if spec.get("aim_at"):
+        # Point the barrel at the other hand. A long gun's line runs from the
+        # grip hand to the supporting hand, not down the grip forearm: the
+        # right elbow sits out, and a rifle on the forearm aimed 60 degrees up
+        # all clip. The model put the supporting hand where a rifle is held,
+        # so aiming at it lines the rifle up with the pose it generated.
+        from animatica_blender import constraints_ui
+        aim = weapon.constraints.new("DAMPED_TRACK")
+        aim.name = "Aim at the supporting hand"
+        aim.target = arm
+        aim.subtarget = constraints_ui.resolve_effector_bone(arm, spec["aim_at"]).name
+        aim.track_axis = "TRACK_Y"
+    if spec.get("upright"):
+        # Roll about the barrel so the top of the gun faces up. The generated
+        # forearm comes back turned palm-down, and a gun that followed it
+        # exactly sat canted 55 degrees on its side. The aim is untouched: the
+        # constraint only turns the gun about its own barrel.
+        up = bpy.data.objects.get("Up") or bpy.data.objects.new("Up", None)
+        if up.name not in bpy.context.scene.collection.objects:
+            bpy.context.scene.collection.objects.link(up)
+        up.location = (0.0, 0.0, 1000.0)
+        up.hide_set(True)
+        track = weapon.constraints.new("LOCKED_TRACK")
+        track.name = "Keep the gun upright"
+        track.target = up
+        track.lock_axis = "LOCK_Y"
+        track.track_axis = "TRACK_Z"
+    if spec.get("support"):
+        # The other hand on the weapon: an IK target riding on it, and an IK
+        # constraint on that forearm, so the support hand follows the gun in
+        # any take instead of wherever the model left it.
+        target = bpy.data.objects.new(f"{weapon.name} support", None)
+        target.empty_display_type = "SPHERE"
+        target.empty_display_size = 0.03
+        bpy.context.scene.collection.objects.link(target)
+        target.parent = weapon
+        target.location = spec["support"]
+        other = "Left" if spec.get("hand", "Right") == "Right" else "Right"
+        from animatica_blender import constraints_ui
+        fore = constraints_ui.resolve_effector_bone(arm, f"{other}Hand").parent
+        ik = fore.constraints.new("IK")
+        ik.name = "Support hand on the weapon"
+        ik.target = target
+        ik.chain_count = 2
+        ik.use_tail = True
+    return weapon
+
+
 def _add_pins(arm, pins):
     """Effector pins, made the way the Pin button makes them.
 
@@ -623,6 +785,8 @@ def _frame_view(scene, arm, travel):
             space = area.spaces[0]
             space.shading.type = "MATERIAL"
             space.show_region_ui = True
+            # The weapons' upright constraint draws a line to its target 1 km up.
+            space.overlay.show_relationship_lines = False
             r3d = space.region_3d
             r3d.view_perspective = "PERSP"
             r3d.view_location = focus
@@ -687,6 +851,8 @@ def build_one(ex, assets_dir, out_dir):
         settings.waypoint_heading = bool(ex.get("face_along_path"))
     if ex.get("pins"):
         _add_pins(arm, ex["pins"])
+    for spec in ex.get("weapons", ()):
+        _add_weapon(arm, spec)
     for prop in ex.get("props", ()):
         if prop["kind"] == "box":
             box, size = _build_box(prop["at"], prop["size"])

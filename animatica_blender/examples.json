@@ -143,6 +143,48 @@
       "sha256": "c8773fb7ce299d32ce54dd41522daa2e6514723258f2bd76fd629bb5a5faa482"
     },
     {
+      "id": "pistol",
+      "title": "Aim and fire a pistol",
+      "tier": 3,
+      "seconds": 4.25,
+      "lesson": "A prop in the hand is just parented to the hand bone, so it follows whatever you generate. The blocks do the rest: raise, fire, lower.",
+      "prompt": "a person stands still with arms relaxed at their sides \u2192 a person raises a pistol with their right hand and aims forward \u2192 a person fires a pistol twice \u2192 a person lowers both arms to their sides and relaxes",
+      "character": "Animatica Hero",
+      "credit": "",
+      "file": "pistol.ffacfcb1.blend",
+      "url": "",
+      "size": 12554717,
+      "sha256": "ffacfcb10f5420974fbda36340f3d05ab16ee5478acc97b69bfbb5117bc05d4a"
+    },
+    {
+      "id": "sword",
+      "title": "Sword combo",
+      "tier": 3,
+      "seconds": 4.0,
+      "lesson": "A combo is a block per strike. Retime a block to make a strike faster or slower, or add one.",
+      "prompt": "a person slashes a sword from right to left \u2192 a person slashes a sword from left to right \u2192 a person thrusts a sword forward",
+      "character": "Animatica Hero",
+      "credit": "",
+      "file": "sword.5439c2f2.blend",
+      "url": "",
+      "size": 12554643,
+      "sha256": "5439c2f25d54c8cbde16df1d50a86a873abcbb14520a2e6fd9567f20ab1e5213"
+    },
+    {
+      "id": "rifle",
+      "title": "Walk, then aim a rifle",
+      "tier": 4,
+      "seconds": 4.0,
+      "lesson": "Two hands on one prop: the rifle rides the right hand and aims at the left, so it sits in both hands whatever you generate.",
+      "prompt": "a person walks forward holding a rifle \u2192 a person stops and aims a rifle \u2192 a person holds a rifle aimed forward",
+      "character": "Animatica Hero",
+      "credit": "",
+      "file": "rifle.78fa8a48.blend",
+      "url": "",
+      "size": 12555447,
+      "sha256": "78fa8a488746da3853253c86f66db7133a8f05e7c917b81b2cbddbe317f7cf5e"
+    },
+    {
       "id": "walk-sit",
       "title": "Walk to the chair, sit",
       "tier": 4,
