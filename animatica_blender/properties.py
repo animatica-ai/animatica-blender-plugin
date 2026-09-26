@@ -332,7 +332,10 @@ def _inplace_update(self, context):
     if arm is None or arm.type != 'ARMATURE':
         return
     from . import operators  # noqa: PLC0415 — lazy to avoid circular import
-    operators._apply_inplace_constraint(arm, enabled=bool(self.inplace))
+    # Before a generation this is a choice for the bake to act on, not a
+    # constraint to add now: pinning the root would pin keys the artist
+    # authored, and key poses read their root position through it.
+    operators._apply_inplace_constraint(arm, enabled=bool(self.inplace and self.is_previewing))
 
     # Tag the depsgraph so the viewport reflects the constraint change.
     arm.update_tag()
@@ -793,14 +796,25 @@ class AnimaticaSettings(PropertyGroup):
         description=(
             "Suppress the root bone's horizontal translation so the "
             "character animates in place instead of travelling through "
-            "the scene. Vertical motion (jumps, crouches) is kept. Toggle "
-            "live after generation — the xz keyframes are kept but muted, "
-            "so switching back off restores the original travel without "
+            "the scene. Vertical motion (jumps, crouches) is kept. Set it "
+            "before generating, or toggle it on a preview: the travel is "
+            "kept but muted, so switching back off restores it without "
             "re-generating. Useful for game-style cycles (walk loops, "
             "idles) where the root motion comes from a controller"
         ),
         default=False,
         update=_inplace_update,
+    )
+    loop: BoolProperty(
+        name="Loop",
+        description=(
+            "Make the generated clip a seamless cycle: cut it where the "
+            "motion comes back round to its first pose, blend the seam, and "
+            "repeat it past its end (travel continues from where it ended). "
+            "Applied when you generate. For walk and run cycles, give the "
+            "block two or three seconds"
+        ),
+        default=False,
     )
     preview_path_snap: BoolProperty(
         name="Snap to Path",

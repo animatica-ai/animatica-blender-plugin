@@ -386,6 +386,12 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
             row = gen.row()
             row.scale_y = 1.5
             row.operator("animatica.generate", icon='PLAY', text=gen_text)
+            # How the clip comes back, chosen before it is made: in place for
+            # a controller to move, and looping for a cycle.
+            row = gen.row(align=True)
+            row.prop(settings, "inplace", toggle=True,
+                     icon='LOCKED' if settings.inplace else 'UNLOCKED')
+            row.prop(settings, "loop", toggle=True, icon='FILE_REFRESH')
             if blockers:
                 note = gen.row()
                 note.enabled = True         # readable while the button above is not
@@ -411,12 +417,6 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
                 layout.separator()
                 box = layout.box()
                 box.label(text="Preview", icon='INFO')
-                # In-place toggle lives here so it's only surfaced when
-                # there's a preview to apply it to. Non-destructive: live-
-                # toggle adds / removes a Limit Location constraint on the
-                # root bone; Accept bakes the result into the final
-                # per-block actions.
-                box.prop(settings, "inplace", icon='LOCKED' if settings.inplace else 'UNLOCKED')
                 row = box.row(align=True)
                 row.scale_y = 1.3
                 row.operator("animatica.accept", icon='CHECKMARK', text="Accept")

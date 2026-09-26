@@ -11,6 +11,27 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Added
 
+- **Loop: generate a cycle.** Turn on **Loop** under Generate Motion and the
+  clip comes back seamless, for walk cycles, runs and idles in a game. The
+  model makes a clip with a start and an end, and a walk opens from standing
+  and stops mid-stride, so repeating it jumped on every wrap. After the bake,
+  the addon finds the stretch that best comes back round to itself: a whole
+  number of strides, past the take-off. It keeps only that stretch, blends the
+  leftover difference into the last frames so the last frame lands on the
+  first pose, and adds Cycles modifiers so it plays on past its end. On a
+  three-second walk that is a 35-frame, two-step loop whose wrap is as smooth
+  as any other frame (37.7 degrees of joint change against a median 38.9). The
+  root's travel repeats with offset, so a travelling loop keeps walking from
+  where it started, at a steady height even on a rig whose root bone rests
+  tilted. With **In place** on as well, it loops on the spot.
+
+- **In place, chosen before you generate.** The toggle sat in the Preview box,
+  so it only appeared after a generation. It now sits beside Loop, under
+  Generate Motion. Set before generating, it is a choice the bake acts on
+  rather than a constraint added at once: pinning the root straight away also
+  pinned any root keys you had authored, and key poses read their root
+  position through the pin.
+
 - **See the plan before you generate.** The poses you key are the direction the
   model is given — each one becomes a full-body `pose_keyframe` constraint the
   motion has to pass through — and they were the one part of that direction you

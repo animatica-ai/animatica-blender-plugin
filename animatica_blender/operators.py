@@ -842,6 +842,13 @@ class ANIMATICA_OT_generate(Operator):
             # Fingers: the model has none, so each hand gets its pose laid on.
             from . import hand_pose
             hand_pose.apply(arm, action, settings, (gen_start, gen_end))
+            # A cycle, if asked for: last, so it closes the motion as it will play.
+            if getattr(settings, "loop", False):
+                from . import loop
+                done = loop.apply(arm, action, (gen_start, gen_end))
+                if done:
+                    print(f"[animatica] loop: {done['frames']} frames, cut at {done['cut']}, "
+                          f"seam {done['seam_deg_before']:.0f} deg blended over {done['blend']}")
 
             # Fold preview-time edits onto the real source now that the bake
             # succeeded — deferred from execute so a failed POST/bake cannot
