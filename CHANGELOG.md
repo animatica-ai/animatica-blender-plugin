@@ -163,6 +163,15 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Fixed
 
+- **Set Keyframe on a fresh rig.** On an action with nothing in it yet — a new
+  rig's first key pose — Blender 5's layered actions have no layer, strip or
+  slot to put a curve in, so every channel was skipped: the button reported
+  success and keyed nothing. Blender now makes them, and binds the slot to the
+  rig; a press that still keys nothing says so.
+- **A pose keyed with I shows up.** The plan behind the ghosts and the key-pose
+  count only refreshed when something told it to, which Blender's own keying
+  never does; it now notices when the keys change.
+
 - **Reject no longer throws away takes you kept.** It cleared every Animatica
   NLA track: accept a wave, try a walk, reject the walk, and the wave was gone
   too. Reject now drops only the take in front of you.

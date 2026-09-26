@@ -188,6 +188,20 @@ def _ensure_fcurve(action, data_path: str, array_index: int):
                     return cb.fcurves.new(data_path=data_path, index=array_index)
                 except RuntimeError:
                     continue
+
+    # An action with nothing in it yet has no layer, strip or slot to put a
+    # curve in -- a fresh rig's first key pose, or an action made empty -- and
+    # every channel came back None: Set Keyframe wrote nothing and said so
+    # to no one. Blender makes the layer, strip and slot, and binds the slot,
+    # for the object the action is assigned to.
+    ensure = getattr(action, "fcurve_ensure_for_datablock", None)
+    owner = next((o for o in bpy.data.objects
+                  if o.animation_data is not None and o.animation_data.action == action), None)
+    if ensure is not None and owner is not None:
+        try:
+            return ensure(owner, data_path, index=array_index)
+        except (RuntimeError, TypeError):
+            return None
     return None
 
 

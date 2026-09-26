@@ -301,13 +301,22 @@ def _plan_signature(settings, arm, action, scene):
     Block geometry is in here, so dragging a strip on the timeline re-tints
     the ghosts without any handler having to notice.
     """
+    from . import constraints_ui
+
     blocks = tuple(
         (int(b.frame_start), int(b.frame_end), bool(b.enabled), bool((b.prompt or "").strip()))
         for b in settings.prompt_blocks
     )
+    # How many keys there are: a pose keyed with Blender's own I, or by a path
+    # that forgets to invalidate, changes it, where the action's name does not
+    # -- a frame keyed that way got no ghost and no count until something else
+    # happened to refresh the plan.
+    curves = list(constraints_ui.iter_action_fcurves(action)) if action else []
+    keys = (len(curves), sum(len(fc.keyframe_points) for fc in curves))
     return (
         arm.name if arm else None,
         action.name if action else None,
+        keys,
         blocks,
         int(scene.frame_start),
         int(scene.frame_end),

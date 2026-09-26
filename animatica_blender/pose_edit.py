@@ -508,6 +508,10 @@ class ANIMATICA_OT_set_key_pose(Operator):
             arm.animation_data.action = action
 
         written = _write_pose_to_action(arm, action, frame)
+        if not written:
+            # Never a silent success: a press that keys nothing must say so.
+            self.report({'WARNING'}, f"Nothing could be keyed on “{action.name}”")
+            return {'CANCELLED'}
         key_poses.flash_keyed(frame)
         settings.editing_key_pose_frame = -1
         context.scene.frame_set(frame)
