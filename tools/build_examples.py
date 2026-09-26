@@ -131,7 +131,13 @@ EXAMPLES = [
          {"frame": 1, "at": (0.0, 0.0), "facing": "forward",
           "prompt": "a person stands in a neutral pose with arms relaxed at sides"},
          {"frame": 132, "at": (0.0, -2.52), "facing": "back",
-          "prompt": "a person sits on a chair with hands resting on their thighs"},
+          "prompt": "a person sits on a chair with hands resting on their thighs",
+          # Generate Pose put both hands in the lap, fingers in the groin.
+          # The Autoposer moves them onto the thighs, halfway to the knee.
+          "touch_up": [
+              {"control": "L_arm_IK_CTRL", "on_thigh": "Left", "t": 0.5, "lift": 0.10},
+              {"control": "R_arm_IK_CTRL", "on_thigh": "Right", "t": 0.5, "lift": 0.10},
+          ]},
      ],
      "character": "hero",   "set": "studio",  "travel": 2.6,
      "lesson": "Everything at once. Key poses say how it starts and ends, the "

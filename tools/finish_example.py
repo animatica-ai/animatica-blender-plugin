@@ -94,7 +94,9 @@ def step():
             raise RuntimeError(f"Generate Pose left no key at frame {kp['frame']} "
                                f"— see the Info log")
         settle(s.target_armature, kp)
-        return f"frame {kp['frame']}: posed, placed at {tuple(kp['at'])}, facing {kp['facing']}"
+        fixed = touch_up(s.target_armature, kp)
+        return (f"frame {kp['frame']}: posed, placed at {tuple(kp['at'])}, facing {kp['facing']}"
+                + (f", touched up {', '.join(fixed)}" if fixed else ""))
     if _state["queue"]:
         kp = _state["queue"].pop(0)
         _state["current"] = kp
@@ -170,6 +172,114 @@ def settle(arm, kp):
     root.keyframe_insert(rot.get(root.rotation_mode, "rotation_euler"), frame=kp["frame"])
 
 
+def _on_thigh(arm, side, t, lift):
+    """A point on top of a thigh: *t* of the way from hip to knee, *lift* above the bone."""
+    mw = arm.matrix_world
+    thigh = _thigh(arm, side)
+    foot = next(pb for pb in arm.pose.bones if pb.name.split(":")[-1] == f"{side}Foot")
+    hip, knee = mw @ thigh.head, mw @ foot.parent.head
+    return hip.lerp(knee, t) + Vector((0.0, 0.0, lift))
+
+
+def touch_up(arm, kp):
+    """Correct a generated key pose with the Autoposer, the way an artist would.
+
+    Generate Pose gets the body right and the details wrong often enough to
+    matter: asked for hands resting on the thighs, it put both in the lap,
+    fingers in the groin. The fix is the one an animator makes — grab the hand
+    controls, put them where the hands belong, let the poser re-solve the arms
+    — so that is what this does: build the control rig, seat every control on
+    the pose, move the named ones, solve, key the result at the frame, and take
+    the rig back off so the example ships as a plain character.
+
+    Each fix names a control and where it goes::
+
+        {"control": "L_arm_IK_CTRL", "on_thigh": "Left", "t": 0.5, "lift": 0.11}
+
+    The other default controls (hips, feet, head) stay enabled where they sit,
+    which is what holds the rest of the pose while the hands move.
+    """
+    fixes = kp.get("touch_up") or []
+    if not fixes:
+        return []
+    from animatica_blender import pose_edit
+    from animatica_blender.autoposer import poser
+
+    ctx = bpy.context
+    scene = ctx.scene
+    scene.frame_set(kp["frame"])
+    ctx.view_layer.update()
+    if ctx.view_layer.objects.active is not arm:
+        ctx.view_layer.objects.active = arm
+    if not poser.has_controls(arm):
+        result = bpy.ops.autoposer.build_rig()
+        if "FINISHED" not in result:
+            raise RuntimeError("could not build the Autoposer rig")
+    poser._snap(arm, ctx)              # every control on the pose as it stands at this frame
+
+    inv = arm.matrix_world.inverted()
+    for fix in fixes:
+        pb = arm.pose.bones[fix["control"]]
+        if not pb.bone.ap_enabled:
+            pb.bone.ap_enabled = True
+        target = _on_thigh(arm, fix["on_thigh"], fix["t"], fix["lift"])
+        m = pb.matrix.copy()
+        m.translation = inv @ target
+        pb.matrix = m
+    ctx.view_layer.update()
+    if not poser.solve(ctx):
+        raise RuntimeError(f"the Autoposer did not solve: {scene.ap_status}")
+    # Captured straight away: the solve lives in matrix_basis, and the next
+    # evaluation of the action would put the old pose back over it.
+    channels = pose_edit.pose_channels(arm)
+    pose_edit.write_channels(pose_edit._editing_action(arm), kp["frame"], channels)
+    print(f"[finish] touch-up at frame {kp['frame']}: {scene.ap_status}")
+    _remove_rig(arm)
+    scene.frame_set(kp["frame"])
+    return [f["control"] for f in fixes]
+
+
+def _remove_rig(arm):
+    """Take the control rig back off: the bones, their collections, their shapes."""
+    from animatica_blender.autoposer import poser
+
+    # Names first: removing a bone goes through Edit Mode, which reallocates
+    # the armature's bones and leaves every Bone reference held across it dead.
+    for name in [b.name for b in poser._controls(arm)]:
+        bpy.ops.autoposer.remove_control(name=name)
+    poser._hide_deform_bones(arm, False)
+    arm.show_in_front = False
+    for name in (poser.CTRL_COLL, poser.DEFORM_COLL):
+        coll = arm.data.collections.get(name)
+        if coll is not None:
+            arm.data.collections.remove(coll)
+    shapes = bpy.data.collections.get(poser.SHAPE_COLL)
+    if shapes is not None:
+        for ob in list(shapes.objects):
+            bpy.data.objects.remove(ob, do_unlink=True)
+        bpy.data.collections.remove(shapes)
+
+
+def retouch(path, out_dir):
+    """Apply the touch-ups to an already finished example and publish it again.
+
+    For when only the corrections changed: the key poses are already in the
+    file, so this needs no server and runs in a background Blender.
+    """
+    path = pathlib.Path(path).resolve()
+    bpy.ops.wm.open_mainfile(filepath=str(path))
+    scene = bpy.context.scene
+    builder = _builder()
+    ex = next(e for e in builder.EXAMPLES if e["id"] == scene["animatica_example"])
+    _state.clear()
+    _state.update(id=ex["id"], out_dir=pathlib.Path(out_dir).resolve(), queue=[],
+                  current=None, views=_views())
+    arm = scene.animatica.target_armature
+    for kp in ex.get("key_poses", ()):
+        touch_up(arm, kp)
+    return publish()
+
+
 def publish():
     """Save the finished example beside its base, named by its content."""
     builder = _builder()
@@ -188,3 +298,10 @@ def publish():
     path = builder.publish(ex, built, manifest)
     builder.write_manifest(out_dir, manifest)
     return path.name
+
+
+if __name__ == "__main__":
+    import sys
+    args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+    if len(args) == 3 and args[0] == "retouch":
+        print("published", retouch(args[1], args[2]))
