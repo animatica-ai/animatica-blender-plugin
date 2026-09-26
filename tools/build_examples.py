@@ -187,6 +187,70 @@ EXAMPLES = [
      "lesson": "Blocks set the beats, waypoints the route, and facing along the path "
                "turns the body with it. Resize a block, or drag a circle, and "
                "generate again."},
+    {"id": "step-over",      "title": "Step over the log",     "tier": 3, "seconds": 4.5,
+     # A prop in the way. The model does not see the log, only the words and
+     # the constraints: with blocks and waypoints alone it planted a foot on
+     # it. A pin on each foot above the log, at the frame that foot crosses,
+     # lifts it over. A branch rather than a trunk (8 cm, not 12): the model's
+     # straddle, from the last plant before to the first after, is ~19 cm.
+     "blocks": [("a person walks forward", 1.75),
+                ("a person steps over a log", 1.25),
+                ("a person walks forward", 1.5)],
+     "props": [{"kind": "log", "at": (0.0, -2.05), "length": 1.6, "radius": 0.08}],
+     "waypoints": [(1, (0.0, 0.0)), (60, (0.0, -2.05)), (108, (0.0, -3.8))],
+     "face_along_path": True,
+     "pins": [{"joint": "RightFoot", "keys": [(49, (-0.1, -2.05, 0.36))]},
+              {"joint": "LeftFoot", "keys": [(61, (0.1, -2.05, 0.36))]}],
+     "character": "hero",   "set": "outdoor", "travel": 3.8,
+     "lesson": "The model does not see props; constraints tell it about them. A pin "
+               "over the log for each foot, at the frame it crosses, lifts it over."},
+    {"id": "lean-counter",   "title": "Lean on the counter",   "tier": 3, "seconds": 3.0,
+     # The model cannot see the counter. Walked up to it, the character walked
+     # into it until its hands reached the pins upright, and the waypoints
+     # yanked it back out: 4.9 m of root path for 0.4 m of travel. Started in
+     # front of the counter, it only has to lean. The hands are pinned just over
+     # the front edge and then keyed every 8 frames on the top, so they arrive
+     # over the edge rather than through it, and stay. The two waypoints hold the
+     # standing spot.
+     # Held: the hands land (pins exact on 14 of 16 keys) but the model, which
+     # cannot see the counter, steps into it -- a shin 9 cm inside at frame 23
+     # -- and the fingertips curl into the top. Pinning the feet stops the
+     # step and then the hands cannot reach between keys. Needs a model that
+     # knows about the obstacle, or a leaning key pose that holds.
+     "hold": "the character steps into the counter (shin 9 cm inside)",
+     "blocks": [("a person leans forward on a counter with both hands", 3.0)],
+     "props": [{"kind": "counter", "at": (0.0, -0.55), "size": (1.4, 0.6), "height": 0.95}],
+     "waypoints": [(1, (0.0, 0.0)), (72, (0.0, 0.0))],
+     "pins": [{"joint": side, "keys": [(16, (x, -0.2, 1.08))]
+                                      + [(f, (x, -0.38, 1.02)) for f in range(24, 73, 8)]}
+              for side, x in (("LeftHand", 0.16), ("RightHand", -0.16))],
+     "character": "hero",   "set": "studio",  "travel": 0.6,
+     "lesson": "A pin holds only on the frames it is keyed, so a hold is keys all the "
+               "way through: these hands are keyed every 8 frames on the counter."},
+    {"id": "carry-box",      "title": "Carry the box to the table", "tier": 4, "seconds": 6.0,
+     # Pick up, carry, put down: the hands are pinned to the box's sides where
+     # it sits on the floor and again where it goes on the table, and the box
+     # rides between the wrists in between (two Copy Location constraints,
+     # keyed on and off), so it follows any take.
+     # Held: pickup is exact (both wrists on the box's sides, 0.0 cm) and the
+     # box follows the hands onto the table, but the model carries it low and
+     # hunched, so the box passes through a thigh (11 cm), and the set-down
+     # hands land 4-9 cm off with a 6.8 cm pop of the box on the last frame.
+     "hold": "the carry is low and the box passes through the thigh",
+     "blocks": [("a person bends down and picks up a box with both hands", 2.0),
+                ("a person walks forward carrying a box", 2.5),
+                ("a person puts a box down on a table", 1.5)],
+     "props": [{"kind": "table", "at": (0.0, -3.2), "size": (1.0, 0.6), "height": 0.75},
+               {"kind": "box", "at": (0.0, -0.6), "size": 0.36,
+                "carry": {"from": 36, "to": 132, "rest_after": (0.0, -3.05, 0.93)}}],
+     "waypoints": [(1, (0.0, 0.0)), (36, (0.0, -0.2)), (120, (0.0, -2.62)), (144, (0.0, -2.62))],
+     "face_along_path": True,
+     "pins": [{"joint": "LeftHand", "keys": [(36, (0.22, -0.6, 0.2)), (132, (0.22, -3.05, 0.95))]},
+              {"joint": "RightHand", "keys": [(36, (-0.22, -0.6, 0.2)), (132, (-0.22, -3.05, 0.95))]}],
+     "character": "hero",   "set": "studio",  "travel": 3.2,
+     "lesson": "Pins where the hands take the box and where they leave it; the box "
+               "follows the hands in between. Move the table and its pins, and "
+               "generate again."},
     {"id": "walk-sit",       "title": "Walk to the chair, sit", "tier": 4, "seconds": 5.5,
      # The whole pipeline, as the Animatica skill lays it out: block out, then
      # prompt, then constrain, then generate. The two key poses are made with
@@ -402,6 +466,73 @@ def _build_crate(at, size):
     return _box_mesh("Crate", [((at[0], at[1], size / 2), (size, size, size))], (0.5, 0.36, 0.2))
 
 
+def _build_log(at, length, radius):
+    """A log lying across the path, along X — something to step over."""
+    bpy.ops.mesh.primitive_cylinder_add(radius=radius, depth=length, vertices=24,
+                                        location=(at[0], at[1], radius),
+                                        rotation=(0.0, math.pi / 2, 0.0))
+    log = bpy.context.object
+    log.name = "Log"
+    log.data.materials.append(_material("Log", (0.33, 0.22, 0.13), roughness=0.9))
+    return log
+
+
+def _build_table(at, size, height, name="Table"):
+    """A slab on four legs. *size* is (x, y) of the top."""
+    x, y = at
+    sx, sy = size
+    t, leg = 0.04, 0.05
+    parts = [((x, y, height - t / 2), (sx, sy, t))]
+    for dx in (-1, 1):
+        for dy in (-1, 1):
+            parts.append(((x + dx * (sx / 2 - leg), y + dy * (sy / 2 - leg), (height - t) / 2),
+                          (leg, leg, height - t)))
+    return _box_mesh(name, parts, (0.45, 0.33, 0.24))
+
+
+def _build_counter(at, size, height):
+    """A solid counter to lean on."""
+    return _box_mesh("Counter", [((at[0], at[1], height / 2), (size[0], size[1], height))],
+                     (0.62, 0.6, 0.56))
+
+
+def _build_box(at, size):
+    """A cardboard box sitting on the floor."""
+    return _box_mesh("Box", [((0.0, 0.0, 0.0), (size, size, size))], (0.72, 0.55, 0.34)), size
+
+
+def _carry(arm, box, rest, carry):
+    """The box rides between the hands from ``from`` to ``to``, then rests at ``rest_after``.
+
+    Two Copy Location constraints on the hands' bones — the second at half
+    influence, so together they put the box at the midpoint between the wrists
+    — keyed on at the pickup frame and off at the set-down frame. They follow
+    whatever motion is generated, so the box stays in the hands through any
+    take; the pins put the wrists on the box's sides at both ends, which is
+    what makes the handover seamless.
+    """
+    from animatica_blender import constraints_ui
+
+    box.location = rest
+    box.keyframe_insert("location", frame=1)
+    box.location = carry["rest_after"]
+    box.keyframe_insert("location", frame=carry["to"])
+    for side, weight in (("LeftHand", 1.0), ("RightHand", 0.5)):
+        bone = constraints_ui.resolve_effector_bone(arm, side)
+        con = box.constraints.new("COPY_LOCATION")
+        con.name = f"Carried by {side}"
+        con.target, con.subtarget = arm, bone.name
+        for frame, value in ((1, 0.0), (carry["from"], weight), (carry["to"], 0.0)):
+            con.influence = value
+            box.keyframe_insert(f'constraints["{con.name}"].influence', frame=frame)
+    action = box.animation_data.action
+    for layer in action.layers:
+        for strip in layer.strips:
+            for fc in strip.channelbag(box.animation_data.action_slot).fcurves:
+                for k in fc.keyframe_points:
+                    k.interpolation = "CONSTANT"
+
+
 def _add_pins(arm, pins):
     """Effector pins, made the way the Pin button makes them.
 
@@ -527,6 +658,12 @@ def build_one(ex, assets_dir, out_dir):
             _build_ball(prop["at"], prop["kick_frame"], frames)
         elif prop["kind"] == "crate":
             _build_crate(prop["at"], prop["size"])
+        elif prop["kind"] == "log":
+            _build_log(prop["at"], prop["length"], prop["radius"])
+        elif prop["kind"] == "table":
+            _build_table(prop["at"], prop["size"], prop["height"])
+        elif prop["kind"] == "counter":
+            _build_counter(prop["at"], prop["size"], prop["height"])
     arm = _import_character(ex["character"], assets_dir)
     _frame_view(scene, arm, ex["travel"])
 
@@ -550,6 +687,10 @@ def build_one(ex, assets_dir, out_dir):
         settings.waypoint_heading = bool(ex.get("face_along_path"))
     if ex.get("pins"):
         _add_pins(arm, ex["pins"])
+    for prop in ex.get("props", ()):
+        if prop["kind"] == "box":
+            box, size = _build_box(prop["at"], prop["size"])
+            _carry(arm, box, (prop["at"][0], prop["at"][1], size / 2), prop["carry"])
 
     from animatica_blender import properties
     properties.save_blocks_to_armature(arm, settings)

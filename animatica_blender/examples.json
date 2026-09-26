@@ -129,6 +129,20 @@
       "sha256": "c500d084b486f8f8650df72bb45e1917e260af18e82d2697e5878d8e41c91572"
     },
     {
+      "id": "step-over",
+      "title": "Step over the log",
+      "tier": 3,
+      "seconds": 4.5,
+      "lesson": "The model does not see props; constraints tell it about them. A pin over the log for each foot, at the frame it crosses, lifts it over.",
+      "prompt": "a person walks forward \u2192 a person steps over a log \u2192 a person walks forward",
+      "character": "Animatica Hero",
+      "credit": "",
+      "file": "step-over.c8773fb7.blend",
+      "url": "",
+      "size": 12558487,
+      "sha256": "c8773fb7ce299d32ce54dd41522daa2e6514723258f2bd76fd629bb5a5faa482"
+    },
+    {
       "id": "walk-sit",
       "title": "Walk to the chair, sit",
       "tier": 4,
