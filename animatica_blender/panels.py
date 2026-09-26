@@ -299,9 +299,11 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
         _draw_character(layout, context, settings)
         layout.separator()
 
-        # A take in front of you: keep it or not comes first.
-        if in_preview:
-            _draw_preview(layout, context, settings, arm_live)
+        from . import batch
+        batch_waiting = bool(batch.pending(settings) or batch.failures(settings))
+        # Takes in front of you, one or a batch: keep them or not comes first.
+        if in_preview or batch_waiting:
+            _draw_review(layout, context, settings, arm_live)
         elif not has_prompt:
             # First run: say in one line what this is.
             note = layout.row()
@@ -310,15 +312,18 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
 
         _draw_prompt(layout, settings, has_prompt, in_preview)
 
-        from . import batch
-        batch_waiting = bool(batch.pending(settings))
         gen = layout.column(align=True)
-        gen.enabled = not blockers and not batch_waiting
+        gen.enabled = not blockers or bool(batch.pending(settings))
         row = gen.row()
         row.scale_y = 1.5
-        # Every run is a new take (seed 0), so "again" is what it does.
-        row.operator("animatica.generate",
-                     text="Generate Again" if in_preview else "Generate Motion")
+        # Every run is a new take (seed 0), so "again" is what it does; for a
+        # batch, again for every take waiting.
+        if batch.pending(settings):
+            row.operator("animatica.generate_batch", text="Regenerate All",
+                         icon='FILE_REFRESH').characters = json.dumps(batch.pending(settings))
+        else:
+            row.operator("animatica.generate",
+                         text="Generate Again" if in_preview else "Generate Motion")
         # With no prompt, the field above already says what is missing.
         if blockers and has_prompt:
             note = gen.row()
@@ -326,8 +331,8 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
             note.active = False
             note.label(text=blockers[0], icon='INFO')
 
-        _draw_take_options(layout, context, settings, model, in_preview)
-        if not in_preview:
+        _draw_take_options(layout, context, settings, model, in_preview or batch_waiting)
+        if not in_preview and not batch_waiting:
             _draw_next_take(layout, context)
             _draw_kept(layout, arm_live)
         _draw_batch(layout, context, settings)
@@ -415,56 +420,12 @@ def _draw_character(layout, context, settings) -> None:
 
 
 def _draw_batch(layout, context, settings) -> None:
-    """Several characters at once: generate them together, or review their takes."""
+    """Several characters at once: generate them together. Their takes are
+    reviewed in :func:`_draw_review`, as a single take is."""
     from . import batch
 
-    names = batch.pending(settings)
-    failed = batch.failures(settings)
-    if names or failed:
-        box = layout.box()
-        n = len(names)
-        box.label(text=f"Batch · {n} take{'' if n == 1 else 's'} to review" if n
-                  else "Batch · no takes made")
-        from . import variations
-        arms = {name: properties._live_armature(bpy.data.objects.get(name)) for name in names}
-        varied = [name for name in names if variations.take_of(arms[name]) is not None]
-        if len(varied) >= 2:
-            # A crowd: flip every character at once.
-            variations.draw(box, arms[varied[0]], character="*", text="All: next variation")
-        # One row a character: its version, and keep / throw away / again.
-        col = box.column(align=True)
-        for name in names:
-            row = col.row(align=True)
-            left = row.row(align=True)
-            take = variations.take_of(arms[name])
-            if take is not None:
-                variations.draw(left, arms[name], character=name,
-                                text=f"{name} · {take.index + 1} of {take.count}")
-            else:
-                left.label(text=name, icon='ARMATURE_DATA')
-            op = row.operator("animatica.review_batch_one", text="", icon='CHECKMARK')
-            op.character, op.keep = name, True
-            op = row.operator("animatica.review_batch_one", text="", icon='X')
-            op.character, op.keep = name, False
-            row.operator("animatica.generate_batch", text="",
-                         icon='FILE_REFRESH').characters = json.dumps([name])
-        for line in failed[:6]:
-            row = box.row(align=True)
-            row.alert = True
-            row.label(text=line, icon='ERROR')
-            who = line.split(":")[0]
-            if properties._live_armature(bpy.data.objects.get(who)) is not None:
-                row.operator("animatica.generate_batch", text="",
-                             icon='FILE_REFRESH').characters = json.dumps([who])
-        row = box.row(align=True)
-        row.scale_y = 1.3
-        row.operator("animatica.accept_batch", icon='CHECKMARK')
-        row.operator("animatica.reject_batch", icon='X')
-        if names:
-            box.operator("animatica.generate_batch", text="Regenerate All",
-                         icon='FILE_REFRESH').characters = json.dumps(names)
-        return
-
+    if batch.pending(settings) or batch.failures(settings):
+        return          # the takes are in the review, at the top
     chars = batch.selected_characters(context)
     if len(chars) < 2 or settings.is_previewing:
         return
@@ -564,31 +525,79 @@ def _draw_kept(layout, arm) -> None:
     row.label(text="Kept take is on the NLA", icon='NLA')
 
 
-def _draw_preview(layout, context, settings, arm) -> None:
-    """The take in front of you: what made it, how it plays, keep it or not."""
-    from . import key_poses
+def _draw_review(layout, context, settings, arm) -> None:
+    """The takes in front of you — one from Generate, or a batch's — in one
+    box: what made them, how they play, which version, keep them or not.
+
+    A row per character, with its variations. With several, each row also
+    keeps, throws away or regenerates that character alone, and the big
+    buttons act on all of them; with one, the big buttons are that row's.
+    """
+    from . import batch, key_poses, variations
+
+    names = batch.pending(settings)
+    failed = batch.failures(settings)
+    single = not names and not failed
+    arms = ([arm] if arm is not None else []) if single else [
+        a for a in (properties._live_armature(bpy.data.objects.get(n)) for n in names)
+        if a is not None]
+    n = len(arms)
 
     box = layout.box()
-    box.label(text="Previewing take")
+    box.label(text="Reviewing take" if single else
+              f"Reviewing {n} take{'' if n == 1 else 's'}" if n else "No takes made")
     info = box.column(align=True)
     info.active = False
     # Another character focused while this take waits: say why nothing switched.
     focused = properties.armature_of(context.view_layer.objects.active)
-    if settings.follow_active and focused is not None and focused != arm:
+    if single and settings.follow_active and focused is not None and focused != arm:
         info.label(text=f"Accept or Reject to switch to {focused.name}", icon='INFO')
-    ad = arm.animation_data if arm is not None else None
-    looped = ad.action.get("animatica_loop") if ad and ad.action else None
-    if looped:
+    loops = [a.animation_data.action.get("animatica_loop") for a in arms
+             if a.animation_data and a.animation_data.action]
+    loops = [lp for lp in loops if lp]
+    if loops:
         fps = context.scene.render.fps / (context.scene.render.fps_base or 1.0)
-        frames = int(looped["frames"])
+        frames = int(loops[0]["frames"])
         info.label(text=f"Seamless loop · {frames} frames ({frames / fps:.2f} s)", icon='LOOP_FORWARDS')
-    if key_poses.trail_on(settings):
+    if single and key_poses.trail_on(settings):
         # The lines drawn through the body are a tool, not Blender's own
         # motion paths, and nothing else says so where they are seen.
         info.label(text="Blue trail: drag it to repose the body", icon='CURVE_PATH')
+
+    # A row a character: its version, and (several) keep / throw away / again.
+    col = box.column(align=True)
+    for a in arms:
+        row = col.row(align=True)
+        left = row.row(align=True)
+        take = variations.take_of(a)
+        if take is not None:
+            variations.draw(left, a, character="" if single else a.name,
+                            text=f"{a.name} · variation {take.index + 1} of {take.count}")
+        else:
+            left.label(text=a.name, icon='ARMATURE_DATA')
+        if not single:
+            op = row.operator("animatica.review_batch_one", text="", icon='CHECKMARK')
+            op.character, op.keep = a.name, True
+            op = row.operator("animatica.review_batch_one", text="", icon='X')
+            op.character, op.keep = a.name, False
+            row.operator("animatica.generate_batch", text="",
+                         icon='FILE_REFRESH').characters = json.dumps([a.name])
+    for line in failed[:6]:
+        row = box.row(align=True)
+        row.alert = True
+        row.label(text=line, icon='ERROR')
+        who = line.split(":")[0]
+        if properties._live_armature(bpy.data.objects.get(who)) is not None:
+            row.operator("animatica.generate_batch", text="",
+                         icon='FILE_REFRESH').characters = json.dumps([who])
+    if not single and sum(variations.take_of(a) is not None for a in arms) >= 2:
+        # A crowd: flip every character at once.
+        first = next(a for a in arms if variations.take_of(a) is not None)
+        variations.draw(box, first, character="*", text="All: next variation")
+
     # Which take this is, so one worth keeping can be had again.
     last = int(getattr(settings, "last_used_seed", 0) or 0)
-    if last > 0:
+    if single and last > 0:
         row = box.row(align=True)
         locked = int(settings.seed) == last
         sub = row.row()
@@ -598,32 +607,34 @@ def _draw_preview(layout, context, settings, arm) -> None:
         lock.enabled = not locked
         lock.operator("animatica.lock_global_seed", text="Locked" if locked else "Lock",
                       icon='LOCKED' if locked else 'UNLOCKED')
-    from . import variations
-    variations.draw(box, arm)
-    # Live on the take: the travel is muted, not removed, so it comes back.
-    col = box.column()
-    col.use_property_split = True
-    col.use_property_decorate = False
-    col.prop(settings, "inplace")
-    # Accept replaces a take kept before; say so on the button, not only in
-    # its tooltip.
-    kept = ad is not None and any(t.name.startswith("Animatica: ") for t in ad.nla_tracks)
+    # Live on the takes: the travel is muted, not removed, so it comes back.
+    sub = box.column()
+    sub.use_property_split = True
+    sub.use_property_decorate = False
+    sub.prop(settings, "inplace")
+
     row = box.row(align=True)
     row.scale_y = 1.3
-    row.operator("animatica.accept", icon='CHECKMARK',
-                 text="Replace Kept" if kept else "Accept")
-    row.operator("animatica.reject", icon='X')
-
-    # Re-roll just the active block (keeping its neighbours) — otherwise only
-    # reachable by right-clicking a timeline strip. With a single block this
-    # is Generate Again, so only surface it when there are blocks to keep.
-    if len(settings.prompt_blocks) >= 2:
-        op = box.operator(
-            "animatica.regenerate_block",
-            icon='FILE_REFRESH',
-            text="Regenerate Active Block",
-        )
-        op.block_index = -1
+    if single:
+        # Accept replaces a take kept before; say so on the button, not only
+        # in its tooltip.
+        ad = arm.animation_data if arm is not None else None
+        kept = ad is not None and any(t.name.startswith("Animatica: ") for t in ad.nla_tracks)
+        row.operator("animatica.accept", icon='CHECKMARK',
+                     text="Replace Kept" if kept else "Accept")
+        row.operator("animatica.reject", icon='X')
+        # Re-roll just the active block (keeping its neighbours) — otherwise
+        # only reachable by right-clicking a timeline strip. With a single
+        # block this is Generate Again, so only when there are blocks to keep.
+        if len(settings.prompt_blocks) >= 2:
+            op = box.operator("animatica.regenerate_block", icon='FILE_REFRESH',
+                              text="Regenerate Active Block")
+            op.block_index = -1
+    else:
+        row.operator("animatica.accept_batch", icon='CHECKMARK',
+                     text="Accept All" if n > 1 else "Accept")
+        row.operator("animatica.reject_batch", icon='X',
+                     text="Reject All" if n > 1 else "Reject")
     layout.separator()
 
 

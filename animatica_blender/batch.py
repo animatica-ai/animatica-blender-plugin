@@ -412,7 +412,9 @@ class ANIMATICA_OT_reject_batch(Operator):
 
     @classmethod
     def poll(cls, context):
-        return not context.scene.animatica.is_generating and bool(pending(context.scene.animatica))
+        s = context.scene.animatica
+        # With only failures left, this is how they are dismissed.
+        return not s.is_generating and bool(pending(s) or failures(s))
 
     def execute(self, context):
         n = _review(context, "reject")
