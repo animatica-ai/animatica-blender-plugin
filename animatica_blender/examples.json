@@ -11,10 +11,10 @@
       "lesson": "One gesture, standing still. The simplest thing to ask for.",
       "character": "Animatica Hero",
       "credit": "",
-      "file": "wave.e4f765a2.blend",
+      "file": "wave.6ec193bf.blend",
       "url": "",
-      "size": 12550851,
-      "sha256": "e4f765a28c9a14462111197f12efe4aaf648d6489f3cd5e3c7c45a0c158ab068"
+      "size": 12550864,
+      "sha256": "6ec193bfdf81ab548e3074d9c414356c3f4bdd700efaf2fe4da9cd6f24c3c412"
     },
     {
       "id": "walk",
@@ -25,10 +25,10 @@
       "lesson": "Travel. The character goes somewhere, and the trail shows the path.",
       "character": "Cesium Man",
       "credit": "Cesium Man by Cesium, CC-BY-4.0 \u2014 https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CesiumMan",
-      "file": "walk.fc28c015.blend",
-      "url": "https://github.com/animatica-ai/animatica-blender-plugin/releases/download/examples-v1/walk.fc28c015.blend",
-      "size": 768823,
-      "sha256": "fc28c015d4dda139eba87046597deb5789375380566114fba3709977f31daa9f"
+      "file": "walk.f8974f88.blend",
+      "url": "",
+      "size": 768841,
+      "sha256": "f8974f8861b1ca81ed1c1d45aa536c2cc65b0cf45a9d8ea05aae8fad5a7861d4"
     },
     {
       "id": "jump",
@@ -39,10 +39,10 @@
       "lesson": "A beat of effort: wind up, leave the ground, land.",
       "character": "Animatica Hero",
       "credit": "",
-      "file": "jump.1e62ceb6.blend",
+      "file": "jump.ee376496.blend",
       "url": "",
-      "size": 12553315,
-      "sha256": "1e62ceb6f49c8edc5ef8105574b6310aca2b53aceac7254bcf9a479f2422e470"
+      "size": 12553374,
+      "sha256": "ee376496be4a5115bc53aa7906d03abf01da7a88b163389b37c4cf5a87593264"
     },
     {
       "id": "jab-cross",
@@ -53,10 +53,10 @@
       "lesson": "Two actions in a row. Order matters, and so does timing.",
       "character": "Cesium Man",
       "credit": "Cesium Man by Cesium, CC-BY-4.0 \u2014 https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CesiumMan",
-      "file": "jab-cross.440e08cb.blend",
-      "url": "https://github.com/animatica-ai/animatica-blender-plugin/releases/download/examples-v1/jab-cross.440e08cb.blend",
-      "size": 768891,
-      "sha256": "440e08cb4f6d4e19ce8a80c367df443ca596d7248029a70371dd00d6e76b6b8c"
+      "file": "jab-cross.5228e499.blend",
+      "url": "",
+      "size": 768925,
+      "sha256": "5228e499628fa2bcbdf37511c8090a518b8a3c58333d99204c21d716dee0a68b"
     },
     {
       "id": "run-stop",
@@ -67,10 +67,10 @@
       "lesson": "A change of speed inside one clip.",
       "character": "Animatica Hero",
       "credit": "",
-      "file": "run-stop.558475ae.blend",
+      "file": "run-stop.041351ce.blend",
       "url": "",
-      "size": 12550707,
-      "sha256": "558475aed28e612d25d477df2abe3115998a82db5ccf6e5f176ff72e4ba2b5b2"
+      "size": 12550736,
+      "sha256": "041351ce2a3a73747e44f3e7b17c55404c81cf89d7161c5a96f0d4dc2b5e5e82"
     },
     {
       "id": "walk-turn-back",
@@ -81,10 +81,10 @@
       "lesson": "Words set the gait; each circle on the floor says where to be, and when. Drag one, or change its frame, and generate again.",
       "character": "Animatica Hero",
       "credit": "",
-      "file": "walk-turn-back.dee3bd02.blend",
+      "file": "walk-turn-back.76c8a3e7.blend",
       "url": "",
-      "size": 12554659,
-      "sha256": "dee3bd0254eab4f79599f97179919f23ff578da158b1147b99398b26e2031a47"
+      "size": 12553998,
+      "sha256": "76c8a3e71da1f3014759480c4b029c77492fe8f8147c30b060f4c37f73d3c226"
     },
     {
       "id": "crouch-creep",
@@ -95,10 +95,24 @@
       "lesson": "Three beats in sequence, each handing over to the next.",
       "character": "Animatica Hero",
       "credit": "",
-      "file": "crouch-creep.ad2af430.blend",
+      "file": "crouch-creep.003977c0.blend",
       "url": "",
-      "size": 12550697,
-      "sha256": "ad2af430b4b24cb5137c53733400ec389bc790d60a5af001eb0109d73640d1ae"
+      "size": 12550717,
+      "sha256": "003977c027ece62c5d9ddb0771fefab669cf45d7633fd04cf3601691677d8948"
+    },
+    {
+      "id": "walk-sit",
+      "title": "Walk to the chair, sit",
+      "tier": 4,
+      "seconds": 5.5,
+      "prompt": "a person walks to the chair, turns around, and sits down",
+      "lesson": "Everything at once. Key poses say how it starts and ends, the waypoints where it walks, the words the rest. Scrub to the end: the seated pose is a keyframe you can change.",
+      "character": "Animatica Hero",
+      "credit": "",
+      "file": "walk-sit.0588688a.blend",
+      "url": "",
+      "size": 12577107,
+      "sha256": "0588688ad05c0900333bf4571e2b50414234482187d164f722613cfba28d7009"
     }
   ]
 }

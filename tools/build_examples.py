@@ -31,8 +31,9 @@ import math
 import pathlib
 import sys
 
+import bmesh
 import bpy
-from mathutils import Euler, Vector
+from mathutils import Euler, Matrix, Vector
 
 FPS = 24
 
@@ -110,7 +111,36 @@ EXAMPLES = [
      "prompt": "a person crouches, creeps forward slowly, then stands up",
      "character": "hero",   "set": "dusk",    "travel": 2.5,
      "lesson": "Three beats in sequence, each handing over to the next."},
+    {"id": "walk-sit",       "title": "Walk to the chair, sit", "tier": 4, "seconds": 5.5,
+     # The whole pipeline, as the Animatica skill lays it out: block out, then
+     # prompt, then constrain, then generate. The two key poses are made with
+     # Generate Pose in a signed-in Blender (tools/finish_example.py) —
+     # standing where it starts, seated on the chair and turned to face back
+     # the way it came.
+     #
+     # Key poses alone were not enough. With only the two, the model turned
+     # early and backed 1.3–1.6 m to the chair, prompt worded either way. A
+     # waypoint in front of the chair at frame 60, facing along the path,
+     # makes it walk there face-first: 2.05 m forward, the turn at frame 64,
+     # one step back onto the seat.
+     "prompt": "a person walks to the chair, turns around, and sits down",
+     "waypoints": [(1, (0.0, 0.0)), (60, (0.0, -2.05))],
+     "face_along_path": True,
+     "props": [{"kind": "chair", "at": (0.0, -2.6), "facing": "back"}],
+     "key_poses": [
+         {"frame": 1, "at": (0.0, 0.0), "facing": "forward",
+          "prompt": "a person stands in a neutral pose with arms relaxed at sides"},
+         {"frame": 132, "at": (0.0, -2.52), "facing": "back",
+          "prompt": "a person sits on a chair with hands resting on their thighs"},
+     ],
+     "character": "hero",   "set": "studio",  "travel": 2.6,
+     "lesson": "Everything at once. Key poses say how it starts and ends, the "
+               "waypoints where it walks, the words the rest. Scrub to the end: "
+               "the seated pose is a keyframe you can change."},
 ]
+
+# Which way a key pose or a prop faces. The characters face -Y at rest.
+FACING = {"forward": 0.0, "back": math.pi}
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +181,10 @@ def _build_set(scene, look):
     sun_data.energy = spec["sun"]
     sun = bpy.data.objects.new("Sun", sun_data)
     sun.rotation_euler = Euler((math.radians(50), 0, math.radians(35)))
+    # A sun lights the same from anywhere; at the origin it drew its direction
+    # line up out of the character's feet, across every shot. Up and behind
+    # the view instead.
+    sun.location = (-6.0, 6.0, 10.0)
     scene.collection.objects.link(sun)
 
     if spec["key"]:
@@ -161,6 +195,46 @@ def _build_set(scene, look):
         key.location = (3.5, -4.0, 4.0)
         key.rotation_euler = Euler((math.radians(55), 0, math.radians(40)))
         scene.collection.objects.link(key)
+
+    # The lamps light renders, not the viewport — Material Preview uses its own
+    # lighting — but their gizmos drew black lines through the shot. Hidden in
+    # the viewport, like the camera; a render still uses them.
+    for obj in scene.collection.objects:
+        if obj.type == "LIGHT":
+            obj.hide_set(True)
+
+
+def _build_chair(at, facing):
+    """A plain chair: seat, four legs, a back. Its seat faces *facing*.
+
+    Built at the origin facing -Y — the way the characters face — then turned
+    and moved, so "back" puts the seat facing +Y, toward where a character
+    walking out from the origin comes from.
+    """
+    wood = _material("Chair", (0.42, 0.27, 0.16), roughness=0.6)
+    seat_h, half, leg, back_h = 0.46, 0.22, 0.04, 0.48
+    parts = [((0, 0, seat_h - 0.025), (half * 2, half * 2, 0.05))]
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            parts.append(((sx * (half - leg), sy * (half - leg), (seat_h - 0.05) / 2),
+                          (leg, leg, seat_h - 0.05)))
+    # The back rises from the rear edge: +Y, behind a sitter facing -Y.
+    parts.append(((0, half - leg / 2, seat_h + back_h / 2), (half * 2, leg, back_h)))
+
+    # One mesh, not six parented cubes: parenting drew a dashed line from
+    # every part to the chair's origin, right under the seat.
+    bm = bmesh.new()
+    for loc, dims in parts:
+        bmesh.ops.create_cube(bm, size=1.0, matrix=Matrix.LocRotScale(Vector(loc), None, Vector(dims)))
+    mesh = bpy.data.meshes.new("Chair")
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.materials.append(wood)
+    chair = bpy.data.objects.new("Chair", mesh)
+    bpy.context.scene.collection.objects.link(chair)
+    chair.rotation_euler = (0.0, 0.0, FACING[facing])
+    chair.location = (at[0], at[1], 0.0)
+    return chair
 
 
 def _import_character(which, assets_dir):
@@ -256,6 +330,9 @@ def build_one(ex, assets_dir, out_dir):
     scene.name = ex["title"]
 
     _build_set(scene, ex["set"])
+    for prop in ex.get("props", ()):
+        if prop["kind"] == "chair":
+            _build_chair(prop["at"], prop["facing"])
     arm = _import_character(ex["character"], assets_dir)
     _frame_view(scene, arm, ex["travel"])
 
@@ -275,6 +352,7 @@ def build_one(ex, assets_dir, out_dir):
         from animatica_blender import waypoints
         for frame, xy in ex["waypoints"]:
             waypoints.create_marker(scene, frame, xy, owner=arm)
+        settings.waypoint_heading = bool(ex.get("face_along_path"))
 
     from animatica_blender import properties
     properties.save_blocks_to_armature(arm, settings)
@@ -292,6 +370,13 @@ def build_one(ex, assets_dir, out_dir):
         scene["animatica_example_credit"] = credit
 
     bpy.ops.file.pack_all()
+    if ex.get("key_poses"):
+        # Key poses come from the server, which needs a signed-in Blender:
+        # this is a base for tools/finish_example.py, not a finished example.
+        scene["animatica_key_poses_pending"] = json.dumps(ex["key_poses"])
+        path = out_dir / f"{ex['id']}.base.blend"
+        bpy.ops.wm.save_as_mainfile(filepath=str(path), compress=True, copy=True)
+        return path
     path = out_dir / f"{ex['id']}.blend"
     bpy.ops.wm.save_as_mainfile(filepath=str(path), compress=True, copy=True)
     return path
@@ -327,36 +412,51 @@ def main(argv):
     manifest = {"version": 1, "fps": FPS, "examples": []}
     existing = out_dir / "examples.json"
     if wanted and existing.is_file():
-        # Rebuilding a few must not drop the rest from the manifest.
+        # Rebuilding a few must not drop the rest from the manifest; publish()
+        # replaces each rebuilt one's entry by id.
         manifest = json.loads(existing.read_text())
-        manifest["examples"] = [e for e in manifest["examples"] if e["id"] not in wanted]
     for ex in EXAMPLES:
         if wanted and ex["id"] not in wanted:
             continue
         built = build_one(ex, assets_dir, out_dir)
-        # Content-addressed name: a published file is never overwritten, so a
-        # manifest — fresh, or a CDN edge's copy from before the update — always
-        # names a file that matches its own checksum. Overwriting in place meant
-        # that for minutes after a republish the old list and the new file met,
-        # and every download was refused.
-        digest = _sha256(built)
-        path = built.with_name(f"{ex['id']}.{digest[:8]}.blend")
-        built.replace(path)
-        for stale in out_dir.glob(f"{ex['id']}.*.blend"):
-            if stale != path:
-                stale.unlink()
-        entry = {k: ex[k] for k in ("id", "title", "tier", "seconds", "prompt", "lesson")}
-        entry.update({
-            "character": CHARACTERS[ex["character"]]["name"],
-            "credit": CHARACTERS[ex["character"]]["credit"],
-            "file": path.name,
-            "url": (args.base_url.rstrip("/") + "/" + path.name) if args.base_url else "",
-            "size": path.stat().st_size,
-            "sha256": digest,
-        })
-        manifest["examples"].append(entry)
-        print(f"built {path.name:24} {entry['size'] / 1048576:6.1f} MB  {ex['title']}")
+        if ex.get("key_poses"):
+            print(f"base  {built.name:24} needs its key poses: run "
+                  f"tools/finish_example.py in a signed-in Blender")
+            continue
+        publish(ex, built, manifest, args.base_url)
 
+    write_manifest(out_dir, manifest)
+
+
+def publish(ex, built, manifest, base_url=""):
+    """Give a built file its content-addressed name and its manifest entry."""
+    # Content-addressed name: a published file is never overwritten, so a
+    # manifest — fresh, or a CDN edge's copy from before the update — always
+    # names a file that matches its own checksum. Overwriting in place meant
+    # that for minutes after a republish the old list and the new file met,
+    # and every download was refused.
+    digest = _sha256(built)
+    path = built.with_name(f"{ex['id']}.{digest[:8]}.blend")
+    built.replace(path)
+    for stale in built.parent.glob(f"{ex['id']}.*.blend"):
+        if stale != path and not stale.name.endswith(".base.blend"):
+            stale.unlink()
+    entry = {k: ex[k] for k in ("id", "title", "tier", "seconds", "prompt", "lesson")}
+    entry.update({
+        "character": CHARACTERS[ex["character"]]["name"],
+        "credit": CHARACTERS[ex["character"]]["credit"],
+        "file": path.name,
+        "url": (base_url.rstrip("/") + "/" + path.name) if base_url else "",
+        "size": path.stat().st_size,
+        "sha256": digest,
+    })
+    manifest["examples"] = [e for e in manifest["examples"] if e["id"] != ex["id"]]
+    manifest["examples"].append(entry)
+    print(f"built {path.name:24} {entry['size'] / 1048576:6.1f} MB  {ex['title']}")
+    return path
+
+
+def write_manifest(out_dir, manifest):
     order = {ex["id"]: i for i, ex in enumerate(EXAMPLES)}
     manifest["examples"].sort(key=lambda e: order.get(e["id"], len(order)))
     (out_dir / "examples.json").write_text(json.dumps(manifest, indent=2) + "\n")
