@@ -86,13 +86,70 @@ EXAMPLES = [
      "character": "hero",   "set": "studio",  "travel": 0.0,
      "lesson": "A beat of effort: wind up, leave the ground, land."},
     {"id": "jab-cross",      "title": "Jab, then cross",       "tier": 2, "seconds": 2.0,
-     "prompt": "a person throws a jab followed by a cross",
+     "blocks": [("a person throws a jab", 1.0),
+                ("a person throws a right cross", 1.0)],
      "character": "cesium", "set": "ring",    "travel": 0.0,
-     "lesson": "Two actions in a row. Order matters, and so does timing."},
+     "lesson": "Two actions, two blocks. One action per block, each as long as it "
+               "takes; the timeline sets the order."},
     {"id": "run-stop",       "title": "Run, then stop",        "tier": 2, "seconds": 5.0,
-     "prompt": "a person runs forward then slows to a stop",
+     # Split into two blocks, the second one was ignored: whatever it said
+     # ("slows down and stops", "stops running and stands still", "walks a
+     # few steps and stops"), the model carried the run's momentum through
+     # and was still at 3 m/s on the last frame. Two waypoints on one spot,
+     # reached at frame 100 and still there at 120, say where to stop: it
+     # now slows 2.0 -> 0.7 -> 0.0 m/s and stands.
+     "blocks": [("a person runs forward", 3.0),
+                ("a person slows down and stops", 2.0)],
+     "waypoints": [(1, (0.0, 0.0)), (100, (0.0, -9.6)), (120, (0.0, -9.6))],
      "character": "hero",   "set": "runway",  "travel": 10.0,
-     "lesson": "A change of speed inside one clip."},
+     "lesson": "One block runs, the next stops, and two circles on one spot say "
+               "where: reached by frame 100, still there at 120."},
+    {"id": "press-button",   "title": "Press the button",      "tier": 3, "seconds": 3.0,
+     # A hand pin: the red sphere is where the right wrist must be at frame 30,
+     # just above the button. The Hero faces -Y, so its right hand is on -X.
+     # "Reaches out and presses" walked the character round the pillar to
+     # reach across itself; "standing in place" keeps the feet planted.
+     #
+     # Held back until the server re-pins effectors on the client's rig
+     # (motionmcp-kimodo-cloud fix/cleanup-snap): until then the retarget's
+     # half reach leaves the wrist 6-11 cm beside the button, and a lesson
+     # about pins that misses its pin teaches the opposite.
+     "hold": "hand pins miss by 6-11 cm until the server fix is deployed",
+     "blocks": [("a person standing in place presses a button in front of them "
+                 "with their right hand", 1.75),
+                ("a person lowers their right arm", 1.25)],
+     "props": [{"kind": "button", "at": (-0.2, -0.62), "height": 1.05}],
+     "pins": [{"joint": "RightHand", "keys": [(30, (-0.2, -0.54, 1.16))]}],
+     "character": "hero",   "set": "studio",  "travel": 0.6,
+     "lesson": "A pin says where a hand must be, and when. Drag the red sphere, or "
+               "move its keyframe on the timeline, and generate again."},
+    {"id": "kick-ball",      "title": "Kick the ball",         "tier": 3, "seconds": 2.0,
+     # A foot pin: the right ankle is pinned just behind the ball at the frame
+     # of the kick, and the ball rolls away from that frame on.
+     "blocks": [("a person kicks a ball with their right foot", 2.0)],
+     "props": [{"kind": "ball", "at": (-0.14, -0.5), "kick_frame": 24}],
+     "pins": [{"joint": "RightFoot", "keys": [(24, (-0.14, -0.28, 0.14))]}],
+     "character": "hero",   "set": "outdoor", "travel": 1.0,
+     "lesson": "Pins work on feet too. The foot meets the ball at the pinned frame; "
+               "move the ball and its pin together to kick somewhere else."},
+    {"id": "strike-pose",    "title": "Walk and strike a pose", "tier": 3, "seconds": 3.5,
+     # Key poses, on their own: standing at frame 1, and the victory pose at
+     # frame 84 made with Generate Pose. Between them the blocks say walk,
+     # then stop and pose; the key pose says exactly which pose, and where.
+     "blocks": [("a person walks forward", 2.0),
+                ("a person stops and raises both arms in victory", 1.5)],
+     "key_poses": [
+         {"frame": 1, "at": (0.0, 0.0), "facing": "forward",
+          "prompt": "a person stands in a neutral pose with arms relaxed at sides"},
+         # 1.5 m out, not 2.2: the walk block covers about 1.3 m in its two
+         # seconds, and a pose further on dragged the character 0.9 m through
+         # the pose block with its feet sliding.
+         {"frame": 84, "at": (0.0, -1.5), "facing": "forward",
+          "prompt": "a person stands with both arms raised high above the head in victory"},
+     ],
+     "character": "hero",   "set": "studio",  "travel": 1.5,
+     "lesson": "A key pose is a keyframe the motion has to hit. This one came from "
+               "Generate Pose @ Frame; make your own at any frame, or pose it by hand."},
     {"id": "walk-turn-back", "title": "Walk, turn, walk back", "tier": 3, "seconds": 6.0,
      # Waypoints, because words were not enough: tested five ways, one sentence
      # and two blocks, the model brought the character back in some samples
@@ -102,15 +159,34 @@ EXAMPLES = [
      # now: any root constraint on a character much smaller than the model's
      # body makes the server stretch the root after the retarget, and the feet
      # slide. That is a server fix; this example should not have to wait on it.
-     "prompt": "a person walks forward, turns around, and walks back",
+     # "Walks forward" on the way back too: after the turn that is back, and
+     # "walks back" reads as walking backwards.
+     "blocks": [("a person walks forward", 2.5),
+                ("a person turns around", 1.0),
+                ("a person walks forward", 2.5)],
      "waypoints": [(1, (0.0, 0.0)), (72, (0.0, -2.5)), (144, (0.0, -0.2))],
      "character": "hero",   "set": "outdoor", "travel": 3.0,
-     "lesson": "Words set the gait; each circle on the floor says where to be, and "
-               "when. Drag one, or change its frame, and generate again."},
-    {"id": "crouch-creep",   "title": "Crouch, creep, stand",  "tier": 3, "seconds": 8.0,
-     "prompt": "a person crouches, creeps forward slowly, then stands up",
-     "character": "hero",   "set": "dusk",    "travel": 2.5,
-     "lesson": "Three beats in sequence, each handing over to the next."},
+     "lesson": "A block per action sets what happens; each circle on the floor says "
+               "where to be, and when. Drag one, or change its frame, and generate "
+               "again."},
+    {"id": "crouch-creep",   "title": "Creep around the crate", "tier": 4, "seconds": 8.0,
+     # Three blocks for three beats, and a curved path for the middle one: the
+     # waypoints bend round the crate, and facing along the path turns the
+     # body with the route instead of leaving it to sidestep.
+     # "Crouches down" alone started the clip already crouched (hips at
+     # 0.66 m on frame 1) and the first beat was lost; from standing, it
+     # crouches from 1.00 m to 0.39 m by frame 36.
+     "blocks": [("a person standing upright slowly crouches down", 1.5),
+                ("a person creeps forward slowly in a crouch", 4.5),
+                ("a person stands up", 2.0)],
+     "props": [{"kind": "crate", "at": (0.0, -1.25), "size": 0.6}],
+     "waypoints": [(1, (0.0, 0.0)), (36, (0.0, -0.15)), (90, (0.8, -1.25)),
+                   (144, (0.0, -2.45)), (192, (0.0, -2.6))],
+     "face_along_path": True,
+     "character": "hero",   "set": "dusk",    "travel": 2.6,
+     "lesson": "Blocks set the beats, waypoints the route, and facing along the path "
+               "turns the body with it. Resize a block, or drag a circle, and "
+               "generate again."},
     {"id": "walk-sit",       "title": "Walk to the chair, sit", "tier": 4, "seconds": 5.5,
      # The whole pipeline, as the Animatica skill lays it out: block out, then
      # prompt, then constrain, then generate. The two key poses are made with
@@ -123,8 +199,15 @@ EXAMPLES = [
      # waypoint in front of the chair at frame 60, facing along the path,
      # makes it walk there face-first: 2.05 m forward, the turn at frame 64,
      # one step back onto the seat.
-     "prompt": "a person walks to the chair, turns around, and sits down",
-     "waypoints": [(1, (0.0, 0.0)), (60, (0.0, -2.05))],
+     # Split into walk / turn / sit, the turn block was ignored: the walk's
+     # momentum carried the character on through the chair to y=-3.16 and it
+     # spun onto the seat at the end. The third waypoint sets its own facing,
+     # turned round, in front of the chair at frame 84: walk to 2.02 m by 60,
+     # turn from facing out to facing back by 84, step back and sit.
+     "blocks": [("a person walks forward", 2.5),
+                ("a person turns around", 1.0),
+                ("a person sits down on the chair", 2.0)],
+     "waypoints": [(1, (0.0, 0.0)), (60, (0.0, -2.05)), (84, (0.0, -2.3), "back")],
      "face_along_path": True,
      "props": [{"kind": "chair", "at": (0.0, -2.6), "facing": "back"}],
      "key_poses": [
@@ -140,10 +223,31 @@ EXAMPLES = [
           ]},
      ],
      "character": "hero",   "set": "studio",  "travel": 2.6,
-     "lesson": "Everything at once. Key poses say how it starts and ends, the "
-               "waypoints where it walks, the words the rest. Scrub to the end: "
-               "the seated pose is a keyframe you can change."},
+     "lesson": "Everything at once: a block per action, key poses for how it starts "
+               "and ends, waypoints for where it walks — the last one set to face "
+               "back. The seated hands were fixed with the Autoposer; try it on "
+               "any key pose."},
 ]
+
+def blocks(ex):
+    """An example's prompt blocks as ``[(prompt, seconds)]``, one per action.
+
+    One action to a block: "crouch, creep, then stand" in a single box asks
+    the model to find three beats and time them itself, and teaches that one
+    box holds a sequence. Split, each beat is its own box, as long as that beat
+    takes, and the timeline says the order.
+    """
+    plan = ex.get("blocks") or [(ex["prompt"], ex["seconds"])]
+    total = sum(sec for _p, sec in plan)
+    if abs(total - ex["seconds"]) > 1e-6:
+        raise ValueError(f"{ex['id']}: blocks add up to {total:g}s, not {ex['seconds']:g}s")
+    return plan
+
+
+def summary(ex):
+    """One line for the menu's tooltip: the blocks in order."""
+    return " → ".join(p for p, _sec in blocks(ex))
+
 
 # Which way a key pose or a prop faces. The characters face -Y at rest.
 FACING = {"forward": 0.0, "back": math.pi}
@@ -243,6 +347,84 @@ def _build_chair(at, facing):
     return chair
 
 
+def _box_mesh(name, parts, rgb, roughness=0.7):
+    """One mesh object from ``[(centre, size)]`` boxes — no parenting lines."""
+    bm = bmesh.new()
+    for loc, dims in parts:
+        bmesh.ops.create_cube(bm, size=1.0, matrix=Matrix.LocRotScale(Vector(loc), None, Vector(dims)))
+    mesh = bpy.data.meshes.new(name)
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.materials.append(_material(name, rgb, roughness))
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+
+def _build_button(at, height):
+    """A pillar with a red button on top — something for a hand to press."""
+    x, y = at
+    _box_mesh("Pillar", [((x, y, height / 2), (0.24, 0.24, height))], (0.55, 0.56, 0.6))
+    bpy.ops.mesh.primitive_cylinder_add(radius=0.05, depth=0.03, location=(x, y, height + 0.015))
+    button = bpy.context.object
+    button.name = "Button"
+    button.data.materials.append(_material("Button", (0.8, 0.08, 0.06), roughness=0.4))
+    return button
+
+
+def _build_ball(at, kick_frame, frames):
+    """A football at *at*, still until *kick_frame*, then sent off the way it was kicked.
+
+    A ball that sat there after the foot went through it read as a miss. It
+    rolls, not flies: straight on, slowing, from the frame the pin says the
+    foot arrives.
+    """
+    r = 0.11
+    bpy.ops.mesh.primitive_uv_sphere_add(radius=r, location=(at[0], at[1], r), segments=24, ring_count=12)
+    ball = bpy.context.object
+    ball.name = "Ball"
+    ball.data.materials.append(_material("Ball", (0.92, 0.92, 0.9), roughness=0.5))
+    ball.keyframe_insert("location", frame=1)
+    ball.keyframe_insert("location", frame=kick_frame)
+    ball.location = (at[0], at[1] - 2.6, r)
+    ball.keyframe_insert("location", frame=frames)
+    # ease out, not in: the kick is the fast part
+    for fc in (ball.animation_data.action.layers[0].strips[0]
+               .channelbag(ball.animation_data.action_slot).fcurves):
+        for k in fc.keyframe_points:
+            k.interpolation = "LINEAR" if k.co.x < kick_frame else "QUAD"
+            k.easing = "EASE_OUT"
+    return ball
+
+
+def _build_crate(at, size):
+    """A crate to go round: the reason a path is curved."""
+    return _box_mesh("Crate", [((at[0], at[1], size / 2), (size, size, size))], (0.5, 0.36, 0.2))
+
+
+def _add_pins(arm, pins):
+    """Effector pins, made the way the Pin button makes them.
+
+    Through the addon's own operator, so a pin in an example is exactly what
+    an artist gets; then moved to where the hand or foot must be and keyed at
+    the frame it must be there.
+    """
+    from animatica_blender import constraints_ui
+
+    scene = bpy.context.scene
+    for pin in pins:
+        bone = constraints_ui.resolve_effector_bone(arm, pin["joint"])
+        if bone is None:
+            raise RuntimeError(f"{arm.name} has no bone for {pin['joint']}")
+        before = set(bpy.data.objects)
+        bpy.ops.animatica.add_effector_target(mode="BONE", bone=bone.name)
+        empty = next(o for o in bpy.data.objects if o not in before)
+        empty.animation_data_clear()
+        for frame, xyz in pin["keys"]:
+            empty.location = xyz
+            empty.keyframe_insert("location", frame=frame)
+
+
 def _import_character(which, assets_dir):
     from animatica_blender import canonical_skeleton as cs
 
@@ -339,12 +521,18 @@ def build_one(ex, assets_dir, out_dir):
     for prop in ex.get("props", ()):
         if prop["kind"] == "chair":
             _build_chair(prop["at"], prop["facing"])
+        elif prop["kind"] == "button":
+            _build_button(prop["at"], prop["height"])
+        elif prop["kind"] == "ball":
+            _build_ball(prop["at"], prop["kick_frame"], frames)
+        elif prop["kind"] == "crate":
+            _build_crate(prop["at"], prop["size"])
     arm = _import_character(ex["character"], assets_dir)
     _frame_view(scene, arm, ex["travel"])
 
     settings = scene.animatica
     settings.target_armature = arm            # seeds one empty block across the scene
-    plan = ex.get("blocks") or [(ex["prompt"], ex["seconds"])]
+    plan = blocks(ex)
     cursor = 1
     for i, (prompt, seconds) in enumerate(plan):
         block = settings.prompt_blocks[0] if i == 0 else settings.prompt_blocks.add()
@@ -356,9 +544,12 @@ def build_one(ex, assets_dir, out_dir):
 
     if ex.get("waypoints"):
         from animatica_blender import waypoints
-        for frame, xy in ex["waypoints"]:
-            waypoints.create_marker(scene, frame, xy, owner=arm)
+        for frame, xy, *facing in ex["waypoints"]:
+            waypoints.create_marker(scene, frame, xy, owner=arm,
+                                    facing=FACING[facing[0]] if facing else None)
         settings.waypoint_heading = bool(ex.get("face_along_path"))
+    if ex.get("pins"):
+        _add_pins(arm, ex["pins"])
 
     from animatica_blender import properties
     properties.save_blocks_to_armature(arm, settings)
@@ -367,7 +558,8 @@ def build_one(ex, assets_dir, out_dir):
     credit = CHARACTERS[ex["character"]]["credit"]
     note = bpy.data.texts.new("About this example")
     note.write(f"{ex['title']} — {ex['lesson']}\n\n"
-               f"Prompt: {ex['prompt']}\nLength: {ex['seconds']:g}s ({frames} frames at {FPS} fps)\n\n"
+               + "".join(f"Block: {p} ({sec:g}s)\n" for p, sec in blocks(ex))
+               + f"Length: {ex['seconds']:g}s ({frames} frames at {FPS} fps)\n\n"
                "Press Generate Motion in the Animatica sidebar.\n")
     if credit:
         note.write(f"\nCharacter: {credit}\n")
@@ -425,6 +617,10 @@ def main(argv):
         if wanted and ex["id"] not in wanted:
             continue
         built = build_one(ex, assets_dir, out_dir)
+        if ex.get("hold"):
+            manifest["examples"] = [e for e in manifest["examples"] if e["id"] != ex["id"]]
+            print(f"held  {built.name:24} not in the manifest: {ex['hold']}")
+            continue
         if ex.get("key_poses"):
             print(f"base  {built.name:24} needs its key poses: run "
                   f"tools/finish_example.py in a signed-in Blender")
@@ -447,7 +643,8 @@ def publish(ex, built, manifest, base_url=""):
     for stale in built.parent.glob(f"{ex['id']}.*.blend"):
         if stale != path and not stale.name.endswith(".base.blend"):
             stale.unlink()
-    entry = {k: ex[k] for k in ("id", "title", "tier", "seconds", "prompt", "lesson")}
+    entry = {k: ex[k] for k in ("id", "title", "tier", "seconds", "lesson")}
+    entry["prompt"] = summary(ex)
     entry.update({
         "character": CHARACTERS[ex["character"]]["name"],
         "credit": CHARACTERS[ex["character"]]["credit"],
