@@ -163,6 +163,9 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Fixed
 
+- **In place redraws the trail.** Toggling In place on a take left the trail
+  and ghosts showing the travel it had just taken away; they are rebaked now.
+
 - **Set Keyframe on a fresh rig.** On an action with nothing in it yet — a new
   rig's first key pose — Blender 5's layered actions have no layer, strip or
   slot to put a curve in, so every channel was skipped: the button reported
@@ -390,10 +393,7 @@ Proscenium, and keep the identifiers those releases actually shipped.
   Keyframe and how many key poses the next take will hit, then **Fingers**:
   each hand's shape (Relaxed, Gripping, Straight), since the model does not
   move fingers. **Constraints** (waypoints and pins, was Paths & Pins) is a panel of its own,
-  not part of posing. The plan overlay is a sub-panel whose header checkbox turns it
-  all off, with plain checkboxes for its parts, instead of five blue toggles.
-  Settings is laid out with labels on the left, with Advanced and Posing
-  sub-panels.
+  not part of posing. What the viewport draws of the plan (ghosts, trail, frame numbers, X-Ray, ghost style) is **Settings → Viewport**, whose header checkbox turns it all off, with plain checkboxes for its parts instead of five blue toggles. Settings is laid out with labels on the left, with Posing and Advanced sub-panels.
 
 ## [0.5.3] — 2026-09-16
 

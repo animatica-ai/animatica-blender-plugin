@@ -62,7 +62,7 @@ first prompt can be typed there.
 ## See the plan — ghosts
 
 Your key poses *are* the plan: each one becomes a full-body constraint the
-motion has to pass through. Open the **Pose** panel and tick **Plan Overlay**
+motion has to pass through. Open **Settings → Viewport** and tick its header checkbox
 to see them.
 
 In the viewport, each pose you keyed appears as a ghost where it sits in the
@@ -133,7 +133,7 @@ by an older session can still be handed back from the Pose panel.)
 > **Set Keyframe** marks the pose as yours.
 
 The posed bodies and the trail are independent — show either on its own
-(**Pose → Plan Overlay**; the last two are in **Settings → Posing**):
+(**Settings → Viewport**):
 
 | Setting | What it does |
 |---|---|
@@ -187,11 +187,11 @@ won't replace your entire action the way **Generate Motion** does.
 - **Pose** — the **Autoposer** (drag hands, feet or hips; the body follows),
   Generate Pose, Set Keyframe, and **Fingers**: each hand's shape, since the
   model does not move fingers (Relaxed, Gripping, Straight)
-  - **Plan Overlay** — what the viewport draws of your key poses and the trail
 - **Constraints** — waypoints (where to stand when) and pins (a hand or foot held in place)
 - **Settings** — seed, quality, motion cleanup
+  - **Viewport** — what the viewport draws of your key poses and the trail, how ghosts are drawn
+  - **Posing** — the solid floor, Rest Pose
   - **Advanced** — guidance, blending between blocks
-  - **Posing** — the floor, how ghosts are drawn
 
 ## Help
 

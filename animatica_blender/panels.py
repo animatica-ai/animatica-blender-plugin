@@ -3,9 +3,11 @@
 Sidebar panels in View3D > Sidebar > Animatica, named for the job:
   - Animatica: the shot — model, character, prompt, generate, accept or reject
   - Pose: the character's pose — the Autoposer, key poses, fingers
-      - Plan Overlay: what the viewport draws of the key poses and the trail
   - Constraints: where the character goes (waypoints), what a hand or foot holds (pins)
   - Settings: everything set once and left alone
+      - Viewport: what the viewport draws of the key poses and the trail
+      - Posing: the poser's own settings
+      - Advanced: guidance, blending between blocks
 
 Server URL + auth live in Edit > Preferences > Add-ons > Animatica.
 """
@@ -559,6 +561,13 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
         sub = layout.row()
         sub.active = False
         sub.label(text="Drag hands, feet or hips; the body follows")
+        from . import key_poses
+        if key_poses.trail_on(settings):
+            # The trail is a handle too; said where posing is, not in the
+            # settings that switch it on.
+            sub = layout.row()
+            sub.active = False
+            sub.label(text="Or drag the trail · Shift: the whole body")
         status = engine.status()
         if not (status["runtime"] and status["model"]):
             box = layout.box()
@@ -625,56 +634,12 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
         layout.label(text="Fingers", icon='VIEW_PAN')
         sub = layout.row()
         sub.active = False
-        sub.label(text="The model doesn't move them; pick each hand's shape")
+        sub.label(text="The model leaves them straight")
         col = layout.column(align=True)
         col.use_property_split = True
         col.use_property_decorate = False
         col.prop(settings, "hand_pose_left", text="Left Hand")
         col.prop(settings, "hand_pose_right", text="Right Hand")
-
-
-class ANIMATICA_PT_overlay(AnimaticaPanelBase, Panel):
-    """What the viewport draws of the plan: the keyed poses and the trail.
-
-    The master switch is the header checkbox, Blender's own pattern for a
-    section that can be off as a whole, and the parts are greyed rather than
-    hidden when it is, so the way back is where the artist left it.
-    """
-    bl_label = "Plan Overlay"
-    bl_idname = "ANIMATICA_PT_overlay"
-    bl_parent_id = "ANIMATICA_PT_pose"
-
-    @classmethod
-    def poll(cls, context):
-        return properties._live_armature(context.scene.animatica.target_armature) is not None
-
-    def draw_header(self, context):
-        self.layout.prop(context.scene.animatica, "key_pose_overlay", text="")
-
-    def draw(self, context):
-        from . import key_poses
-
-        layout = self.layout
-        settings = context.scene.animatica
-        layout.active = settings.key_pose_overlay
-        grid = layout.grid_flow(row_major=True, columns=2, even_columns=True)
-        grid.prop(settings, "key_pose_ghosts", text="Ghosts")
-        grid.prop(settings, "key_pose_trail", text="Trail")
-        sub = grid.row()
-        sub.active = key_poses.overlay_on(settings)
-        sub.prop(settings, "key_pose_labels", text="Frame Numbers")
-        sub = grid.row()
-        sub.active = key_poses.overlay_on(settings)
-        sub.prop(settings, "key_pose_xray", text="X-Ray")
-        if key_poses.trail_on(settings):
-            note = layout.row()
-            note.active = False
-            note.label(text="Drag the trail to repose · Shift: whole body")
-        held = key_poses.refresh_held_by() if key_poses.overlay_on(settings) else ""
-        if held:
-            note = layout.row()
-            note.active = False
-            note.label(text=f"Refreshing after {held}")
 
 
 class ANIMATICA_PT_paths(AnimaticaPanelBase, Panel):
@@ -806,28 +771,69 @@ class ANIMATICA_PT_settings_advanced(AnimaticaPanelBase, Panel):
         layout.prop(settings, "num_transition_frames", text="Blend Between Blocks")
 
 
+class ANIMATICA_PT_settings_viewport(AnimaticaPanelBase, Panel):
+    """What the viewport draws of the plan: the keyed poses and the trail.
+
+    Display settings, so with the settings rather than under Pose. The master
+    switch is the header checkbox, Blender's own pattern for a section that can
+    be off as a whole; the parts are greyed rather than hidden when it is, so
+    the way back is where the artist left it.
+    """
+    bl_label = "Viewport"
+    bl_idname = "ANIMATICA_PT_settings_viewport"
+    bl_parent_id = "ANIMATICA_PT_settings"
+
+    def draw_header(self, context):
+        self.layout.prop(context.scene.animatica, "key_pose_overlay", text="")
+
+    def draw(self, context):
+        from . import key_poses
+
+        layout = self.layout
+        settings = context.scene.animatica
+        scene = context.scene
+        parts = layout.column()
+        parts.active = settings.key_pose_overlay
+        grid = parts.grid_flow(row_major=True, columns=2, even_columns=True)
+        grid.prop(settings, "key_pose_ghosts", text="Ghosts")
+        grid.prop(settings, "key_pose_trail", text="Trail")
+        grid.prop(settings, "key_pose_labels", text="Frame Numbers")
+        grid.prop(settings, "key_pose_xray", text="X-Ray")
+        col = parts.column()
+        col.use_property_split = True
+        col.use_property_decorate = False
+        col.prop(settings, "key_pose_display", text="Ghost Style")
+        col.prop(settings, "key_pose_auto_refresh")
+        held = key_poses.refresh_held_by() if key_poses.overlay_on(settings) else ""
+        if held:
+            note = parts.row()
+            note.active = False
+            note.label(text=f"Refreshing after {held}")
+        parts.operator("animatica.key_poses_refresh", text="Refresh Ghosts", icon='FILE_REFRESH')
+
+        arm = properties._live_armature(settings.target_armature)
+        if arm is not None:
+            col = layout.column()
+            col.use_property_split = True
+            col.use_property_decorate = False
+            col.prop(arm, "show_in_front", text="Rig In Front")
+            col.prop(scene, "ap_hide_deform", text="Hide Skeleton")
+
+
 class ANIMATICA_PT_settings_posing(AnimaticaPanelBase, Panel):
-    """The poser and the overlay: set once, then left alone."""
+    """The poser's own settings: set once, then left alone."""
     bl_label = "Posing"
     bl_idname = "ANIMATICA_PT_settings_posing"
     bl_parent_id = "ANIMATICA_PT_settings"
+    bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True
         layout.use_property_decorate = False
-        settings = context.scene.animatica
-        scene = context.scene
-        layout.prop(scene, "ap_floor", text="Solid Floor")
-        layout.prop(settings, "key_pose_display", text="Ghost Style")
-        layout.prop(settings, "key_pose_auto_refresh")
-        arm = properties._live_armature(settings.target_armature)
-        if arm is not None:
-            layout.prop(arm, "show_in_front", text="Rig In Front")
-            layout.prop(scene, "ap_hide_deform", text="Hide Skeleton")
-        row = layout.row(align=True)
+        layout.prop(context.scene, "ap_floor", text="Solid Floor")
+        row = layout.row()
         row.use_property_split = False
-        row.operator("animatica.key_poses_refresh", text="Refresh Ghosts", icon='FILE_REFRESH')
         row.operator("autoposer.rest", text="Rest Pose", icon='LOOP_BACK')
 
 
@@ -838,11 +844,11 @@ class ANIMATICA_PT_settings_posing(AnimaticaPanelBase, Panel):
 _classes = (
     ANIMATICA_PT_main,
     ANIMATICA_PT_pose,
-    ANIMATICA_PT_overlay,
     ANIMATICA_PT_paths,
     ANIMATICA_PT_settings,
-    ANIMATICA_PT_settings_advanced,
+    ANIMATICA_PT_settings_viewport,
     ANIMATICA_PT_settings_posing,
+    ANIMATICA_PT_settings_advanced,
 )
 
 

@@ -358,9 +358,14 @@ def _inplace_update(self, context):
     # authored, and key poses read their root position through it.
     operators._apply_inplace_constraint(arm, enabled=bool(self.inplace and self.is_previewing))
 
-
     # Tag the depsgraph so the viewport reflects the constraint change.
     arm.update_tag()
+    # The trail and ghosts are baked from the evaluated rig, constraint and
+    # all, and cached: without a rebake they went on drawing the travel the
+    # constraint had just taken away.
+    if self.is_previewing:
+        from . import key_poses  # noqa: PLC0415
+        key_poses.request_rebuild()
 
 
 # ---------------------------------------------------------------------------
