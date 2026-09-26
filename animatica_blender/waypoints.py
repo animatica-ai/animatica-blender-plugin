@@ -53,6 +53,8 @@ DEFAULT_COINCIDE_M = 0.10
 _FORWARD = (0.0, -1.0)
 
 LINE_COLOR = (1.0, 0.78, 0.25, 0.95)
+#: the facing arrow when no heading is sent: the way the path goes, not an order
+FACING_HINT_COLOR = (1.0, 0.78, 0.25, 0.3)
 LINE_WIDTH = 2.5
 LABEL_COLOR = (1.0, 0.86, 0.45, 1.0)
 LABEL_SIZE = 11
@@ -390,18 +392,40 @@ def _visible(context) -> bool:
     return space is not None and space.type == 'VIEW_3D' and space.overlay.show_overlays
 
 
-def _draw_lines():
-    context = bpy.context
-    if not _visible(context):
-        return
-    pts = [o.matrix_world.translation for o in waypoints(context.scene)]
-    if len(pts) < 2:
-        return
+def route_directions(points) -> list:
+    """Which way the route points at each waypoint, as unit ground vectors.
+
+    The rule the request uses for headings (see ``_assign_headings``): toward
+    the next waypoint, and the last one keeps the direction it arrived in. A
+    step too short to have a direction reuses the one before. ``None`` until
+    there is any direction at all — a lone waypoint has none.
+    """
+    out, last = [], None
+    for i, here in enumerate(points):
+        if i + 1 < len(points):
+            step = Vector((points[i + 1].x - here.x, points[i + 1].y - here.y, 0.0))
+            if step.length > 1e-6:
+                last = step.normalized()
+        out.append(last)
+    # A first step shorter than anything still borrows the first real one.
+    first = next((d for d in out if d is not None), None)
+    return [d if d is not None else first for d in out]
+
+
+def _arrow(tip, direction, length, wing):
+    """Line segments for a flat arrow on the ground ending at *tip*."""
+    side = Vector((-direction.y, direction.x, 0.0))
+    back = tip - direction * wing * 1.6
+    tail = tip - direction * length
+    pts = []
+    for a, b in ((tail, tip), (back + side * wing, tip), (back - side * wing, tip)):
+        pts += [tuple(a), tuple(b)]
+    return pts
+
+
+def _draw_polylines(batches):
     from . import key_poses
 
-    segments = []
-    for a, b in zip(pts, pts[1:]):
-        segments += [(a.x, a.y, a.z + 0.005), (b.x, b.y, b.z + 0.005)]
     shader = gpu.shader.from_builtin("POLYLINE_UNIFORM_COLOR")
     gpu.state.blend_set('ALPHA')
     gpu.state.depth_test_set('LESS_EQUAL')
@@ -409,11 +433,48 @@ def _draw_lines():
         shader.bind()
         shader.uniform_float("viewportSize", key_poses._viewport_size())
         shader.uniform_float("lineWidth", LINE_WIDTH * key_poses._px())
-        shader.uniform_float("color", LINE_COLOR)
-        batch_for_shader(shader, 'LINES', {"pos": segments}).draw(shader)
+        for color, segments in batches:
+            if not segments:
+                continue
+            shader.uniform_float("color", color)
+            batch_for_shader(shader, 'LINES', {"pos": segments}).draw(shader)
     finally:
         gpu.state.blend_set('NONE')
         gpu.state.depth_test_set('NONE')
+
+
+def _draw_lines():
+    """The route, the way it runs, and which way the character faces on it.
+
+    A circle alone said where, never which way: nothing on screen told the
+    route from F1 to F60 apart from one from F60 back to F1, or said what
+    "Face along the path" would ask for. Chevrons mid-segment give the order;
+    an arrow out of each circle gives the facing — solid when it is sent as a
+    heading, faint when it is only where the path goes and the model decides.
+    """
+    context = bpy.context
+    if not _visible(context):
+        return
+    lift = Vector((0.0, 0.0, 0.005))
+    pts = [o.matrix_world.translation + lift for o in waypoints(context.scene)]
+    if len(pts) < 2:
+        return
+    segments, chevrons = [], []
+    for a, b in zip(pts, pts[1:]):
+        segments += [tuple(a), tuple(b)]
+        step = b - a
+        if step.length > MARKER_RADIUS * 3:
+            d = step.normalized()
+            chevrons += _arrow((a + b) / 2 + d * 0.06, d, 0.0, 0.07)[2:]
+    facing = []
+    for p, d in zip(pts, route_directions(pts)):
+        if d is not None:
+            facing += _arrow(p + d * MARKER_RADIUS * 1.45, d, MARKER_RADIUS * 1.1, 0.07)
+    sent = bool(getattr(context.scene.animatica, "waypoint_heading", False))
+    _draw_polylines([
+        (LINE_COLOR, segments + chevrons),
+        (LINE_COLOR if sent else FACING_HINT_COLOR, facing),
+    ])
 
 
 def _draw_labels():
