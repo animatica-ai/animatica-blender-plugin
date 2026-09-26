@@ -265,23 +265,7 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
         in_preview = bool(getattr(settings, "is_previewing", False))
         model = mmcp_client.cached_model(settings.model_id)
 
-        # An empty timeline: the first thing to do is give it a prompt, and an
-        # example is the short path -- one click writes a prompt across the
-        # scene. Once there is one, the examples are the icon in the header.
         has_prompt = any((b.prompt or "").strip() for b in settings.prompt_blocks)
-        if not has_prompt and not in_preview:
-            box = layout.box()
-            box.label(text="What should the character do?")
-            if len(settings.prompt_blocks) == 1:
-                # The same text as the block on the Timeline, typed here so the
-                # first take needs no discovery at all.
-                box.prop(settings.prompt_blocks[0], "prompt", text="",
-                         placeholder="e.g. a person waves hello")
-            sub = box.column(align=True)
-            sub.active = False
-            sub.label(text="Prompts live on the Timeline.")
-            sub.label(text="Double-click a block to edit it.")
-            box.menu("ANIMATICA_MT_examples", text="Or open an example scene", icon='FILE_BLEND')
 
         # Why this cannot be sent, asked of the same function the send asks --
         # so the button greys out for exactly the reasons a click would have
@@ -302,13 +286,20 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
             except Exception:               # noqa: BLE001 — never break a draw
                 blockers = []
 
-        # A take in front of you: keep it or not comes first, making another
-        # is the alternative under it.
+        # A take in front of you: keep it or not comes first.
         if in_preview:
-            _draw_preview(layout, context, settings, arm_live, model)
+            _draw_preview(layout, context, settings, arm_live)
+        elif not has_prompt:
+            # First run: say in one line what this is.
+            note = layout.row()
+            note.active = False
+            note.label(text="Make character motion from text and poses")
 
-        # The one thing this panel is for: the scene is set up the way you
-        # would anyway, and this turns it into motion.
+        # Top to bottom as the work goes: say what happens, direct it, make it.
+        _draw_prompt(layout, settings, has_prompt, in_preview)
+        _draw_direction(layout, context, settings, in_preview)
+
+        layout.separator()
         gen = layout.column(align=True)
         gen.enabled = not blockers
         row = gen.row()
@@ -316,14 +307,12 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
         # Every run is a new take (seed 0), so "again" is what it does.
         row.operator("animatica.generate",
                      text="Generate Again" if in_preview else "Generate Motion")
-        # The first-run box above already says what is missing.
-        if blockers and (has_prompt or in_preview):
+        # With no prompt, the field above already says what is missing.
+        if blockers and has_prompt:
             note = gen.row()
             note.enabled = True         # readable while the button above is not
             note.active = False
             note.label(text=blockers[0], icon='INFO')
-
-        _draw_take_options(layout, context, settings, model, in_preview)
         if not in_preview:
             _draw_next_take(layout, context)
             _draw_kept(layout, arm_live)
@@ -332,6 +321,77 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
         # An example's character may need attribution; this is where the file
         # that uses it gives it.
         examples.draw_credit(layout, context.scene)
+
+
+def _draw_prompt(layout, settings, has_prompt, in_preview) -> None:
+    """What the character should do: the selected Timeline block's prompt.
+
+    Always here, not only before the first take -- it is what Generate Again
+    reads, and it went out of sight the moment a take came back. The Timeline
+    is where blocks are added and timed, and the line under the field says so.
+    """
+    blocks = settings.prompt_blocks
+    if not len(blocks):
+        return
+    i = min(max(settings.active_block_index, 0), len(blocks) - 1)
+    col = layout.column(align=True)
+    label = "Prompt" if len(blocks) == 1 else f"Prompt · block {i + 1} of {len(blocks)}"
+    col.label(text=label)
+    col.prop(blocks[i], "prompt", text="", placeholder="e.g. a person waves hello")
+    sub = col.row()
+    sub.active = False
+    if has_prompt:
+        sub.label(text="Add more actions on the Timeline")
+    else:
+        sub.label(text="Also editable on the Timeline block")
+    if not has_prompt and not in_preview:
+        layout.menu("ANIMATICA_MT_examples", text="Or open an example scene", icon='FILE_BLEND')
+
+
+def _draw_direction(layout, context, settings, in_preview) -> None:
+    """The ways to steer a take besides the prompt, each with its count.
+
+    These are what make the result yours -- poses the motion is made to pass
+    through, places to stand when, a hand or foot held -- and they were a
+    closed panel or two away, so a newcomer took the tool for a prompt box.
+    """
+    from . import key_poses
+
+    plan = key_poses.plan(context.scene)
+    frames, entries = plan["frames"], plan["entries"]
+    dropped = [f for f in frames if not entries[f]["in_range"]]
+    n_poses = len(frames) - len(dropped)
+    found = constraints_ui.walk_scene_constraints(context.scene)
+    n_marks, n_pins = len(found["waypoints"]), len(found["effector_targets"])
+
+    col = layout.column(align=True)
+    col.label(text="Direct it")
+    rows = (
+        ("Key poses", n_poses, "animatica.set_key_pose", "Set Keyframe", 'KEYFRAME_HLT'),
+        ("Waypoints", n_marks, "animatica.add_waypoint", "Add Waypoint", 'MESH_CIRCLE'),
+        ("Pins", n_pins, "animatica.add_effector_target", "Add Pin", 'EMPTY_SINGLE_ARROW'),
+    )
+    for label, n, op, text, icon in rows:
+        split = col.split(factor=0.45, align=True)
+        left = split.row()
+        left.active = n > 0
+        left.label(text=f"{label}  {n}")
+        split.operator(op, text=text, icon=icon)
+    note = col.row()
+    note.active = False
+    if not (n_poses or n_marks or n_pins):
+        note.label(text="Pose the rig, then Set Keyframe")
+    elif in_preview:
+        # Blender keeps a key's type when you key over it, so I on a take
+        # writes a key the addon reads as the model's own and leaves out.
+        note.label(text="On a take, use Set Keyframe, not I")
+    if dropped:
+        shown = ", ".join(str(f) for f in dropped[:_MAX_NAMED_DROPPED])
+        if len(dropped) > _MAX_NAMED_DROPPED:
+            shown += f" +{len(dropped) - _MAX_NAMED_DROPPED}"
+        warn = layout.row()
+        warn.alert = True
+        warn.label(text=f"Outside the range, not sent: {shown}", icon='ERROR')
 
 
 def _draw_character(layout, context, settings) -> None:
@@ -390,64 +450,15 @@ def _draw_character(layout, context, settings) -> None:
         row.operator("animatica.import_canonical_skeleton", text="", icon='IMPORT')
 
 
-def _draw_take_options(layout, context, settings, model, in_preview) -> None:
-    """How the next take comes back: as a loop, and on the spot.
-
-    Checkboxes, not toggle buttons: they are options of the take, not modes of
-    the tool. Loop is the model's to make, so it is only here when the model
-    can; it needs one prompt block, and says so rather than going quiet. While
-    a take is previewing, In place moves into the Preview box, where it acts
-    on the take in front of you.
-    """
-    can_loop = bool(model and model.get("supports_loop"))
-    if not can_loop and in_preview:
-        return
-    col = layout.column(heading="Next take" if in_preview else "Options", align=True)
-    col.use_property_split = True
-    col.use_property_decorate = False
-    one_block = len(settings.prompt_blocks) == 1
-    if can_loop:
-        row = col.row()
-        row.active = one_block
-        row.prop(settings, "loop")
-    if not in_preview:
-        col.prop(settings, "inplace")
-    if can_loop and settings.loop and not one_block:
-        note = layout.row()
-        note.active = False
-        note.label(text="Loop needs a single prompt block", icon='INFO')
-    elif can_loop and settings.loop:
-        # The length is the loop's length; a long block makes a long,
-        # meandering cycle. Said where the choice is made, not in a tooltip.
-        b = settings.prompt_blocks[0]
-        fps = context.scene.render.fps / (context.scene.render.fps_base or 1.0)
-        if (b.frame_end - b.frame_start + 1) / fps > 4.5:
-            note = layout.row()
-            note.active = False
-            note.label(text="Loops work best at 2–4 s", icon='INFO')
-
-
 def _draw_next_take(layout, context) -> None:
-    """What the next take covers and what it is asked to hit."""
+    """How long the next take is, and which frames it covers."""
     from . import key_poses
 
-    plan = key_poses.plan(context.scene)
-    frames, entries = plan["frames"], plan["entries"]
-    dropped = [f for f in frames if not entries[f]["in_range"]]
-    sent = len(frames) - len(dropped)
-    poses = "prompt only" if not sent else f"{sent} key pose{'' if sent == 1 else 's'} to hit"
-    a, b = plan["range"]
+    a, b = key_poses.plan(context.scene)["range"]
     fps = context.scene.render.fps / (context.scene.render.fps_base or 1.0)
     row = layout.row()
     row.active = False
-    row.label(text=f"{(b - a + 1) / fps:.1f} s · frames {a}–{b} · {poses}")
-    if dropped:
-        shown = ", ".join(str(f) for f in dropped[:_MAX_NAMED_DROPPED])
-        if len(dropped) > _MAX_NAMED_DROPPED:
-            shown += f" +{len(dropped) - _MAX_NAMED_DROPPED}"
-        warn = layout.row()
-        warn.alert = True
-        warn.label(text=f"Outside the range, not sent: {shown}", icon='ERROR')
+    row.label(text=f"{(b - a + 1) / fps:.1f} s · frames {a}–{b}")
 
 
 def _draw_kept(layout, arm) -> None:
@@ -461,26 +472,48 @@ def _draw_kept(layout, arm) -> None:
     row.label(text="Kept take is on the NLA", icon='NLA')
 
 
-def _draw_preview(layout, context, settings, arm, model) -> None:
-    """The take in front of you: what it is, how it plays, keep it or not."""
+def _draw_preview(layout, context, settings, arm) -> None:
+    """The take in front of you: what made it, how it plays, keep it or not."""
+    from . import key_poses
+
     box = layout.box()
     box.label(text="Previewing take")
+    info = box.column(align=True)
+    info.active = False
     ad = arm.animation_data if arm is not None else None
     looped = ad.action.get("animatica_loop") if ad and ad.action else None
     if looped:
         fps = context.scene.render.fps / (context.scene.render.fps_base or 1.0)
         frames = int(looped["frames"])
-        sub = box.row()
+        info.label(text=f"Seamless loop · {frames} frames ({frames / fps:.2f} s)", icon='LOOP_FORWARDS')
+    if key_poses.trail_on(settings):
+        # The lines drawn through the body are a tool, not Blender's own
+        # motion paths, and nothing else says so where they are seen.
+        info.label(text="Blue trail: drag it to repose the body", icon='CURVE_PATH')
+    # Which take this is, so one worth keeping can be had again.
+    last = int(getattr(settings, "last_used_seed", 0) or 0)
+    if last > 0:
+        row = box.row(align=True)
+        locked = int(settings.seed) == last
+        sub = row.row()
         sub.active = False
-        sub.label(text=f"Seamless loop · {frames} frames ({frames / fps:.2f} s)", icon='LOOP_FORWARDS')
+        sub.label(text=f"Seed {last}")
+        lock = row.row()
+        lock.enabled = not locked
+        lock.operator("animatica.lock_global_seed", text="Locked" if locked else "Lock",
+                      icon='LOCKED' if locked else 'UNLOCKED')
     # Live on the take: the travel is muted, not removed, so it comes back.
     col = box.column()
     col.use_property_split = True
     col.use_property_decorate = False
     col.prop(settings, "inplace")
+    # Accept replaces a take kept before; say so on the button, not only in
+    # its tooltip.
+    kept = ad is not None and any(t.name.startswith("Animatica: ") for t in ad.nla_tracks)
     row = box.row(align=True)
     row.scale_y = 1.3
-    row.operator("animatica.accept", icon='CHECKMARK', text="Accept")
+    row.operator("animatica.accept", icon='CHECKMARK',
+                 text="Replace Kept" if kept else "Accept")
     row.operator("animatica.reject", icon='X')
 
     # Re-roll just the active block (keeping its neighbours) — otherwise only
@@ -496,8 +529,81 @@ def _draw_preview(layout, context, settings, arm, model) -> None:
     layout.separator()
 
 
+def _setup_done(context) -> bool:
+    from . import canonical_skeleton
+    settings = context.scene.animatica
+    return (mmcp_client.cached_capabilities() is not None
+            and properties._live_armature(settings.target_armature) is not None
+            and not canonical_skeleton.download_state()["active"])
+
+
+class ANIMATICA_PT_options(AnimaticaPanelBase, Panel):
+    """How a take comes back: as a loop, on the spot, and the hands.
+
+    One set of options among the ways to shape a take, not the headline: at
+    the top level, Loop and In place made the tool read as a cycle generator.
+    The header says what is on, so it can stay closed.
+    """
+    bl_label = "Options"
+    bl_idname = "ANIMATICA_PT_options"
+    bl_parent_id = "ANIMATICA_PT_main"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        return _setup_done(context) and not context.scene.animatica.is_generating
+
+    def draw_header_preset(self, context):
+        settings = context.scene.animatica
+        model = mmcp_client.cached_model(settings.model_id)
+        on = []
+        if settings.loop and model and model.get("supports_loop"):
+            on.append("Loop")
+        if settings.inplace:
+            on.append("In place")
+        row = self.layout.row()
+        row.active = False
+        row.label(text=" · ".join(on))
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.animatica
+        model = mmcp_client.cached_model(settings.model_id)
+        col = layout.column(align=True)
+        col.use_property_split = True
+        col.use_property_decorate = False
+        # Loop is the model's to make: only here when the model can, and it
+        # needs one prompt block, which it says rather than going quiet.
+        can_loop = bool(model and model.get("supports_loop"))
+        one_block = len(settings.prompt_blocks) == 1
+        if can_loop:
+            row = col.row()
+            row.active = one_block
+            row.prop(settings, "loop")
+        col.prop(settings, "inplace")
+        if can_loop and settings.loop and not one_block:
+            note = layout.row()
+            note.active = False
+            note.label(text="Loop needs a single prompt block", icon='INFO')
+        elif can_loop and settings.loop:
+            # The block's length is the loop's length.
+            b = settings.prompt_blocks[0]
+            fps = context.scene.render.fps / (context.scene.render.fps_base or 1.0)
+            if (b.frame_end - b.frame_start + 1) / fps > 4.5:
+                note = layout.row()
+                note.active = False
+                note.label(text="Loops work best at 2–4 s", icon='INFO')
+        # The fingers: the model has none, so each hand's pose is chosen here
+        # and laid on every take.
+        col = layout.column(align=True)
+        col.use_property_split = True
+        col.use_property_decorate = False
+        col.prop(settings, "hand_pose_left", text="Left Hand")
+        col.prop(settings, "hand_pose_right", text="Right Hand")
+
+
 class ANIMATICA_PT_character(AnimaticaPanelBase, Panel):
-    """Model, rig and hands: set once, then out of the way.
+    """Model and rig: set once, then out of the way.
 
     The header says which rig is targeted, so it can stay closed.
     """
@@ -508,11 +614,7 @@ class ANIMATICA_PT_character(AnimaticaPanelBase, Panel):
 
     @classmethod
     def poll(cls, context):
-        from . import canonical_skeleton
-        settings = context.scene.animatica
-        return (mmcp_client.cached_capabilities() is not None
-                and properties._live_armature(settings.target_armature) is not None
-                and not canonical_skeleton.download_state()["active"])
+        return _setup_done(context)
 
     def draw_header_preset(self, context):
         arm = properties._live_armature(context.scene.animatica.target_armature)
@@ -524,13 +626,6 @@ class ANIMATICA_PT_character(AnimaticaPanelBase, Panel):
         layout = self.layout
         settings = context.scene.animatica
         _draw_character(layout, context, settings)
-        # The fingers: the model has none, so each hand's pose is chosen here
-        # and laid on every take.
-        col = layout.column(align=True)
-        col.use_property_split = True
-        col.use_property_decorate = False
-        col.prop(settings, "hand_pose_left", text="Left Hand")
-        col.prop(settings, "hand_pose_right", text="Right Hand")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -818,6 +913,7 @@ class ANIMATICA_PT_settings_posing(AnimaticaPanelBase, Panel):
 
 _classes = (
     ANIMATICA_PT_main,
+    ANIMATICA_PT_options,
     ANIMATICA_PT_character,
     ANIMATICA_PT_pose,
     ANIMATICA_PT_overlay,

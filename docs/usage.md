@@ -27,12 +27,14 @@ Use any combination that fits your shot:
 
 | Tool | What it does |
 |---|---|
-| **Prompt blocks** | Text descriptions on the timeline (e.g. "walks forward sadly") |
-| **Keyframes** | Pose your character on key frames so the AI knows the start and end |
-| **Root path** | Draw a curve on the floor for where the character should go |
-| **Effector pins** | Pin a hand or foot to an empty so it stays on an object |
+| **Prompt** | What the character does (e.g. "walks forward sadly"). The sidebar shows the selected block's prompt; more blocks go on the Timeline |
+| **Key poses** | Pose your character and press **Set Keyframe** — the motion is made to pass through each pose |
+| **Waypoints** | **Add Waypoint** at a frame, then drag the circle to where the character should stand then |
+| **Pins** | **Add Pin** holds a hand or foot on an empty, so it stays on an object |
 
-The more direction you give, the closer the result tends to match your intent.
+The **Direct it** section of the Animatica panel has all three, with how many
+of each the next take will be asked to hit. The more direction you give, the
+closer the result tends to match your intent.
 
 ### Prompt blocks on the timeline
 
@@ -148,7 +150,8 @@ until it finishes you keep seeing the last one, and the panel says so.
 
 ## Generate a full clip
 
-1. Set up your prompt blocks on the timeline (their length is the clip's)
+1. Type the prompt (the block's length on the Timeline is the clip's length),
+   and direct it if you like
 2. Click **Generate Motion** — usually under 30 seconds; the first run after
    a while can take a minute
 3. Play the result in the viewport
@@ -157,13 +160,14 @@ until it finishes you keep seeing the last one, and the panel says so.
    **Reject** — throws the take away and goes back to what you had; takes
    you kept earlier stay on the NLA
 
-Not happy? **Generate Again** — every run is a new take. To keep getting the
-same one, lock its seed: **Settings** shows the seed the last run used.
+Not happy? **Generate Again** — every run is a new take. The take box shows
+the seed a take used; **Lock** it to keep getting that one. While a kept take
+exists, Accept reads **Replace Kept**.
 
 ## Loops for games
 
-Tick **Loop** under Generate Motion and the model makes the block a seamless
-cycle — a walk, a run, an idle. **In place** ticks with it, so the cycle plays
+Under **Options** (below Generate Motion), tick **Loop** and the model makes
+the block a seamless cycle — a walk, a run, an idle. **In place** ticks with it, so the cycle plays
 on the spot. Loop needs a single prompt block, and cycles work best at 2–4
 seconds: the block's length is the loop's length. It appears only when the
 connected model supports it.
@@ -176,9 +180,10 @@ won't replace your entire action the way **Generate Motion** does.
 
 ## Sidebar panels (quick reference)
 
-- **Animatica** — generate, the next take's options, accept / reject; the
-  header icons open an example scene and help
-  - **Character** — model, rig, hand poses: set once
+- **Animatica** — the prompt, **Direct it** (key poses, waypoints, pins),
+  generate, accept / reject; the header icons open an example scene and help
+  - **Options** — Loop, In place, hand poses (its header says what is on)
+  - **Character** — model and rig: set once
 - **Pose** — posing by hand: the handles, Generate Pose, Set Keyframe
   - **Plan Overlay** — what the viewport draws of your key poses and the trail
   - **Paths & Pins** — where to stand when, and a hand or foot to pin
