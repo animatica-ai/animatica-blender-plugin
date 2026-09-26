@@ -1134,16 +1134,41 @@ class ANIMATICA_OT_use_example_prompt(bpy.types.Operator):
         if not text:
             return {'CANCELLED'}
 
-        # Reuse an empty block rather than stacking another one on top: the
-        # addon seeds one across the scene when an armature is picked, and a
-        # first-time user pressing this has exactly that block and no other.
+        # An empty block gets filled — the addon seeds one across the scene
+        # when an armature is picked, and a first-time user pressing this has
+        # exactly that block and no other. Once something is written, an
+        # example is a SECOND idea, so it goes in the first gap rather than
+        # over the top of the first one.
         target = next((b for b in props.prompt_blocks
                        if not (b.prompt or "").strip()), None)
-        if target is None:
-            target = props.prompt_blocks.add()
+        if target is not None:
+            target.frame_start = int(scene.frame_start)
+            target.frame_end = int(scene.frame_end)
+        else:
+            gap = find_gap(props.prompt_blocks, min_length=10,
+                           scene_end=int(scene.frame_end) or 250)
+            if gap is not None:
+                target = props.prompt_blocks.add()
+                target.frame_start, target.frame_end = gap[0], gap[1]
+            else:
+                # No room, which is the usual shape after the first example:
+                # one block covering the scene. Swapping one example for
+                # another is what the artist meant — swapping out something
+                # they wrote is not, so that is where this stops.
+                known = {p for p, _label in EXAMPLE_PROMPTS}
+                idx = min(max(int(props.active_block_index), 0),
+                          len(props.prompt_blocks) - 1)
+                active = props.prompt_blocks[idx]
+                replaceable = next(
+                    (b for b in ([active] + list(props.prompt_blocks))
+                     if (b.prompt or "").strip() in known), None)
+                if replaceable is None:
+                    self.report({'WARNING'},
+                                "No room on the timeline — shorten a block or "
+                                "clear one to try an example")
+                    return {'CANCELLED'}
+                target = replaceable
         target.prompt = text
-        target.frame_start = int(scene.frame_start)
-        target.frame_end = int(scene.frame_end)
         target.enabled = True
         props.active_block_index = len(props.prompt_blocks) - 1
 

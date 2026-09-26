@@ -318,14 +318,24 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
                 and bool(getattr(settings, "is_previewing", False))
             )
 
-            # First-run nudge: prompts live on the Timeline, which isn't
-            # obvious. Shown until the user authors prompt text, so it
-            # disappears on its own once they're going.
-            if arm_live is not None and not in_preview:
+            # The examples stay. They are the quickest way to a second block
+            # as much as the first — "what else does it do well" is a question
+            # someone asks all week, not only in the first five minutes — and
+            # a menu that vanishes the moment you use it teaches people not to
+            # rely on it. Only the first-run explanation goes away.
+            if arm_live is not None:
                 has_prompt = any(
                     (b.prompt or "").strip() for b in settings.prompt_blocks
                 )
-                if not has_prompt:
+                # In preview too: Regenerate Motion is offered there, so the
+                # prompts are still live, and "try another one" is exactly
+                # what someone does while looking at a take they are not sure
+                # about.
+                if has_prompt or in_preview:
+                    row = layout.row(align=True)
+                    row.menu("ANIMATICA_MT_example_prompts",
+                             text="Try an example", icon='PRESET')
+                else:
                     box = layout.box()
                     box.label(text="Add a prompt to generate", icon='INFO')
                     # The example is the short path: one click writes a prompt
