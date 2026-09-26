@@ -400,6 +400,8 @@ def _draw_character(layout, context, settings) -> None:
         # full-width row of its own.
         row = layout.row(align=True)
         row.prop(settings, "target_armature", text="Armature")
+        # Follow Selection: the focused character becomes this one.
+        row.prop(settings, "follow_active", text="", icon='RESTRICT_SELECT_OFF')
         row.operator("animatica.import_canonical_skeleton", text="", icon='IMPORT')
 
 
@@ -482,6 +484,10 @@ def _draw_preview(layout, context, settings, arm) -> None:
     box.label(text="Previewing take")
     info = box.column(align=True)
     info.active = False
+    # Another character focused while this take waits: say why nothing switched.
+    focused = properties.armature_of(context.view_layer.objects.active)
+    if settings.follow_active and focused is not None and focused != arm:
+        info.label(text=f"Accept or Reject to switch to {focused.name}", icon='INFO')
     ad = arm.animation_data if arm is not None else None
     looped = ad.action.get("animatica_loop") if ad and ad.action else None
     if looped:

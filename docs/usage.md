@@ -15,8 +15,15 @@ Click **Add Ready-Made Character** in the **Animatica** panel, then animate
 that character. You can switch to your own later once you're comfortable.
 
 **Already have an armature?**  
-Pick it under **or animate your own rig**. The **Model** and **Armature** stay
-at the top of the Animatica panel, so you can change either at any time.
+Select it in the viewport, or pick it under **or animate your own rig**. The
+**Model** and **Armature** stay at the top of the Animatica panel, so you can
+change either at any time.
+
+**Several characters?**  
+Select the one to animate — its armature or its body — and it becomes
+Animatica's character, with its own prompts and key poses (**Follow
+Selection**, the toggle next to the Armature field). While a take is being made
+or reviewed, the character stays until you Accept or Reject.
 
 With **Animatica Cloud**, you can also generate onto many custom armatures — not
 only the imported skeleton.

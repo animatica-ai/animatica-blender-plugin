@@ -11,6 +11,15 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Added
 
+- **Follow Selection: select a character to animate it.** With several
+  characters in a scene, switching meant finding the other one in the Armature
+  field. Now making a character the active object — its armature, or the body
+  mesh skinned to it — makes it the one Animatica animates, with its own prompt
+  blocks and key poses. It is the toggle next to the Armature field, on by
+  default. Picking a character in the field still works, and is not undone by
+  whatever happens to be selected; while a take is being made or reviewed the
+  character stays, and the take box says "Accept or Reject to switch to …".
+
 - **Loop: generate a cycle.** Tick **Loop** under Generate Motion and the model
   samples the block as a seamless cycle, for walk cycles, runs and idles in a
   game: its last frame runs straight into its first, and it plays on past its

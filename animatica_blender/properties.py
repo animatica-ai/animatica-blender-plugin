@@ -699,6 +699,15 @@ class AnimaticaSettings(PropertyGroup):
     )
 
     # -- Target armature --
+    follow_active: BoolProperty(
+        name="Follow Selection",
+        description=(
+            "Animate whichever character you select: making an armature, or a "
+            "mesh skinned to one, the active object makes it Animatica's "
+            "character. Not while a take is being made or reviewed"
+        ),
+        default=True,
+    )
     target_armature: PointerProperty(
         name="Target Armature",
         type=bpy.types.Object,
@@ -1101,18 +1110,75 @@ def _scene_needs_target_reset(s) -> bool:
     return False
 
 
+def armature_of(obj):
+    """The character ``obj`` belongs to: an armature itself, or the rig a mesh
+    is skinned to or parented under -- clicking a character means clicking its
+    body far more often than its bones."""
+    if obj is None:
+        return None
+    try:
+        if obj.type == 'ARMATURE':
+            return obj
+        for mod in getattr(obj, "modifiers", ()):
+            if mod.type == 'ARMATURE' and mod.object is not None and mod.object.type == 'ARMATURE':
+                return mod.object
+        parent = obj.parent
+        if parent is not None and parent.type == 'ARMATURE':
+            return parent
+    except ReferenceError:
+        return None
+    return None
+
+
+# scene name -> the active object last seen, so following reacts to the active
+# object *changing*, not to it merely differing: a character picked in the
+# Armature field while another object is active must not be switched back.
+_last_active: dict[str, str] = {}
+
+
+def _follow_active_character(scene, depsgraph) -> None:
+    """Make the focused character the one Animatica animates (Follow Selection)."""
+    s = getattr(scene, "animatica", None)
+    if s is None:
+        return
+    try:
+        view_layer = scene.view_layers.get(depsgraph.view_layer.name)
+        obj = view_layer.objects.active if view_layer else None
+        name = obj.name if obj is not None else ""
+    except (AttributeError, ReferenceError):
+        return
+    if _last_active.get(scene.name) == name:
+        return
+    _last_active[scene.name] = name
+    # A take being reviewed or made belongs to the current character: switching
+    # would lose its Accept / Reject (the Preview box says so instead).
+    if not s.follow_active or s.is_generating or s.is_previewing:
+        return
+    arm = armature_of(obj)
+    if arm is None or not _is_live_armature(arm):
+        return
+    try:
+        current = s.target_armature
+    except ReferenceError:
+        current = None
+    if arm != current:
+        s.target_armature = arm
+
+
 @persistent
 def _validate_target_armature_on_depsgraph(_scene, _depsgraph) -> None:
     """Drop dangling ``target_armature`` pointers and any per-target state
-    that survives them. Runs on every depsgraph tick; the actual reset
-    is idempotent so the cost when nothing changed is a few attribute
-    reads per scene."""
+    that survives them, and follow the focused character. Runs on every
+    depsgraph tick; the reset is idempotent and following compares one name,
+    so the cost when nothing changed is a few attribute reads per scene."""
     for scene in bpy.data.scenes:
         s = getattr(scene, "animatica", None)
         if s is None:
             continue
         if _scene_needs_target_reset(s):
             reset_target_armature_state(s)
+    if _scene is not None:
+        _follow_active_character(_scene, _depsgraph)
 
 
 # ---------------------------------------------------------------------------
