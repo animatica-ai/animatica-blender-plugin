@@ -15,8 +15,8 @@ Click **Add Ready-Made Character** in the **Animatica** panel, then animate
 that character. You can switch to your own later once you're comfortable.
 
 **Already have an armature?**  
-Pick it under **or animate your own rig**. Later, the rig, the model and the
-hand poses are in the **Character** sub-panel (its header names the rig).
+Pick it under **or animate your own rig**. The **Model** and **Armature** stay
+at the top of the Animatica panel, so you can change either at any time.
 
 With **Animatica Cloud**, you can also generate onto many custom armatures — not
 only the imported skeleton.
@@ -32,8 +32,10 @@ Use any combination that fits your shot:
 | **Waypoints** | **Add Waypoint** at a frame, then drag the circle to where the character should stand then |
 | **Pins** | **Add Pin** holds a hand or foot on an empty, so it stays on an object |
 
-The **Direct it** section of the Animatica panel has all three, with how many
-of each the next take will be asked to hit. The more direction you give, the
+Key poses are made in the **Pose** panel (the **Autoposer** at its top lets
+you drag hands, feet or hips and have the body follow); waypoints and pins are
+in the **Constraints** panel below it. The status line under Generate Motion says
+how many key poses the next take will hit. The more direction you give, the
 closer the result tends to match your intent.
 
 ### Prompt blocks on the timeline
@@ -166,8 +168,8 @@ exists, Accept reads **Replace Kept**.
 
 ## Loops for games
 
-Under **Options** (below Generate Motion), tick **Loop** and the model makes
-the block a seamless cycle — a walk, a run, an idle. **In place** ticks with it, so the cycle plays
+Tick **Loop** under Generate Motion and the model makes the block a seamless
+cycle — a walk, a run, an idle. **In place** ticks with it, so the cycle plays
 on the spot. Loop needs a single prompt block, and cycles work best at 2–4
 seconds: the block's length is the loop's length. It appears only when the
 connected model supports it.
@@ -180,13 +182,13 @@ won't replace your entire action the way **Generate Motion** does.
 
 ## Sidebar panels (quick reference)
 
-- **Animatica** — the prompt, **Direct it** (key poses, waypoints, pins),
-  generate, accept / reject; the header icons open an example scene and help
-  - **Options** — Loop, In place, hand poses (its header says what is on)
-  - **Character** — model and rig: set once
-- **Pose** — posing by hand: the handles, Generate Pose, Set Keyframe
+- **Animatica** — model and armature, the prompt, generate, Loop and In
+  place, accept / reject; the header icons open an example scene and help
+- **Pose** — the **Autoposer** (drag hands, feet or hips; the body follows),
+  Generate Pose, Set Keyframe, and **Fingers**: each hand's shape, since the
+  model does not move fingers (Relaxed, Gripping, Straight)
   - **Plan Overlay** — what the viewport draws of your key poses and the trail
-  - **Paths & Pins** — where to stand when, and a hand or foot to pin
+- **Constraints** — waypoints (where to stand when) and pins (a hand or foot held in place)
 - **Settings** — seed, quality, motion cleanup
   - **Advanced** — guidance, blending between blocks
   - **Posing** — the floor, how ghosts are drawn

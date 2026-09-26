@@ -25,8 +25,8 @@ from mathutils import Quaternion, Vector
 
 STYLES = [
     ('RELAXED', "Relaxed", "A slight natural curl, as a hand at rest"),
-    ('GRIP', "Grip", "Closed around a handle: a pistol, a sword, a rifle's grip"),
-    ('FLAT', "Flat", "Fingers as generated: the model has none, so dead straight"),
+    ('GRIP', "Gripping", "Closed around a handle: a pistol, a sword, a rifle's grip"),
+    ('FLAT', "Straight", "Fingers as generated: the model has none, so dead straight"),
 ]
 
 #: degrees per segment, knuckle outwards: metacarpal, then the three phalanges

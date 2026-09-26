@@ -11,7 +11,7 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Added
 
-- **Loop: generate a cycle.** Tick **Loop** (under Options) and the model
+- **Loop: generate a cycle.** Tick **Loop** under Generate Motion and the model
   samples the block as a seamless cycle, for walk cycles, runs and idles in a
   game: its last frame runs straight into its first, and it plays on past its
   end. Nothing is cut, so the loop is the length of the block. Measured on a
@@ -366,26 +366,25 @@ Proscenium, and keep the identifiers those releases actually shipped.
     four and a half seconds is told that loops work best at 2–4 s; the wait
     says how long to expect from the start. The Pose panel starts closed.
 
-- **A sidebar that shows what the tool can do.** You set the scene up the way
-  you would anyway; the panel turns it into motion. It reads top to bottom as
-  the work goes: the **prompt** (the selected Timeline block's, always
-  editable, with "Add more actions on the Timeline" under it), then **Direct
-  it** — key poses, waypoints and pins, each with how many the next take will
-  hit and the button that adds one — then **Generate Motion** and how long the
-  take is. A new user, handed the tool cold, took it for a prompt-to-walk-cycle
-  toy: the ways to steer it were a closed panel or two away, and Loop and In
-  place, the only options on show, read as the point of it. They are now in a
-  closed **Options** sub-panel (with the hand poses) whose header says what is
-  on. While a take is previewing, its box comes first: a loop's length, what
+- **A clearer sidebar.** You set the scene up the way you would anyway; the
+  panel turns it into motion. The Animatica panel has the **Model** and
+  **Armature** at the top, always on show; then the **prompt** (the selected
+  Timeline block's, always editable, with "Add more actions on the Timeline"
+  under it); **Generate Motion** with **Loop** and **In place** right under it;
+  and a grey line saying how long the take is and how many key poses it will
+  hit. While a take is previewing, its box comes first: a loop's length, what
   the blue trail is for, the seed it used with **Lock**, In place, and Accept —
-  which reads **Replace Kept** when a take is already kept. Model and rig are
-  in a closed Character sub-panel whose header names the rig; with nothing set
-  up they are the whole panel. Examples and help are header icons. Posing lives
-  in the Pose panel: Generate Pose at Frame and Set Keyframe under the handles
-  ("Add Pose Handles", was "Build Autoposer Rig"). The plan overlay is a
-  sub-panel whose header checkbox turns it all off, with plain checkboxes for
-  its parts, instead of five blue toggles. Settings is laid out with labels on
-  the left and a Posing sub-panel.
+  which reads **Replace Kept** when a take is already kept. Examples and help
+  are header icons. The **Pose** panel is open by default and starts with the
+  **Autoposer** ("Drag hands, feet or hips; the body follows", and **Start the
+  Autoposer** on a rig without handles), then Generate Pose at Frame, Set
+  Keyframe and how many key poses the next take will hit, then **Fingers**:
+  each hand's shape (Relaxed, Gripping, Straight), since the model does not
+  move fingers. **Constraints** (waypoints and pins, was Paths & Pins) is a panel of its own,
+  not part of posing. The plan overlay is a sub-panel whose header checkbox turns it
+  all off, with plain checkboxes for its parts, instead of five blue toggles.
+  Settings is laid out with labels on the left, with Advanced and Posing
+  sub-panels.
 
 ## [0.5.3] — 2026-09-16
 
