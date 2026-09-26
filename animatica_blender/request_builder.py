@@ -319,6 +319,12 @@ def build_request(
     else:
         request["duration_frames"] = total_frames
 
+    # Loop: sampled as a cycle by the server where it can (motionmcp 0.4
+    # ``options.loop``, one segment). Anywhere else the clip is looped after
+    # the bake instead (loop.py), so the option is only sent where it is known.
+    if getattr(settings, "loop", False) and model_caps.get("supports_loop") and len(segments) == 1:
+        request["options"]["loop"] = True
+
     if constraints:
         request["constraints"] = constraints
 

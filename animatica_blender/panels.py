@@ -417,6 +417,14 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
                 layout.separator()
                 box = layout.box()
                 box.label(text="Preview", icon='INFO')
+                ad = arm_live.animation_data if arm_live is not None else None
+                looped = ad.action.get("animatica_loop") if ad and ad.action else None
+                if looped:
+                    fps = context.scene.render.fps / (context.scene.render.fps_base or 1.0)
+                    frames = int(looped["frames"])
+                    sub = box.row()
+                    sub.active = False
+                    sub.label(text=f"Loop: {frames} frames ({frames / fps:.2f} s)", icon='FILE_REFRESH')
                 row = box.row(align=True)
                 row.scale_y = 1.3
                 row.operator("animatica.accept", icon='CHECKMARK', text="Accept")

@@ -614,6 +614,10 @@ class ANIMATICA_OT_generate(Operator):
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
 
+        # Whether the server was asked to sample a cycle: the take then comes
+        # back closed, and the bake only straightens and repeats it.
+        self._server_looped = bool((req.get("options") or {}).get("loop"))
+
         # Save the source action for Accept / Reject (no-op if already saved).
         _stash_source_action_name(settings, arm)
 
@@ -856,7 +860,8 @@ class ANIMATICA_OT_generate(Operator):
             # A cycle, if asked for: last, so it closes the motion as it will play.
             if getattr(settings, "loop", False):
                 from . import loop
-                done = loop.apply(arm, action, (gen_start, gen_end))
+                done = loop.apply(arm, action, (gen_start, gen_end),
+                                  closed=bool(getattr(self, "_server_looped", False)))
                 if done:
                     # Play whole cycles. Left at the generating range, playback
                     # wrapped mid-cycle and stepped a frame backwards each time.

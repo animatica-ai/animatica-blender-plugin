@@ -98,8 +98,14 @@ def _smooth(t):
     return t * t * (3 - 2 * t)
 
 
-def apply(arm, action, frame_range) -> dict:
-    """Close *action* into a loop over part of *frame_range*. Returns what was done."""
+def apply(arm, action, frame_range, closed=False) -> dict:
+    """Close *action* into a loop over part of *frame_range*. Returns what was done.
+
+    *closed* says the server sampled the clip as a cycle already (``options.loop``):
+    its last frame is its first again, so there is nothing to search for, cut
+    or blend -- a blend would only reshape the last frames' motion for a seam
+    that is not there. What is left is to straighten it and repeat it.
+    """
     if arm is None or action is None:
         return {}
     lo, hi = int(frame_range[0]), int(frame_range[1])
@@ -112,7 +118,7 @@ def apply(arm, action, frame_range) -> dict:
         return {}
     root = next((pb for pb in arm.pose.bones if pb.parent is None), None)
     table = _table(rots, lo, hi)
-    start, cut = best_span(table, lo, hi)
+    start, cut = (lo, hi) if closed else best_span(table, lo, hi)
     seam_before = _distance(table, start, cut)
     root_loc = curves.get((root.name, "location")) if root is not None else None
     if root_loc is not None and len(root_loc) != 3:
@@ -152,8 +158,8 @@ def apply(arm, action, frame_range) -> dict:
 
     # 2. Blend the leftover difference into the last frames, so frame `cut`
     #    is the first pose exactly and the wrap has nothing to jump over.
-    k = max(4, min(BLEND_FRAMES, (cut - lo) // 3))
-    for fcs in rots:
+    k = 0 if closed else max(4, min(BLEND_FRAMES, (cut - lo) // 3))
+    for fcs in (rots if k else ()):
         q_lo, q_cut = _quat(fcs, lo), _quat(fcs, cut)
         if q_lo.dot(q_cut) < 0:
             q_cut.negate()
@@ -186,8 +192,12 @@ def apply(arm, action, frame_range) -> dict:
             fc.update()
     if root_loc is not None:
         close_root(arm, action)
-    return {"start": start, "cut": cut, "frames": cut - lo, "blend": k,
+    done = {"start": start, "cut": cut, "frames": cut - lo, "blend": k, "closed": closed,
             "seam_deg_before": math.degrees(seam_before), "turned_deg": turned}
+    # Kept on the action: the Preview box says what the loop is, and it
+    # travels with the take if it is accepted.
+    action["animatica_loop"] = {k2: float(v) for k2, v in done.items()}
+    return done
 
 
 def _loop_span(fc):

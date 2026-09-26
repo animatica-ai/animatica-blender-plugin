@@ -27,6 +27,15 @@ Proscenium, and keep the identifiers those releases actually shipped.
   straight ahead. With **In place** on as well, it loops on the spot, and the
   scene's range is set to whole cycles so playback wraps without a hitch.
 
+  On a server that advertises `supports_loop` (motionmcp 0.4), Loop is asked
+  of the model instead: it samples the whole block as a cycle, so nothing is
+  cut and the loop is the length of the block. Measured through the addon on
+  a walk, a run, marching, boxing, a zombie walk and Cesium Man's walk, the
+  take comes back closed to within 0.2-0.4 degrees of joint rotation, and the
+  wrap moves like the rest of the clip (its sharpest acceleration 0.45-1.14x
+  the clip's 95th percentile, where the addon's own loop left marching and
+  boxing at 3-6x). The Preview box shows the loop's length.
+
 - **In place, chosen before you generate.** The toggle sat in the Preview box,
   so it only appeared after a generation. It now sits beside Loop, under
   Generate Motion. Set before generating, it is a choice the bake acts on
