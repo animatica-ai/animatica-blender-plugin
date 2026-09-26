@@ -203,7 +203,10 @@ versions: the review has arrows per character, and **All: next variation** to
 flip the whole crowd at once.
 
 The takes wait together: **Accept All** keeps each on its own character's NLA
-track (the version it shows), **Reject All** throws them all away. Waypoints and pins belong to the
+track (the version it shows), **Reject All** throws them all away. Each
+character's row has its own ✓ (keep), ✗ (throw away) and ↻ (generate that one
+again, leaving the others as they are); **Regenerate All** makes every waiting
+take again. **In place** acts on all the takes waiting. Waypoints and pins belong to the
 character that was active when you made them.
 
 ## Single pose at one frame

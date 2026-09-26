@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 
 import bpy
+from bpy.props import BoolProperty, StringProperty
 from bpy.types import Operator
 
 from . import constraints_ui, mmcp_client, properties, request_builder, variations
@@ -148,26 +149,62 @@ class ANIMATICA_OT_generate_batch(Operator):
         "different seed each. The takes wait for Accept All / Reject All"
     )
 
+    characters: StringProperty(
+        default="",
+        options={'SKIP_SAVE'},
+        description="Characters to generate, as a JSON list of names, in place of the "
+                    "selection. A take of theirs still waiting is thrown away first: "
+                    "Regenerate in the batch review",
+    )
+
     _timer = None
     _pool: ThreadPoolExecutor | None = None
     _jobs: list | None = None
 
     @classmethod
+    def description(cls, context, props):
+        if not props.characters:
+            return cls.bl_description
+        names = json.loads(props.characters)
+        who = names[0] if len(names) == 1 else f"these {len(names)} characters"
+        return (f"Generate {who} again: the take waiting is thrown away and a new "
+                "one made, the others stay as they are")
+
+    @classmethod
     def poll(cls, context):
         s = context.scene.animatica
-        return (not s.is_generating and not s.is_previewing and not pending(s)
-                and len(selected_characters(context)) >= 2)
+        return not s.is_generating and not s.is_previewing
+
+    def _chars(self, context) -> list:
+        if not self.characters:
+            return selected_characters(context)
+        arms = [properties._live_armature(bpy.data.objects.get(n))
+                for n in json.loads(self.characters)]
+        return [a for a in arms if a is not None]
 
     def execute(self, context):
         from . import operators
 
         scene = context.scene
         settings = scene.animatica
-        chars = selected_characters(context)
+        chars = self._chars(context)
+        if not self.characters and (pending(settings) or len(chars) < 2):
+            self.report({'ERROR'}, "Select two or more characters, with no batch waiting for review")
+            return {'CANCELLED'}
+        if not chars:
+            self.report({'ERROR'}, "Those characters are gone")
+            return {'CANCELLED'}
         model_caps = mmcp_client.cached_model(settings.model_id)
         if model_caps is None:
             self.report({'ERROR'}, "Connect to the server first")
             return {'CANCELLED'}
+        # Regenerate: their takes go first, so the request is built from what
+        # each had, not from the take being replaced.
+        redo = [a.name for a in chars if a.name in pending(settings)]
+        if redo:
+            kept_failed = failures(settings)
+            _review(context, "reject", redo)
+            settings.batch_failed = json.dumps(kept_failed)
 
         shared = settings.batch_direction == 'SHARED'
         active = properties._live_armature(settings.target_armature)
@@ -228,7 +265,10 @@ class ANIMATICA_OT_generate_batch(Operator):
         settings.generation_elapsed = 0
         settings.batch_total = len(jobs)
         settings.batch_done = 0
-        settings.batch_failed = json.dumps(skipped)
+        # Failures of characters being tried again are old news.
+        again = {j.name for j in jobs}
+        settings.batch_failed = json.dumps(
+            [f for f in failures(settings) if f.split(":")[0] not in again] + skipped)
         import time
         self._start = time.time()
         wm = context.window_manager
@@ -277,7 +317,8 @@ class ANIMATICA_OT_generate_batch(Operator):
                     # and a save in between would drop it.
                     source.use_fake_user = True
                 arm[_PENDING_KEY] = json.dumps({"source": job.source_name})
-                settings.batch_pending = json.dumps(pending(settings) + [job.name])
+                settings.batch_pending = json.dumps(
+                    [n for n in pending(settings) if n != job.name] + [job.name])
                 settings.batch_done += 1
             except Exception as exc:  # noqa: BLE001 — one character's failure is not the batch's
                 operators._stash_quota_state(settings, exc)
@@ -308,17 +349,20 @@ class ANIMATICA_OT_generate_batch(Operator):
         settings.batch_total = 0
 
 
-def _review(context, op_name: str) -> int:
-    """Run Accept or Reject once for each character with a batch take waiting.
+def _review(context, op_name: str, names: list | None = None) -> int:
+    """Run Accept or Reject once for each character named (every character
+    with a batch take waiting, by default).
 
     The ordinary operator, set up as it expects: that character active, its
     source action named, the preview flag up. Then back to the character that
-    was active before.
+    was active before. The review ends with its last take.
     """
     settings = context.scene.animatica
     before = properties._live_armature(settings.target_armature)
+    waiting = pending(settings)
+    names = waiting if names is None else [n for n in names if n in waiting]
     handled = 0
-    for name in pending(settings):
+    for name in names:
         arm = properties._live_armature(bpy.data.objects.get(name))
         if arm is None:
             continue
@@ -335,8 +379,11 @@ def _review(context, op_name: str) -> int:
         handled += 1
     if before is not None and properties._is_live_armature(before):
         settings.target_armature = before
-    settings.batch_pending = ""
-    settings.batch_failed = ""
+    left = [n for n in waiting if n not in names
+            and properties._live_armature(bpy.data.objects.get(n)) is not None]
+    settings.batch_pending = json.dumps(left) if left else ""
+    if not left:
+        settings.batch_failed = ""
     settings.is_previewing = False
     return handled
 
@@ -349,7 +396,7 @@ class ANIMATICA_OT_accept_batch(Operator):
 
     @classmethod
     def poll(cls, context):
-        return bool(pending(context.scene.animatica))
+        return not context.scene.animatica.is_generating and bool(pending(context.scene.animatica))
 
     def execute(self, context):
         n = _review(context, "accept")
@@ -365,7 +412,7 @@ class ANIMATICA_OT_reject_batch(Operator):
 
     @classmethod
     def poll(cls, context):
-        return bool(pending(context.scene.animatica))
+        return not context.scene.animatica.is_generating and bool(pending(context.scene.animatica))
 
     def execute(self, context):
         n = _review(context, "reject")
@@ -373,10 +420,48 @@ class ANIMATICA_OT_reject_batch(Operator):
         return {'FINISHED'}
 
 
+class ANIMATICA_OT_review_one(Operator):
+    bl_idname = "animatica.review_batch_one"
+    bl_label = "Keep or Throw Away"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    character: StringProperty()
+    keep: BoolProperty(default=True)
+
+    @classmethod
+    def description(cls, context, props):
+        return (f"Keep {props.character}'s take: it moves to its NLA track" if props.keep
+                else f"Throw {props.character}'s take away and go back to what it had")
+
+    @classmethod
+    def poll(cls, context):
+        return not context.scene.animatica.is_generating and bool(pending(context.scene.animatica))
+
+    def execute(self, context):
+        n = _review(context, "accept" if self.keep else "reject", [self.character])
+        if not n:
+            self.report({'WARNING'}, f"No take waiting on {self.character}")
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"{'Kept' if self.keep else 'Threw away'} {self.character}'s take")
+        return {'FINISHED'}
+
+
+def apply_inplace(settings) -> None:
+    """In place, live on every take waiting in the batch review: the travel
+    muted or back, as it is for a single take."""
+    from . import operators
+    for name in pending(settings):
+        arm = properties._live_armature(bpy.data.objects.get(name))
+        if arm is not None:
+            operators._apply_inplace_constraint(arm, enabled=bool(settings.inplace))
+            arm.update_tag()
+
+
 _classes = (
     ANIMATICA_OT_generate_batch,
     ANIMATICA_OT_accept_batch,
     ANIMATICA_OT_reject_batch,
+    ANIMATICA_OT_review_one,
 )
 
 

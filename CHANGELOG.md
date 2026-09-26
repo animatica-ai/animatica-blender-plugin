@@ -23,7 +23,10 @@ Proscenium, and keep the identifiers those releases actually shipped.
   each, starting from where each stands — variations on one action; waypoints
   and pins are left out). The takes then wait together: **Accept All** puts
   each on its own character's NLA track, **Reject All** throws them all away;
-  a character that failed is listed and does not stop the rest. The panel says
+  a character that failed is listed and does not stop the rest. Each character
+  also has its own row: keep it, throw it away, or **Regenerate** just that one
+  (**Regenerate All** does the lot), and **In place** acts on every take
+  waiting, on and off. The panel says
   how many generations it will cost before you press.
 - **Variations: several versions of a take from one Generate.** Set
   **Variations** under Generate Motion (shown when the model can) and the

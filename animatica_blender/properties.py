@@ -349,6 +349,12 @@ def _inplace_update(self, context):
     """
     if not self.inplace:
         self.loop_set_inplace = False       # the artist's choice now, not Loop's
+    if self.batch_pending:
+        # Takes waiting in the batch review: live on each of them.
+        from . import batch  # noqa: PLC0415
+        batch.apply_inplace(self)
+        if self.target_armature is not None and self.target_armature.name in batch.pending(self):
+            return
     arm = self.target_armature
     if arm is None or arm.type != 'ARMATURE':
         return

@@ -12,6 +12,8 @@ Sidebar panels in View3D > Sidebar > Animatica, named for the job:
 Server URL + auth live in Edit > Preferences > Add-ons > Animatica.
 """
 
+import json
+
 import bpy
 from bpy.types import Panel
 
@@ -429,28 +431,38 @@ def _draw_batch(layout, context, settings) -> None:
         if len(varied) >= 2:
             # A crowd: flip every character at once.
             variations.draw(box, arms[varied[0]], character="*", text="All: next variation")
+        # One row a character: its version, and keep / throw away / again.
         col = box.column(align=True)
-        for name in names[:6]:
-            if name in varied:
-                variations.draw(col, arms[name], character=name,
-                                text=f"{name} · {variations.take_of(arms[name]).index + 1}"
-                                     f" of {variations.take_of(arms[name]).count}")
+        for name in names:
+            row = col.row(align=True)
+            left = row.row(align=True)
+            take = variations.take_of(arms[name])
+            if take is not None:
+                variations.draw(left, arms[name], character=name,
+                                text=f"{name} · {take.index + 1} of {take.count}")
             else:
-                sub = col.row()
-                sub.active = False
-                sub.label(text=name, icon='ARMATURE_DATA')
-        if n > 6:
-            sub = col.row()
-            sub.active = False
-            sub.label(text=f"+{n - 6} more")
-        for line in failed[:3]:
-            row = box.row()
+                left.label(text=name, icon='ARMATURE_DATA')
+            op = row.operator("animatica.review_batch_one", text="", icon='CHECKMARK')
+            op.character, op.keep = name, True
+            op = row.operator("animatica.review_batch_one", text="", icon='X')
+            op.character, op.keep = name, False
+            row.operator("animatica.generate_batch", text="",
+                         icon='FILE_REFRESH').characters = json.dumps([name])
+        for line in failed[:6]:
+            row = box.row(align=True)
             row.alert = True
             row.label(text=line, icon='ERROR')
+            who = line.split(":")[0]
+            if properties._live_armature(bpy.data.objects.get(who)) is not None:
+                row.operator("animatica.generate_batch", text="",
+                             icon='FILE_REFRESH').characters = json.dumps([who])
         row = box.row(align=True)
         row.scale_y = 1.3
         row.operator("animatica.accept_batch", icon='CHECKMARK')
         row.operator("animatica.reject_batch", icon='X')
+        if names:
+            box.operator("animatica.generate_batch", text="Regenerate All",
+                         icon='FILE_REFRESH').characters = json.dumps(names)
         return
 
     chars = batch.selected_characters(context)
