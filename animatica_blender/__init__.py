@@ -50,6 +50,7 @@ from . import timeline_overlay
 from . import timeline_operators
 from . import updater
 from . import examples
+from . import waypoints
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +167,7 @@ def register():
     timeline_overlay.register_draw_handler()
     updater.register()
     examples.register()
+    waypoints.register()
 
     _reset_runtime_flags()
 
@@ -192,6 +194,7 @@ def unregister():
     _purge_stale_handlers(bpy.app.handlers.save_pre, "_animatica_save_pre")
     _purge_stale_handlers(bpy.app.handlers.load_post, "_animatica_load_post")
 
+    waypoints.unregister()
     examples.unregister()
     updater.unregister()
     timeline_overlay.unregister_draw_handler()

@@ -560,33 +560,55 @@ class ANIMATICA_PT_paths(AnimaticaPanelBase, Panel):
     bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
+        from . import waypoints
+
         layout = self.layout
         scene = context.scene
         settings = scene.animatica
 
         row = layout.row(align=True)
-        row.operator("animatica.add_root_path", icon='OUTLINER_OB_CURVE', text="Root path")
+        row.operator("animatica.add_waypoint", icon='MESH_CIRCLE',
+                     text=f"Waypoint @ {scene.frame_current}")
         row.operator("animatica.add_effector_target", icon='EMPTY_SINGLE_ARROW', text="Pin")
 
         found = constraints_ui.walk_scene_constraints(scene)
+        marks = found["waypoints"]
         root_paths, effectors = found["root_paths"], found["effector_targets"]
-        if not root_paths and not effectors:
-            note = layout.row()
+        if not marks and not root_paths and not effectors:
+            note = layout.column(align=True)
             note.active = False
-            note.label(text="a curve to travel along, an empty to pin a hand to")
+            note.label(text="Waypoint: where to stand, at this frame")
+            note.label(text="Pin: hold a hand or foot somewhere")
             return
 
-        if root_paths:
-            layout.prop(settings, "preview_path_snap", text="Snap armature", toggle=True)
-        for obj in root_paths + effectors:
+        # The route: one row per waypoint, frame editable in place — retiming
+        # a waypoint is the most common edit, so it should not need a dialog.
+        if marks:
+            col = layout.column(align=True)
+            for obj in marks:
+                row = col.row(align=True)
+                row.prop(obj, "animatica_waypoint_frame", text="", icon='MESH_CIRCLE')
+                op = row.operator("animatica.go_to_waypoint", text="", icon='RESTRICT_SELECT_OFF')
+                op.frame = obj.animatica_waypoint_frame
+                op = row.operator("animatica.remove_waypoint", text="", icon='X')
+                op.frame = obj.animatica_waypoint_frame
+            layout.prop(settings, "waypoint_heading")
+
+        # Curves from before waypoints existed still generate, but they hide
+        # the timing — so each one offers the way out.
+        for obj in root_paths:
             row = layout.row(align=True)
-            if obj in effectors:
-                joint = obj.get("animatica_target_joint", "?")
-                keys = _count_location_keyframes(obj)
-                row.label(text=f"{joint} ({keys} keys)", icon='EMPTY_SINGLE_ARROW')
-            else:
-                label = obj.name + ("  ↗" if obj.get("animatica_match_direction") else "")
-                row.label(text=label, icon='OUTLINER_OB_CURVE')
+            row.label(text=obj.name, icon='OUTLINER_OB_CURVE')
+            op = row.operator("animatica.curve_to_waypoints", text="To waypoints")
+            op.name = obj.name
+            op = row.operator("animatica.remove_constraint_object", text="", icon='X')
+            op.name = obj.name
+
+        for obj in effectors:
+            row = layout.row(align=True)
+            joint = obj.get("animatica_target_joint", "?")
+            keys = _count_location_keyframes(obj)
+            row.label(text=f"{joint} ({keys} keys)", icon='EMPTY_SINGLE_ARROW')
             op = row.operator("animatica.focus_constraint_object", text="", icon='RESTRICT_SELECT_OFF')
             op.name = obj.name
             op = row.operator("animatica.remove_constraint_object", text="", icon='X')

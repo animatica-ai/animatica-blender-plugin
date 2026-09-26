@@ -286,6 +286,8 @@ def merge_preview_keyframes_into_source(source_action, preview_action) -> int:
 def walk_scene_constraints(scene: bpy.types.Scene) -> dict[str, list[bpy.types.Object]]:
     """Find every Blender object in the scene that the addon should treat as
     an MMCP constraint. Returns a dict keyed by primitive type."""
+    from . import waypoints as _waypoints
+
     root_paths: list[bpy.types.Object] = []
     effectors:  list[bpy.types.Object] = []
     for obj in scene.objects:
@@ -293,7 +295,8 @@ def walk_scene_constraints(scene: bpy.types.Scene) -> dict[str, list[bpy.types.O
             root_paths.append(obj)
         elif obj.get(constants.PROP_TARGET_JOINT) and obj.type == 'EMPTY':
             effectors.append(obj)
-    return {"root_paths": root_paths, "effector_targets": effectors}
+    return {"root_paths": root_paths, "effector_targets": effectors,
+            "waypoints": _waypoints.waypoints(scene)}
 
 
 # ---------------------------------------------------------------------------
@@ -810,7 +813,9 @@ def _root_path_world_polyline(curve_obj: bpy.types.Object) -> list[Vector] | Non
     spline = curve_obj.data.splines[0] if curve_obj.data.splines else None
     if spline is None or len(spline.bezier_points) < 2:
         return None
-    local_polyline = _bezier_to_polyline(spline, segments_per_segment=12)
+    # Dense enough that distance measured along the polyline is distance along
+    # the curve: the timing below is built from it.
+    local_polyline = _bezier_to_polyline(spline, segments_per_segment=48)
     if len(local_polyline) < 2:
         return None
     mw = curve_obj.matrix_world
@@ -859,17 +864,25 @@ def sample_root_path(
     positions_xz: list[tuple[float, float]] = []
     headings:     list[float] = []
 
-    last_idx = len(polyline) - 1
+    # The root is pinned to these positions, so their spacing IS its speed.
+    # This used to step through the polyline by index — equal time per Bézier
+    # parameter step — and a Bézier's parameter is not its length: each
+    # control segment took the same share of the clip however long it was,
+    # and points bunch near the control points within a segment. Measured on
+    # a straight two-point path, the pinned speed wandered from 0.67 to 1.0
+    # m/s while the legs kept one cadence; the server's cleanup then warped
+    # the hips onto that schedule after the feet were planted, and planted
+    # feet slid 30–46 cm per step. Time now follows distance: constant speed
+    # along whatever shape was drawn.
+    arc = _arc_lengths(polyline)
+    length = arc[-1]
     denom = max(1, total_frames - 1)
     for f in frames:
-        t = f / denom                          # 0..1 along the curve
-        idx = max(0, min(last_idx, int(round(t * last_idx))))
-        world = polyline[idx]
+        world, tangent = _point_at_distance(polyline, arc, length * f / denom)
         x_mmcp, _, z_mmcp = coords.blender_pos_to_mmcp(world)
         positions_xz.append((x_mmcp, z_mmcp))
 
         if curve_obj.get(constants.PROP_MATCH_DIRECTION):
-            tangent = _tangent_at(polyline, idx)
             tx, _, tz = coords.blender_pos_to_mmcp(tangent)
             headings.append(_mmcp_heading_from_xz_tangent(tx, tz))
 
@@ -1294,6 +1307,40 @@ def _bezier_to_polyline(spline, *, segments_per_segment: int = 12) -> list[Vecto
             seg = seg[1:]   # avoid duplicating segment endpoints
         polyline.extend(seg)
     return polyline
+
+
+def _arc_lengths(polyline: list[Vector]) -> list[float]:
+    """Cumulative distance along ``polyline`` at each vertex, from 0."""
+    out = [0.0]
+    for a, b in zip(polyline, polyline[1:]):
+        out.append(out[-1] + (b - a).length)
+    return out
+
+
+def _point_at_distance(polyline: list[Vector], arc: list[float],
+                       distance: float) -> tuple[Vector, Vector]:
+    """The point ``distance`` along the polyline, and the direction there.
+
+    Interpolated between vertices rather than snapped to the nearest one, so
+    evenly spaced distances come out as evenly spaced positions.
+    """
+    if distance <= 0.0 or arc[-1] <= 0.0:
+        return polyline[0].copy(), _tangent_at(polyline, 0)
+    if distance >= arc[-1]:
+        return polyline[-1].copy(), _tangent_at(polyline, len(polyline) - 1)
+    lo, hi = 0, len(arc) - 1
+    while hi - lo > 1:                         # the segment holding ``distance``
+        mid = (lo + hi) // 2
+        if arc[mid] <= distance:
+            lo = mid
+        else:
+            hi = mid
+    span = arc[hi] - arc[lo]
+    t = (distance - arc[lo]) / span if span > 0 else 0.0
+    point = polyline[lo].lerp(polyline[hi], t)
+    direction = polyline[hi] - polyline[lo]
+    tangent = direction.normalized() if direction.length else _tangent_at(polyline, lo)
+    return point, tangent
 
 
 def _tangent_at(polyline: list[Vector], idx: int) -> Vector:

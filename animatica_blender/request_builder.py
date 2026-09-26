@@ -78,6 +78,7 @@ def generation_blockers(
     has_constraint = bool(pose_frames) or bool(
         (constraint_objects or {}).get("root_paths")
         or (constraint_objects or {}).get("effector_targets")
+        or (constraint_objects or {}).get("waypoints")
     )
 
     # 1. Nothing to go on. Unconditioned motion between authored poses is a
@@ -1100,6 +1101,18 @@ def _collect_constraints(
     total_frames: int,
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
+
+    # Waypoints first: the way a route is authored now. Legacy curves below
+    # still go out for files made before waypoints existed.
+    if constraint_objects.get("waypoints"):
+        from . import waypoints
+
+        scene = bpy.context.scene
+        settings = getattr(scene, "animatica", None)
+        out.extend(waypoints.request_constraints(
+            scene, frame_range,
+            face_along_path=bool(getattr(settings, "waypoint_heading", False)),
+        ))
 
     for curve in constraint_objects.get("root_paths", []):
         c = constraints_ui.sample_root_path(curve, total_frames=total_frames)

@@ -331,7 +331,9 @@ def draw_timeline_strips():
         return
     from . import key_poses  # noqa: PLC0415 — lazy, key_poses reads our colours
     key_pose_ticks, _window = key_poses.timeline_ticks(scene)
-    if len(props.prompt_blocks) == 0 and not key_pose_ticks:
+    from . import waypoints
+    waypoint_frames = waypoints.timeline_frames(scene)
+    if len(props.prompt_blocks) == 0 and not key_pose_ticks and not waypoint_frames:
         return
 
     region = context.region
@@ -468,9 +470,37 @@ def draw_timeline_strips():
     # they sit on top of every strip, since they are what the strips are
     # being generated around. ---
     _draw_key_pose_ticks(shader, region, view2d, key_pose_ticks, y_bottom, y_top)
+    _draw_waypoint_pins(shader, region, view2d, waypoint_frames, y_bottom)
 
     # Restore GPU state
     gpu.state.blend_set("NONE")
+
+
+#: Waypoint pins on the lane: the route's colour, and a circle rather than a
+#: key pose's diamond, so "stand here" and "hold this pose" read apart at a
+#: glance.
+WAYPOINT_PIN_COLOR = (1.0, 0.78, 0.25, 0.95)
+WAYPOINT_PIN_RADIUS = 4.0
+_CIRCLE_STEPS = 12
+
+
+def _draw_waypoint_pins(shader, region, view2d, frames, y_bottom):
+    """One circle per waypoint, sitting on the bottom edge of the lane."""
+    if not frames:
+        return
+    import math
+    r = WAYPOINT_PIN_RADIUS
+    y = y_bottom - LANE_PADDING + r
+    for frame in frames:
+        x, _ = view2d.view_to_region(frame, 0, clip=False)
+        if x < -r or x > region.width + r:
+            continue
+        ring = [(x + r * math.cos(2 * math.pi * i / _CIRCLE_STEPS),
+                 y + r * math.sin(2 * math.pi * i / _CIRCLE_STEPS)) for i in range(_CIRCLE_STEPS)]
+        tris = [(0, i, i + 1) for i in range(1, _CIRCLE_STEPS - 1)]
+        batch = batch_for_shader(shader, "TRIS", {"pos": ring}, indices=tris)
+        shader.uniform_float("color", WAYPOINT_PIN_COLOR)
+        batch.draw(shader)
 
 
 def _draw_key_pose_ticks(shader, region, view2d, ticks, y_bottom, y_top):

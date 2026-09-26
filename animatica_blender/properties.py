@@ -879,6 +879,15 @@ class AnimaticaSettings(PropertyGroup):
         ),
         default=True,
     )
+    waypoint_heading: BoolProperty(
+        name="Face along the path",
+        description=(
+            "Also tell the model which way to face at each waypoint — toward "
+            "the next one. Off by default: pinning a facing at every waypoint "
+            "over-constrains turns, and the model faces the way it walks"
+        ),
+        default=False,
+    )
     pose_details: BoolProperty(
         name="Per-Handle Settings",
         description=(
