@@ -47,6 +47,68 @@ class BuildError(Exception):
 # Public entry point
 # ---------------------------------------------------------------------------
 
+def generation_blockers(
+    *,
+    scene,
+    prompt_blocks,
+    constraint_objects,
+    model_caps: dict[str, Any] | None,
+    pose_frames,
+    armature_obj=None,
+) -> list[str]:
+    """Why this generation cannot be sent — in the artist's words, or empty.
+
+    One function so the panel and the request agree: the button greys out for
+    exactly the reasons the send would have refused, and neither has to guess
+    at the other's rules. Cheap by construction, because the panel calls it on
+    every redraw — the caller supplies ``pose_frames`` (from the plan it has
+    already computed) rather than having this walk the action again.
+
+    The server rejects all three of these too, but by then the artist has
+    waited for a round trip to be told something the addon knew before it
+    dialled.
+    """
+    caps = model_caps or {}
+    limits = caps.get("limits") or {}
+    out: list[str] = []
+
+    blocks = [b for b in prompt_blocks or () if getattr(b, "enabled", True)]
+    texts = [(b.prompt or "").strip() for b in blocks]
+    written = [t for t in texts if t]
+    has_constraint = bool(pose_frames) or bool(
+        (constraint_objects or {}).get("root_paths")
+        or (constraint_objects or {}).get("effector_targets")
+    )
+
+    # 1. Nothing to go on. Unconditioned motion between authored poses is a
+    #    real request; unconditioned motion between nothing is noise, and the
+    #    server has no way to answer it.
+    if not written and not has_constraint:
+        out.append("Type a prompt, or key a pose")
+
+    # 2. Longer than the model can make in one go. Seconds are the model's
+    #    own, since the server converts frames with the model's fps.
+    fps = float(caps.get("fps") or scene.render.fps or 24)
+    max_seconds = limits.get("max_duration_seconds")
+    if max_seconds and fps > 0:
+        lo, hi = compute_frame_range(prompt_blocks, armature_obj, scene)
+        seconds = (hi - lo + 1) / fps
+        if seconds > float(max_seconds) + 1e-6:
+            out.append(f"Clip is {seconds:.0f}s — this model tops out at "
+                       f"{float(max_seconds):.0f}s")
+
+    # 3. A prompt the server will refuse to read.
+    max_prompt = int(limits.get("max_prompt_length") or 0)
+    if max_prompt:
+        for i, text in enumerate(texts, start=1):
+            if len(text) > max_prompt:
+                out.append(f"Prompt {i} is {len(text)} characters — the limit "
+                           f"is {max_prompt}")
+                break
+
+    return out
+
+
 def compute_frame_range(
     prompt_blocks,
     armature_obj: bpy.types.Object | None,
@@ -82,14 +144,19 @@ def compute_frame_range(
         transition_frames = int(getattr(settings, "num_transition_frames", 0) or 0)
     margin = max(0, int(transition_frames))
 
-    block_starts = [
-        int(b.frame_start) for b in prompt_blocks or ()
-        if getattr(b, "enabled", True)
-    ]
-    block_ends = [
-        int(b.frame_end) for b in prompt_blocks or ()
-        if getattr(b, "enabled", True)
-    ]
+    # A block with no text is a gap with a rectangle drawn round it: the
+    # segment builder turns both into the same ``unconditioned`` stretch. So
+    # when anything has been typed, the typed blocks alone are the statement
+    # of what to generate. This matters because setting a target armature
+    # seeds an empty block across the whole scene — left in the reckoning, it
+    # widened every generation to the entire timeline and swept in keyframes
+    # far outside the stretch the artist had actually asked about.
+    speaking = [b for b in prompt_blocks or ()
+                if getattr(b, "enabled", True) and (b.prompt or "").strip()]
+    considered = speaking or [b for b in prompt_blocks or ()
+                              if getattr(b, "enabled", True)]
+    block_starts = [int(b.frame_start) for b in considered]
+    block_ends = [int(b.frame_end) for b in considered]
     if block_starts and block_ends:
         lo, hi = min(block_starts), max(block_ends)
         # Widen by the blend margin, but never past the scene the user set up
@@ -184,6 +251,26 @@ def build_request(
             )
         except (AttributeError, TypeError, ValueError):
             pass
+
+    # Refuse here rather than at the far end: these three are knowable
+    # before dialling, and the panel has already greyed the button for the
+    # same reasons (see generation_blockers).
+    source_for_poses = (
+        armature_obj.animation_data.action
+        if armature_obj.animation_data and armature_obj.animation_data.action
+        else None
+    )
+    authored, _keyed = constraints_ui.authored_pose_frames(source_for_poses)
+    blockers = generation_blockers(
+        scene=scene,
+        prompt_blocks=prompt_blocks,
+        constraint_objects=constraint_objects,
+        model_caps=model_caps,
+        pose_frames=authored,
+        armature_obj=armature_obj,
+    )
+    if blockers:
+        raise BuildError(blockers[0])
 
     frame_range = compute_frame_range(prompt_blocks, armature_obj, scene)
     segments = build_segments(
@@ -923,9 +1010,19 @@ def build_segments(
     # (start, end, prompt, seed). Reads the resolved ``last_used_seed`` (stamped
     # by build_request just before this call) so the segment carries the exact
     # concrete seed we recorded; 0 means "no per-segment seed for this block".
+    # Same rule as the frame range: once anything has been typed, untyped
+    # blocks are gaps. They used to compete for the timeline, and the overlap
+    # resolution below let the earliest one win — so the empty block seeded
+    # across the whole scene silently ate every prompt the artist wrote, and
+    # the request went out as one long unconditioned stretch.
+    has_text = any((b.prompt or "").strip()
+                   for b in prompt_blocks if getattr(b, "enabled", True))
+
     enabled: list[tuple[int, int, str, int]] = []
     for b in prompt_blocks:
         if not getattr(b, "enabled", True):
+            continue
+        if has_text and not (b.prompt or "").strip():
             continue
         s = max(int(b.frame_start), frame_range[0])
         e = min(int(b.frame_end),   frame_range[1])

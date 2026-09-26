@@ -331,13 +331,43 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
                     box.label(text="Double-click the Timeline to add a block,")
                     box.label(text="then double-click it to type a prompt.")
 
+            # Why this cannot be sent, asked of the same function the send
+            # asks — so the button greys out for exactly the reasons a click
+            # would have been refused, and says which one.
+            blockers = []
+            if arm_live is not None and not in_preview:
+                from . import key_poses, request_builder
+
+                try:
+                    blockers = request_builder.generation_blockers(
+                        scene=context.scene,
+                        prompt_blocks=settings.prompt_blocks,
+                        constraint_objects=constraints_ui.walk_scene_constraints(context.scene),
+                        model_caps=mmcp_client.cached_model(settings.model_id),
+                        pose_frames=key_poses.plan(context.scene)["frames"],
+                        armature_obj=arm_live,
+                    )
+                except Exception:               # noqa: BLE001 — never break a draw
+                    blockers = []
+
             col = layout.column(align=True)
             col.enabled = arm_live is not None
 
+            # Only the clip generation is gated. Generating a single pose
+            # carries its own prompt in its own dialog, and Set Keyframe is
+            # local work that needs no server at all — greying those out
+            # because the timeline has no prompt on it would be nonsense.
             gen_text = "Regenerate Motion" if in_preview else "Generate Motion"
-            row = col.row()
+            gen = col.column(align=True)
+            gen.enabled = not blockers
+            row = gen.row()
             row.scale_y = 1.5
             row.operator("animatica.generate", icon='PLAY', text=gen_text)
+            if blockers:
+                note = gen.row()
+                note.enabled = True         # readable while the button above is not
+                note.active = False
+                note.label(text=blockers[0], icon='INFO')
 
             # Pose-segment generation is a cloud-only capability — only
             # surface the button when the connected model advertises it.
