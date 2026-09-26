@@ -169,8 +169,11 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
     bl_idname = "ANIMATICA_PT_main"
 
     def draw_header_preset(self, context):
-        # Help is always a click away, in the corner, not the panel's first row.
-        self.layout.operator("animatica.open_discord_help", text="", icon='HELP', emboss=False)
+        # Examples and help are a click away in the corner, not rows of their
+        # own above the button the panel is for.
+        row = self.layout.row(align=True)
+        row.menu("ANIMATICA_MT_examples", text="", icon='PRESET')
+        row.operator("animatica.open_discord_help", text="", icon='HELP', emboss=False)
 
     def draw(self, context):
         from . import updater
@@ -230,178 +233,146 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
                 box.operator("animatica.connect", icon='FILE_REFRESH', text="Try again")
             return
 
-        # Connected — show model picker.
-        layout.prop(settings, "model_id", text="Model")
-
-        # Import the canonical skeleton as a Blender armature (the
-        # supported path when supports_retargeting=false). Always
-        # available post-connect; prompt-style only when nothing's set.
-        from . import canonical_skeleton, remote_asset
-        fetching = canonical_skeleton.download_state()
-        if fetching["active"]:
-            layout.prop(settings, "target_armature", text="Armature")
-            # First run: the character is being downloaded on a worker thread.
-            # Drawn where the Import button sits, so the click the user just
-            # made visibly turned into something, and carrying the three
-            # numbers that answer "is this moving, and how long do I wait".
-            box = layout.box()
-            box.label(text="Fetching the character (first run only)", icon='IMPORT')
-            row = box.row()
-            row.enabled = False
-            row.progress(
-                factor=fetching["percent"] / 100.0,
-                type='BAR',
-                text=(f"{remote_asset.format_bytes(fetching['got'])}"
-                      f" / {remote_asset.format_bytes(fetching['total'])}"
-                      f"  ({fetching['percent']}%)"),
-            )
-            sub = box.row()
-            sub.active = False
-            sub.label(text=remote_asset.format_rate(fetching["speed"]))
-            sub.label(text=remote_asset.format_eta(fetching["eta"]))
-        elif settings.target_armature is None:
-            layout.prop(settings, "target_armature", text="Armature")
-            box = layout.box()
-            box.label(text="No armature — import a rig to animate on", icon='INFO')
-            box.operator(
-                "animatica.import_canonical_skeleton",
-                icon='ARMATURE_DATA',
-                text="Import Animatic character",
-            )
-        else:
-            # Re-importing is rare; it rides on the picker rather than taking
-            # a full-width row of its own.
-            row = layout.row(align=True)
-            row.prop(settings, "target_armature", text="Armature")
-            row.operator("animatica.import_canonical_skeleton", text="", icon='IMPORT')
+        # Connected. Nothing to animate yet: setting up is the whole panel.
+        from . import canonical_skeleton
+        arm_live = properties._live_armature(settings.target_armature)
+        if arm_live is None or canonical_skeleton.download_state()["active"]:
+            _draw_character(layout, context, settings)
+            return
 
         # Warn only if the clip exceeds the connected model's duration limits.
         _draw_duration_hint(layout, context, settings)
 
-        layout.separator()
-
-        # Generate buttons — state-aware
         if settings.is_generating:
-            # Cold-start advisory. The cloud scales to zero between
-            # generations during early access, so the first request after
-            # an idle period waits ~30–60s for the GPU container + model
-            # to boot. Without this hint people think the plugin hung.
             # No server-side progress signal in MMCP v1, so show a live
             # elapsed-time counter rather than a bar frozen at 0%.
             col = layout.column(align=True)
             elapsed = int(getattr(settings, "generation_elapsed", 0))
-            col.label(text=f"Working… {elapsed}s", icon='SORTTIME')
+            row = col.row()
+            row.scale_y = 1.5
+            row.label(text=f"Working… {elapsed}s", icon='SORTTIME')
             col.operator("animatica.cancel", icon='X', text="Cancel")
             # Said once the wait is long enough to wonder about, not on every
-            # generation: the first after an idle spell waits for the model.
+            # generation: the cloud scales to zero between generations, and
+            # the first after an idle spell waits for the model to boot.
             if elapsed >= 10:
                 note = layout.row()
                 note.active = False
                 note.label(text="First run can take 60 s while the model warms up")
-        else:
-            # Use the dedicated preview flag — ``source_action_name`` is
-            # empty for free-form generations (no prior action to restore
-            # to), so gating on it would hide the Accept / Reject
-            # buttons after a successful free-form bake.
-            arm_live = properties._live_armature(settings.target_armature)
-            in_preview = (
-                arm_live is not None
-                and bool(getattr(settings, "is_previewing", False))
-            )
+            return
 
-            # The examples stay. They are the quickest way to a second block
-            # as much as the first — "what else does it do well" is a question
-            # someone asks all week, not only in the first five minutes — and
-            # a menu that vanishes the moment you use it teaches people not to
-            # rely on it. Only the first-run explanation goes away.
-            if arm_live is not None:
-                has_prompt = any(
-                    (b.prompt or "").strip() for b in settings.prompt_blocks
+        # The dedicated preview flag, not ``source_action_name``: that is
+        # empty for a free-form generation, which still needs Accept / Reject.
+        in_preview = bool(getattr(settings, "is_previewing", False))
+        model = mmcp_client.cached_model(settings.model_id)
+
+        # An empty timeline: the first thing to do is give it a prompt, and an
+        # example is the short path -- one click writes a prompt across the
+        # scene. Once there is one, the examples are the icon in the header.
+        has_prompt = any((b.prompt or "").strip() for b in settings.prompt_blocks)
+        if not has_prompt and not in_preview:
+            box = layout.box()
+            box.label(text="Add a prompt to generate", icon='INFO')
+            box.menu("ANIMATICA_MT_examples", text="Try an example", icon='PRESET')
+            sub = box.column(align=True)
+            sub.active = False
+            sub.label(text="or double-click the Timeline to add a block,")
+            sub.label(text="then double-click it to type your own.")
+
+        # Why this cannot be sent, asked of the same function the send asks --
+        # so the button greys out for exactly the reasons a click would have
+        # been refused, and says which one.
+        blockers = []
+        if not in_preview:
+            from . import key_poses, request_builder
+
+            try:
+                blockers = request_builder.generation_blockers(
+                    scene=context.scene,
+                    prompt_blocks=settings.prompt_blocks,
+                    constraint_objects=constraints_ui.walk_scene_constraints(context.scene),
+                    model_caps=model,
+                    pose_frames=key_poses.plan(context.scene)["frames"],
+                    armature_obj=arm_live,
                 )
-                # In preview too: Regenerate Motion is offered there, so the
-                # prompts are still live, and "try another one" is exactly
-                # what someone does while looking at a take they are not sure
-                # about.
-                if has_prompt or in_preview:
-                    row = layout.row(align=True)
-                    row.menu("ANIMATICA_MT_examples",
-                             text="Try an example", icon='PRESET')
-                    examples.draw_status(layout)
-                else:
-                    box = layout.box()
-                    box.label(text="Add a prompt to generate", icon='INFO')
-                    # The example is the short path: one click writes a prompt
-                    # across the scene and the next one generates. Finding the
-                    # Timeline, drawing a block and typing into it is three
-                    # discoveries before anything moves.
-                    box.menu("ANIMATICA_MT_examples",
-                             text="Try an example", icon='PRESET')
-                    examples.draw_status(box)
-                    sub = box.column(align=True)
-                    sub.active = False
-                    sub.label(text="or double-click the Timeline to add a block,")
-                    sub.label(text="then double-click it to type your own.")
-                # An example's character may need attribution; this is where
-                # the file that uses it gives it.
-                examples.draw_credit(layout, context.scene)
+            except Exception:               # noqa: BLE001 — never break a draw
+                blockers = []
 
-            # Why this cannot be sent, asked of the same function the send
-            # asks — so the button greys out for exactly the reasons a click
-            # would have been refused, and says which one.
-            blockers = []
-            if arm_live is not None and not in_preview:
-                from . import key_poses, request_builder
+        # A take in front of you: keep it or not comes first, making another
+        # is the alternative under it.
+        if in_preview:
+            _draw_preview(layout, context, settings, arm_live, model)
 
-                try:
-                    blockers = request_builder.generation_blockers(
-                        scene=context.scene,
-                        prompt_blocks=settings.prompt_blocks,
-                        constraint_objects=constraints_ui.walk_scene_constraints(context.scene),
-                        model_caps=mmcp_client.cached_model(settings.model_id),
-                        pose_frames=key_poses.plan(context.scene)["frames"],
-                        armature_obj=arm_live,
-                    )
-                except Exception:               # noqa: BLE001 — never break a draw
-                    blockers = []
+        # The one thing this panel is for: the scene is set up the way you
+        # would anyway, and this turns it into motion.
+        gen = layout.column(align=True)
+        gen.enabled = not blockers
+        row = gen.row()
+        row.scale_y = 1.5
+        row.operator("animatica.generate",
+                     text="Regenerate Motion" if in_preview else "Generate Motion")
+        if blockers:
+            note = gen.row()
+            note.enabled = True         # readable while the button above is not
+            note.active = False
+            note.label(text=blockers[0], icon='INFO')
 
-            model = mmcp_client.cached_model(settings.model_id)
-            col = layout.column()
-            col.enabled = arm_live is not None
+        _draw_take_options(layout, settings, model, in_preview)
+        if not in_preview:
+            _draw_next_take(layout, context)
+        examples.draw_status(layout)
 
-            # Only the clip generation is gated. Generating a single pose
-            # carries its own prompt in its own dialog — greying it out
-            # because the timeline has no prompt on it would be nonsense.
-            gen_text = "Regenerate Motion" if in_preview else "Generate Motion"
-            gen = col.column(align=True)
-            gen.enabled = not blockers
-            row = gen.row()
-            row.scale_y = 1.5
-            row.operator("animatica.generate", text=gen_text)
-            if blockers:
-                note = gen.row()
-                note.enabled = True         # readable while the button above is not
-                note.active = False
-                note.label(text=blockers[0], icon='INFO')
+        # An example's character may need attribution; this is where the file
+        # that uses it gives it.
+        examples.draw_credit(layout, context.scene)
 
-            _draw_take_options(col, settings, model, in_preview)
-            if arm_live is not None and not in_preview:
-                _draw_next_take(col, context)
 
-            # Pose-segment generation is a cloud-only capability — only
-            # surface the button when the connected model advertises it.
-            if model and "pose" in (model.get("supported_segments") or []):
-                pose_text = (
-                    f"Regenerate Pose at Frame {context.scene.frame_current}"
-                    if in_preview else
-                    f"Generate Pose at Frame {context.scene.frame_current}"
-                )
-                col.separator()
-                row = col.row()
-                row.scale_y = 1.2
-                row.operator("animatica.generate_pose", icon='ARMATURE_DATA', text=pose_text)
+def _draw_character(layout, context, settings) -> None:
+    """Which model animates which rig. Set once per scene.
 
-            if in_preview:
-                _draw_preview(layout, context, settings, arm_live, model)
+    In the main panel while nothing is set up, since then it is the only thing
+    to do; afterwards in the collapsed Character sub-panel.
+    """
+    from . import canonical_skeleton, remote_asset
+
+    layout.prop(settings, "model_id", text="Model")
+    fetching = canonical_skeleton.download_state()
+    if fetching["active"]:
+        layout.prop(settings, "target_armature", text="Armature")
+        # First run: the character is being downloaded on a worker thread.
+        # Drawn where the Import button sits, so the click just made visibly
+        # turned into something, with the three numbers that answer "is this
+        # moving, and how long do I wait".
+        box = layout.box()
+        box.label(text="Fetching the character (first run only)", icon='IMPORT')
+        row = box.row()
+        row.enabled = False
+        row.progress(
+            factor=fetching["percent"] / 100.0,
+            type='BAR',
+            text=(f"{remote_asset.format_bytes(fetching['got'])}"
+                  f" / {remote_asset.format_bytes(fetching['total'])}"
+                  f"  ({fetching['percent']}%)"),
+        )
+        sub = box.row()
+        sub.active = False
+        sub.label(text=remote_asset.format_rate(fetching["speed"]))
+        sub.label(text=remote_asset.format_eta(fetching["eta"]))
+    elif properties._live_armature(settings.target_armature) is None:
+        layout.prop(settings, "target_armature", text="Armature")
+        box = layout.box()
+        box.label(text="No armature — import a rig to animate on", icon='INFO')
+        box.operator(
+            "animatica.import_canonical_skeleton",
+            icon='ARMATURE_DATA',
+            text="Import Animatic character",
+        )
+    else:
+        # Re-importing is rare; it rides on the picker rather than taking a
+        # full-width row of its own.
+        row = layout.row(align=True)
+        row.prop(settings, "target_armature", text="Armature")
+        row.operator("animatica.import_canonical_skeleton", text="", icon='IMPORT')
 
 
 def _draw_take_options(layout, settings, model, in_preview) -> None:
@@ -455,7 +426,6 @@ def _draw_next_take(layout, context) -> None:
 
 def _draw_preview(layout, context, settings, arm, model) -> None:
     """The take in front of you: what it is, how it plays, keep it or not."""
-    layout.separator()
     box = layout.box()
     box.label(text="Previewing take")
     ad = arm.animation_data if arm is not None else None
@@ -486,6 +456,44 @@ def _draw_preview(layout, context, settings, arm, model) -> None:
             text="Regenerate Active Block",
         )
         op.block_index = -1
+    layout.separator()
+
+
+class ANIMATICA_PT_character(AnimaticaPanelBase, Panel):
+    """Model, rig and hands: set once, then out of the way.
+
+    The header says which rig is targeted, so it can stay closed.
+    """
+    bl_label = "Character"
+    bl_idname = "ANIMATICA_PT_character"
+    bl_parent_id = "ANIMATICA_PT_main"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    @classmethod
+    def poll(cls, context):
+        from . import canonical_skeleton
+        settings = context.scene.animatica
+        return (mmcp_client.cached_capabilities() is not None
+                and properties._live_armature(settings.target_armature) is not None
+                and not canonical_skeleton.download_state()["active"])
+
+    def draw_header_preset(self, context):
+        arm = properties._live_armature(context.scene.animatica.target_armature)
+        row = self.layout.row()
+        row.active = False
+        row.label(text=arm.name if arm is not None else "")
+
+    def draw(self, context):
+        layout = self.layout
+        settings = context.scene.animatica
+        _draw_character(layout, context, settings)
+        # The fingers: the model has none, so each hand's pose is chosen here
+        # and laid on every take.
+        col = layout.column(align=True)
+        col.use_property_split = True
+        col.use_property_decorate = False
+        col.prop(settings, "hand_pose_left", text="Left Hand")
+        col.prop(settings, "hand_pose_right", text="Right Hand")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -553,15 +561,19 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
             row.prop(settings, "pose_tightness", slider=True)
             row.prop(settings, "pose_details", text="", icon='OPTIONS')
 
-        _draw_set_keyframe(layout, context, settings)
-
-        # --- the hands: the model has no fingers, so they are chosen here ---
+        # --- the pose at this frame: proposed by the model, or stated -----
         layout.separator()
-        col = layout.column(align=True)
-        col.use_property_split = True
-        col.use_property_decorate = False
-        col.prop(settings, "hand_pose_left", text="Left Hand")
-        col.prop(settings, "hand_pose_right", text="Right Hand")
+        model = mmcp_client.cached_model(settings.model_id)
+        if model and "pose" in (model.get("supported_segments") or []):
+            # Pose-segment generation is a cloud-only capability.
+            text = f"Generate Pose at Frame {context.scene.frame_current}"
+            if settings.is_previewing:
+                text = "Re" + text[0].lower() + text[1:]
+            row = layout.row()
+            row.scale_y = 1.2
+            row.enabled = not settings.is_generating
+            row.operator("animatica.generate_pose", icon='ARMATURE_DATA', text=text)
+        _draw_set_keyframe(layout, context, settings)
 
 
 class ANIMATICA_PT_overlay(AnimaticaPanelBase, Panel):
@@ -755,6 +767,7 @@ class ANIMATICA_PT_settings_posing(AnimaticaPanelBase, Panel):
 
 _classes = (
     ANIMATICA_PT_main,
+    ANIMATICA_PT_character,
     ANIMATICA_PT_pose,
     ANIMATICA_PT_overlay,
     ANIMATICA_PT_paths,

@@ -332,18 +332,21 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Changed
 
-- **A tidier sidebar.** The options for the next take are checkboxes under
-  Generate Motion, with one grey line saying what the take covers ("Frames
-  1-80 · 2 key poses") — moved from the Pose panel, where it read as a status
-  of posing. Posing by hand lives in the Pose panel: Set Keyframe sits under
-  the handles ("Add Pose Handles", was "Build Autoposer Rig"), and the hands
-  say which is which. The plan overlay is a sub-panel whose header checkbox
-  turns it all off, with plain checkboxes for its parts, instead of five blue
-  toggles. The Preview box is headed "Previewing take". Help is the ? in the
-  panel header, re-importing the character a button on the Armature row, the
-  warm-up note shows only once a generation has taken ten seconds, Settings
-  is laid out with labels on the left and a Posing sub-panel, and the quality
-  presets say their step counts.
+- **A sidebar ordered by how often you reach for it.** You set the scene up the
+  way you would anyway; the panel is there to turn it into motion. Generate
+  Motion is at the top, with the next take's options under it as checkboxes
+  and one grey line saying what the take covers ("Frames 1-80 · 2 key
+  poses"). While a take is previewing, its box comes first — what it is,
+  In place, Accept or Reject — and Regenerate is the alternative under it.
+  Model, rig and hands are set once, so they live in a collapsed Character
+  sub-panel whose header names the rig; with nothing set up yet, they are the
+  whole panel. Examples and help are icons in the panel header. Posing lives
+  in the Pose panel: Generate Pose at Frame and Set Keyframe under the handles
+  ("Add Pose Handles", was "Build Autoposer Rig"). The plan overlay is a
+  sub-panel whose header checkbox turns it all off, with plain checkboxes for
+  its parts, instead of five blue toggles. The warm-up note shows only once a
+  generation has taken ten seconds, Settings is laid out with labels on the
+  left and a Posing sub-panel, and the quality presets say their step counts.
 
 ## [0.5.3] — 2026-09-16
 
