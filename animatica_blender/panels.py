@@ -588,6 +588,9 @@ class ANIMATICA_PT_paths(AnimaticaPanelBase, Panel):
             for obj in marks:
                 row = col.row(align=True)
                 row.prop(obj, "animatica_waypoint_frame", text="", icon='MESH_CIRCLE')
+                row.prop(obj, "animatica_waypoint_face", text="")
+                if obj.animatica_waypoint_face == 'SET':
+                    row.prop(obj, "animatica_waypoint_facing", text="")
                 op = row.operator("animatica.go_to_waypoint", text="", icon='RESTRICT_SELECT_OFF')
                 op.frame = obj.animatica_waypoint_frame
                 op = row.operator("animatica.remove_waypoint", text="", icon='X')

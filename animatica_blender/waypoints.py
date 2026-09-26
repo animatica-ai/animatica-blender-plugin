@@ -151,8 +151,17 @@ def _collection(scene):
     return coll
 
 
-def create_marker(scene, frame: int, xy, owner=None):
-    """A flat circle on the ground at *xy*, tied to *frame*."""
+def facing_vector(angle: float) -> Vector:
+    """Ground direction for a facing angle: 0 is the rest facing (-Y), counter-clockwise."""
+    return Vector((math.sin(angle), -math.cos(angle), 0.0))
+
+
+def create_marker(scene, frame: int, xy, owner=None, facing=None):
+    """A flat circle on the ground at *xy*, tied to *frame*.
+
+    *facing*, in radians from the rest facing, makes it a waypoint that also
+    says which way to face; ``None`` leaves that to the path.
+    """
     obj = bpy.data.objects.new(marker_name(frame), None)
     obj.empty_display_type = 'CIRCLE'
     # An empty's circle is drawn in its local XZ plane — standing up, half of it
@@ -170,6 +179,9 @@ def create_marker(scene, frame: int, xy, owner=None):
     if owner is not None:
         obj[PROP_OWNER] = owner.name
     obj.animatica_waypoint_frame = int(frame)
+    if facing is not None:
+        obj.animatica_waypoint_face = 'SET'
+        obj.animatica_waypoint_facing = float(facing)
     _collection(scene).objects.link(obj)
     return obj
 
@@ -223,6 +235,13 @@ def request_constraints(scene, frame_range, *, face_along_path: bool = False) ->
         })
     if face_along_path and len(out) >= 2:
         _assign_headings(out)
+    # A facing set on the waypoint itself is sent whatever the path says, and
+    # with "Face along the path" off it is the only heading sent. MMCP facing
+    # for heading h is (sin h, cos h) in XZ, and a facing angle is measured
+    # the same way round from the rest facing, so the angle is the heading.
+    for obj, c in zip(inside, out):
+        if obj.animatica_waypoint_face == 'SET':
+            c["heading_radians"] = [float(obj.animatica_waypoint_facing)]
     return out
 
 
@@ -456,7 +475,8 @@ def _draw_lines():
     if not _visible(context):
         return
     lift = Vector((0.0, 0.0, 0.005))
-    pts = [o.matrix_world.translation + lift for o in waypoints(context.scene)]
+    marks = waypoints(context.scene)
+    pts = [o.matrix_world.translation + lift for o in marks]
     if len(pts) < 2:
         return
     segments, chevrons = [], []
@@ -466,14 +486,19 @@ def _draw_lines():
         if step.length > MARKER_RADIUS * 3:
             d = step.normalized()
             chevrons += _arrow((a + b) / 2 + d * 0.06, d, 0.0, 0.07)[2:]
-    facing = []
-    for p, d in zip(pts, route_directions(pts)):
+    along = bool(getattr(context.scene.animatica, "waypoint_heading", False))
+    solid, faint = [], []
+    for obj, p, d in zip(marks, pts, route_directions(pts)):
+        if obj.animatica_waypoint_face == 'SET':
+            d, sent = facing_vector(obj.animatica_waypoint_facing), True
+        else:
+            sent = along
         if d is not None:
-            facing += _arrow(p + d * MARKER_RADIUS * 1.45, d, MARKER_RADIUS * 1.1, 0.07)
-    sent = bool(getattr(context.scene.animatica, "waypoint_heading", False))
+            (solid if sent else faint).extend(
+                _arrow(p + d * MARKER_RADIUS * 1.45, d, MARKER_RADIUS * 1.1, 0.07))
     _draw_polylines([
-        (LINE_COLOR, segments + chevrons),
-        (LINE_COLOR if sent else FACING_HINT_COLOR, facing),
+        (LINE_COLOR, segments + chevrons + solid),
+        (FACING_HINT_COLOR, faint),
     ])
 
 
@@ -565,6 +590,24 @@ def register():
         default=1,
         update=_on_frame_changed,
     )
+    bpy.types.Object.animatica_waypoint_face = bpy.props.EnumProperty(
+        name="Facing",
+        description="Which way the character faces on this waypoint",
+        items=[
+            ('PATH', "Along path",
+             "Face the way the route goes — sent only with Face along the path on"),
+            ('SET', "Set",
+             "Face the angle given here, always sent: turned round at the end of a "
+             "walk, sideways to a counter"),
+        ],
+        default='PATH',
+    )
+    bpy.types.Object.animatica_waypoint_facing = bpy.props.FloatProperty(
+        name="Angle",
+        description="Facing, turned counter-clockwise from the way the rig faces at rest",
+        subtype='ANGLE',
+        default=0.0,
+    )
     for cls in _classes:
         bpy.utils.register_class(cls)
     register_draw_handlers()
@@ -575,3 +618,5 @@ def unregister():
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
     del bpy.types.Object.animatica_waypoint_frame
+    del bpy.types.Object.animatica_waypoint_face
+    del bpy.types.Object.animatica_waypoint_facing
