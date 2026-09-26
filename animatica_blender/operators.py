@@ -612,9 +612,7 @@ class ANIMATICA_OT_generate(Operator):
         # contribute, all collapsed to scene-frame space:
         #   1. ``pose_keyframe`` constraints — frame index is timeline-
         #      relative (0 = request's first frame), so shift by gen_start.
-        #   2. ``effector_target`` constraints — same timeline-relative
-        #      indexing.
-        #   3. Every keyframe on the source action's fcurves, regardless of
+        #   2. Every keyframe on the source action's fcurves, regardless of
         #      channel. This catches location-only keys (e.g. root-bone
         #      path animation) and scale keys that the pose_keyframe
         #      sampler filters out (it only emits constraints from rotation
@@ -630,11 +628,13 @@ class ANIMATICA_OT_generate(Operator):
             t = c.get("type")
             if t == "pose_keyframe":
                 anchor_frames.add(int(c["frame"]) + gen_start)
-            elif t == "effector_target":
-                for f in c.get("frames", []) or ():
-                    anchor_frames.add(int(f) + gen_start)
-            # root_path frames come from evenly-spaced curve sampling, not
-            # from user keyframes — skip them.
+            # Not effector_target frames, and not root_path ones: a pin or a
+            # waypoint lives on its own object, and the rig's pose at that
+            # frame is generated. Tagging it KEYFRAME made Reject keep it and
+            # the next generation send it back as a full-body key pose — the
+            # previous take's pose, root and all, pinned at every pin frame.
+            # Regenerating a scene with pins walked the character the wrong
+            # way and dragged it back.
 
         src_action = (
             arm.animation_data.action
@@ -831,6 +831,14 @@ class ANIMATICA_OT_generate(Operator):
                 if carried:
                     print(f"[animatica] carried {carried} authored key(s) from "
                           f"outside {gen_start}..{gen_end} into the preview")
+
+            # Pins land where they were put, on this rig, whatever the
+            # server's retarget did to them (see pin_fix).
+            from . import pin_fix
+            fixed = pin_fix.apply(arm, action, context.scene, (gen_start, gen_end))
+            if fixed:
+                print("[animatica] pins put back on target: "
+                      + ", ".join(f"{j.split(':')[-1]}@{f} was {cm} cm off" for j, f, cm in fixed))
 
             # Fold preview-time edits onto the real source now that the bake
             # succeeded — deferred from execute so a failed POST/bake cannot
