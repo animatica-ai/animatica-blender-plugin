@@ -17,7 +17,7 @@ time — from the Blender MCP, or the Python console::
     fe.step()        # again and again, until it says "done"
     fe.publish()     # after looking at it
 
-``publish`` names the file by its content and updates examples.json beside it,
+``publish`` writes ``<id>.blend`` and ``<id>.json`` into the examples/ folder,
 exactly as build_examples.py does for the rest.
 """
 
@@ -281,7 +281,7 @@ def retouch(path, out_dir):
 
 
 def publish():
-    """Save the finished example beside its base, named by its content."""
+    """Save the finished example into the examples/ folder, with its sidecar."""
     builder = _builder()
     ex = next(e for e in builder.EXAMPLES if e["id"] == _state["id"])
     scene = bpy.context.scene
@@ -290,14 +290,9 @@ def publish():
     scene.frame_set(1)
     _restore_views(_state["views"])
     out_dir = _state["out_dir"]
-    built = out_dir / f"{ex['id']}.blend"
+    built = pathlib.Path(bpy.app.tempdir or out_dir) / f"{ex['id']}.blend"
     bpy.ops.wm.save_as_mainfile(filepath=str(built), compress=True, copy=True)
-    manifest_path = out_dir / "examples.json"
-    manifest = (json.loads(manifest_path.read_text()) if manifest_path.is_file()
-                else {"version": 1, "fps": builder.FPS, "examples": []})
-    path = builder.publish(ex, built, manifest)
-    builder.write_manifest(out_dir, manifest)
-    return path.name
+    return builder.publish(ex, built, out_dir).name
 
 
 if __name__ == "__main__":

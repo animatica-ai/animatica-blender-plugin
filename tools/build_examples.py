@@ -9,23 +9,25 @@ session; pressing Generate is the only thing left to do.
 The scenes are built by this script rather than by hand so that they can be
 rebuilt when the addon changes shape, and so that what is in them is written
 down somewhere a reviewer can read. Run it with the addon zip and the two
-character FBXs from animatica-ai/animatica-assets-public::
+character FBXs, pointing --out at the examples/ folder of a checkout of
+animatica-ai/animatica-assets-public::
 
     blender --background --factory-startup --python tools/build_examples.py -- \\
         --addon dist/animatica-blender-0.6.0-dev.zip \\
-        --assets /path/to/fbx/dir --out dist/examples
+        --assets /path/to/fbx/dir --out ../animatica-assets-public/examples
 
-It writes one .blend per example and ``examples.json``: the manifest the addon
-downloads, with each file's size and sha256.
+It writes ``<id>.blend`` and ``<id>.json`` (the menu's title, place and
+lesson) per example. Committing that folder publishes them: the addon lists
+examples/ in the asset repository and builds its menu from what is there.
+Examples with key poses are left as bases in --work for finish_example.py.
 
 The ladder itself — which prompt, how long, in what order — lives in
-``EXAMPLES`` below and nowhere else; the addon reads it from the manifest.
+``EXAMPLES`` below and nowhere else.
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import pathlib
@@ -473,7 +475,7 @@ def _frame_view(scene, arm, travel):
                         pass
 
 
-def build_one(ex, assets_dir, out_dir):
+def build_one(ex, assets_dir, work_dir):
     bpy.ops.wm.read_factory_settings(use_empty=False)
     bpy.ops.preferences.addon_enable(module="animatica_blender")
     scene = bpy.context.scene
@@ -544,10 +546,9 @@ def build_one(ex, assets_dir, out_dir):
         # Key poses come from the server, which needs a signed-in Blender:
         # this is a base for tools/finish_example.py, not a finished example.
         scene["animatica_key_poses_pending"] = json.dumps(ex["key_poses"])
-        path = out_dir / f"{ex['id']}.base.blend"
-        bpy.ops.wm.save_as_mainfile(filepath=str(path), compress=True, copy=True)
-        return path
-    path = out_dir / f"{ex['id']}.blend"
+        path = work_dir / f"{ex['id']}.base.blend"
+    else:
+        path = work_dir / f"{ex['id']}.blend"
     bpy.ops.wm.save_as_mainfile(filepath=str(path), compress=True, copy=True)
     return path
 
@@ -556,86 +557,76 @@ def build_one(ex, assets_dir, out_dir):
 # All of them, and the manifest
 # ---------------------------------------------------------------------------
 
-def _sha256(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--addon", required=True, help="the addon zip to build against")
     ap.add_argument("--assets", required=True, help="directory holding the character FBXs")
-    ap.add_argument("--out", required=True, help="where the .blend files and examples.json go")
-    ap.add_argument("--base-url", default="", help="where the files will be downloaded from")
+    ap.add_argument("--out", required=True,
+                    help="the examples/ folder of an animatica-assets-public checkout")
+    ap.add_argument("--work", default="",
+                    help="where bases waiting for key poses go (default: <out>/../examples-work)")
     ap.add_argument("--only", default="", help="comma-separated example ids to build")
     args = ap.parse_args(argv)
 
     assets_dir = pathlib.Path(args.assets)
     out_dir = pathlib.Path(args.out)
+    work_dir = pathlib.Path(args.work) if args.work else out_dir.parent / "examples-work"
     out_dir.mkdir(parents=True, exist_ok=True)
+    work_dir.mkdir(parents=True, exist_ok=True)
     bpy.ops.preferences.addon_install(filepath=str(pathlib.Path(args.addon).resolve()), overwrite=True)
 
     wanted = {s for s in args.only.split(",") if s}
-    manifest = {"version": 1, "fps": FPS, "examples": []}
-    existing = out_dir / "examples.json"
-    if wanted and existing.is_file():
-        # Rebuilding a few must not drop the rest from the manifest; publish()
-        # replaces each rebuilt one's entry by id.
-        manifest = json.loads(existing.read_text())
     for ex in EXAMPLES:
         if wanted and ex["id"] not in wanted:
             continue
-        built = build_one(ex, assets_dir, out_dir)
+        built = build_one(ex, assets_dir, work_dir)
         if ex.get("hold"):
-            manifest["examples"] = [e for e in manifest["examples"] if e["id"] != ex["id"]]
-            print(f"held  {built.name:24} not in the manifest: {ex['hold']}")
+            unpublish(ex, out_dir)
+            print(f"held  {ex['id']:24} not published: {ex['hold']}")
             continue
         if ex.get("key_poses"):
             print(f"base  {built.name:24} needs its key poses: run "
                   f"tools/finish_example.py in a signed-in Blender")
             continue
-        publish(ex, built, manifest, args.base_url)
-
-    write_manifest(out_dir, manifest)
+        publish(ex, built, out_dir)
 
 
-def publish(ex, built, manifest, base_url=""):
-    """Give a built file its content-addressed name and its manifest entry."""
-    # Content-addressed name: a published file is never overwritten, so a
-    # manifest — fresh, or a CDN edge's copy from before the update — always
-    # names a file that matches its own checksum. Overwriting in place meant
-    # that for minutes after a republish the old list and the new file met,
-    # and every download was refused.
-    digest = _sha256(built)
-    path = built.with_name(f"{ex['id']}.{digest[:8]}.blend")
-    built.replace(path)
-    for stale in built.parent.glob(f"{ex['id']}.*.blend"):
-        if stale != path and not stale.name.endswith(".base.blend"):
-            stale.unlink()
-    entry = {k: ex[k] for k in ("id", "title", "tier", "seconds", "lesson")}
-    entry["prompt"] = summary(ex)
-    entry.update({
+def sidecar(ex):
+    """What the menu shows for *ex* before it is downloaded: ``<id>.json``."""
+    return {
+        "title": ex["title"],
+        "tier": ex["tier"],
+        # The ladder's order, so the addon lists the examples as they are
+        # written here and not alphabetically.
+        "order": next(i for i, e in enumerate(EXAMPLES) if e["id"] == ex["id"]),
+        "seconds": ex["seconds"],
+        "prompt": summary(ex),
+        "lesson": ex["lesson"],
         "character": CHARACTERS[ex["character"]]["name"],
         "credit": CHARACTERS[ex["character"]]["credit"],
-        "file": path.name,
-        "url": (base_url.rstrip("/") + "/" + path.name) if base_url else "",
-        "size": path.stat().st_size,
-        "sha256": digest,
-    })
-    manifest["examples"] = [e for e in manifest["examples"] if e["id"] != ex["id"]]
-    manifest["examples"].append(entry)
-    print(f"built {path.name:24} {entry['size'] / 1048576:6.1f} MB  {ex['title']}")
+    }
+
+
+def publish(ex, built, out_dir):
+    """Put a finished example in the examples/ folder: ``<id>.blend`` and ``<id>.json``.
+
+    The addon lists that folder in the asset repository, so committing it is
+    publishing it. The file keeps its plain name: the repository stores it in
+    Git LFS, whose pointer carries the sha256 the addon checks and caches by.
+    """
+    out_dir = pathlib.Path(out_dir)
+    path = out_dir / f"{ex['id']}.blend"
+    built.replace(path)
+    (out_dir / f"{ex['id']}.json").write_text(json.dumps(sidecar(ex), indent=2) + "\n")
+    print(f"built {path.name:24} {path.stat().st_size / 1048576:6.1f} MB  {ex['title']}")
     return path
 
 
-def write_manifest(out_dir, manifest):
-    order = {ex["id"]: i for i, ex in enumerate(EXAMPLES)}
-    manifest["examples"].sort(key=lambda e: order.get(e["id"], len(order)))
-    (out_dir / "examples.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    print(f"wrote {out_dir / 'examples.json'} ({len(manifest['examples'])} examples)")
+def unpublish(ex, out_dir):
+    for suffix in (".blend", ".json"):
+        path = pathlib.Path(out_dir) / f"{ex['id']}{suffix}"
+        if path.exists():
+            path.unlink()
 
 
 if __name__ == "__main__":

@@ -10,19 +10,23 @@ pressing Generate seven times.
 
 Three decisions shape this module.
 
-* **Downloaded, not bundled.** A scene with the hero is twelve megabytes; the
-  addon is under one. The files are release assets, fetched the first time
-  each is picked and cached beside the poser model, and the manifest that
-  lists them is fetched too — so an example can be added or fixed without
-  shipping a new build. A copy of the manifest ships inside the addon, so
-  the menu is populated before the first network round trip and offline.
+* **Listed live from the asset repository.** The examples are the ``.blend``
+  files in ``examples/`` of ``animatica-ai/animatica-assets-public``, the
+  repository the addon already takes the Hero from. The menu is built from
+  whatever is there: add a file and it appears, delete one and it goes, with
+  no manifest to keep in step and no addon build. A ``<name>.json`` beside a
+  file gives the menu its title, place and lesson; without one, the file name
+  stands in. The list is read at one resolved commit, so every file it names
+  and every download it leads to come from the same state of the repository.
+  A CDN cannot pair an old list with a new file. The last list is cached for
+  offline use.
 * **Opened untitled.** ``wm.read_homefile`` loads the example's contents
   without adopting its path, the way Blender's own demo files behave: Ctrl+S
   asks where to save instead of writing over the cached copy.
-* **Verified.** Each file's sha256 is in the manifest. A download that does
-  not match is discarded rather than opened, and a cached file is re-checked
-  by size before use — cheap enough for a menu, sufficient to catch a
-  truncated download.
+* **Verified.** The repository keeps the files in Git LFS, and an LFS
+  pointer's ``oid`` is the file's sha256. A download that does not match is
+  discarded rather than opened, and the hash is part of the cached file's
+  name, so an updated example is a new download and never a stale hit.
 """
 
 from __future__ import annotations
@@ -37,14 +41,23 @@ import urllib.request
 
 import bpy
 
-REPO = "animatica-ai/animatica-blender-plugin"
-RELEASE_TAG = "examples-v1"
-BASE_URL = f"https://github.com/{REPO}/releases/download/{RELEASE_TAG}"
-MANIFEST_URL = f"{BASE_URL}/examples.json"
+REPO = "animatica-ai/animatica-assets-public"
+#: The branch the menu follows. A commit here changes what every installed
+#: addon offers, which is the point: examples move without a release.
+REF = "main"
+FOLDER = "examples"
+API = f"https://api.github.com/repos/{REPO}"
 
-#: The copy that ships with the addon — the menu's contents before the first
-#: fetch, and whenever the network is not there.
-_BUNDLED = pathlib.Path(__file__).with_name("examples.json")
+
+def _raw_url(commit: str, path: str) -> str:
+    return f"https://raw.githubusercontent.com/{REPO}/{commit}/{path}"
+
+
+def _media_url(commit: str, path: str) -> str:
+    # LFS files: raw.githubusercontent.com serves the pointer, the media host
+    # serves the content (the same split remote_asset relies on).
+    return f"https://media.githubusercontent.com/media/{REPO}/{commit}/{path}"
+
 
 _state: dict = {
     "manifest": None,          # the parsed manifest in use
@@ -88,16 +101,13 @@ def is_cached(entry: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 def manifest() -> dict:
-    """The examples, newest source first: fetched, then cached, then bundled."""
+    """The examples as last listed: this session's fetch, else the cached one."""
     if _state["manifest"] is not None:
         return _state["manifest"]
-    for path in (_cached_manifest_path(), _BUNDLED):
-        try:
-            _state["manifest"] = json.loads(path.read_text())
-            return _state["manifest"]
-        except (OSError, ValueError):
-            continue
-    _state["manifest"] = {"examples": []}
+    try:
+        _state["manifest"] = json.loads(_cached_manifest_path().read_text())
+    except (OSError, ValueError):
+        _state["manifest"] = {"examples": []}
     return _state["manifest"]
 
 
@@ -109,17 +119,77 @@ def find(example_id: str) -> dict | None:
     return next((e for e in entries() if e.get("id") == example_id), None)
 
 
+def _get(url: str, accept: str = "application/json", limit: int | None = None) -> bytes:
+    req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "animatica-blender"})
+    with urllib.request.urlopen(req, timeout=15.0) as resp:
+        return resp.read(limit) if limit else resp.read()
+
+
+def _lfs_pointer(text: str) -> tuple[str, int] | None:
+    """``(sha256, size)`` from a Git LFS pointer, or None if *text* is not one."""
+    if not text.startswith("version https://git-lfs.github.com/spec/"):
+        return None
+    oid = size = None
+    for line in text.splitlines():
+        if line.startswith("oid sha256:"):
+            oid = line.split(":", 1)[1].strip()
+        elif line.startswith("size "):
+            size = int(line.split()[1])
+    return (oid, size) if oid and size else None
+
+
+def _entry(commit: str, item: dict, sidecars: dict) -> dict:
+    """One example from its listing item, its LFS pointer and its sidecar."""
+    stem = item["name"][:-len(".blend")]
+    meta = {}
+    if stem in sidecars:
+        try:
+            meta = json.loads(_get(_raw_url(commit, sidecars[stem])).decode("utf-8"))
+        except (OSError, ValueError):
+            meta = {}
+    pointer = _lfs_pointer(_get(_raw_url(commit, item["path"]), "*/*", 512).decode("utf-8", "replace"))
+    if pointer is not None:
+        sha, size, url = pointer[0], pointer[1], _media_url(commit, item["path"])
+    else:                               # committed without LFS: no hash to check against
+        sha, size, url = "", int(item.get("size") or 0), _raw_url(commit, item["path"])
+    return {
+        "id": stem,
+        "title": meta.get("title") or stem.replace("-", " ").capitalize(),
+        "tier": meta.get("tier", 99),
+        "order": meta.get("order", 999),
+        "seconds": meta.get("seconds"),
+        "prompt": meta.get("prompt", ""),
+        "lesson": meta.get("lesson", ""),
+        "character": meta.get("character", ""),
+        "credit": meta.get("credit", ""),
+        "file": f"{stem}.{sha[:8]}.blend" if sha else item["name"],
+        "url": url,
+        "size": size,
+        "sha256": sha,
+    }
+
+
 def _fetch_manifest() -> bool:
-    """Fetch the release's manifest now. True if a newer list replaced ours."""
+    """List the examples from the repository now. True if the list changed."""
     try:
-        req = urllib.request.Request(MANIFEST_URL, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=15.0) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception:                       # noqa: BLE001 — the copy we have stands in
+        commit = _get(f"{API}/commits/{REF}", "application/vnd.github.sha").decode().strip()
+        listing = json.loads(_get(f"{API}/contents/{FOLDER}?ref={commit}"))
+    except Exception:                       # noqa: BLE001 — the cached list stands in
         return False
-    if not (isinstance(data, dict) and isinstance(data.get("examples"), list)):
+    if not isinstance(listing, list):
         return False
-    changed = data != _state["manifest"]
+    blends = [i for i in listing if i.get("type") == "file" and i["name"].endswith(".blend")]
+    sidecars = {i["name"][:-len(".json")]: i["path"] for i in listing
+                if i.get("type") == "file" and i["name"].endswith(".json")}
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            found = list(pool.map(lambda item: _entry(commit, item, sidecars), blends))
+    except Exception:                       # noqa: BLE001
+        return False
+    found.sort(key=lambda e: (e["tier"], e["order"], e["title"]))
+    data = {"source": {"repo": REPO, "ref": REF, "commit": commit}, "examples": found}
+    changed = data.get("examples") != manifest().get("examples")
     _cached_manifest_path().write_text(json.dumps(data, indent=2))
     _state["manifest"] = data
     _prune_cache(data)
@@ -151,10 +221,11 @@ def _fetch_manifest_worker():
         _fetch_manifest()
     finally:
         _state["fetching"] = False
+        bpy.app.timers.register(lambda: (_redraw(), None)[1], first_interval=0.0)
 
 
 def refresh_manifest_async() -> None:
-    """Ask the release for the current list, once a session, off the main thread."""
+    """List the examples again, once a session, off the main thread."""
     if _state["fetching"] or _state.get("refreshed"):
         return
     _state["fetching"] = True
@@ -167,7 +238,7 @@ def refresh_manifest_async() -> None:
 # ---------------------------------------------------------------------------
 
 def _url(entry: dict) -> str:
-    return entry.get("url") or f"{BASE_URL}/{entry['file']}"
+    return entry["url"]
 
 
 def _download_worker(entry: dict, retried: bool = False):
@@ -188,11 +259,11 @@ def _download_worker(entry: dict, retried: bool = False):
                 _state["done"] += len(chunk)
         want = (entry.get("sha256") or "").lower()
         if want and digest.hexdigest() != want:
-            # Usually not corruption: the example was updated on the release
-            # and our list still holds the old file's checksum. Fetch the list
-            # again and, if this example changed, try once more against it —
-            # otherwise every fix published to an example would be refused
-            # until the next session, and "try again" would never help.
+            # Usually not corruption: the example was replaced in the
+            # repository since this list was read (from the cache, say). List
+            # again and, if this example changed, try once more against it;
+            # otherwise a fixed example would be refused until the next
+            # session, and "try again" would never help.
             if not retried and _fetch_manifest():
                 fresh = find(entry["id"])
                 if fresh is not None and fresh.get("sha256") != entry.get("sha256"):
@@ -285,7 +356,7 @@ def _redraw():
 class ANIMATICA_OT_open_example(bpy.types.Operator):
     bl_idname = "animatica.open_example"
     bl_label = "Open Example"
-    bl_description = ("Open a finished example scene — character, set and prompt — "
+    bl_description = ("Open a finished example scene: character, set and prompt, "
                       "ready to generate. Downloads it the first time")
     bl_options = {'REGISTER'}
 
@@ -297,7 +368,8 @@ class ANIMATICA_OT_open_example(bpy.types.Operator):
         if entry is None:
             return cls.bl_description
         where = "" if is_cached(entry) else f"  ({entry['size'] / 1048576:.1f} MB download)"
-        return f"{entry.get('lesson', '')}\n\n“{entry['prompt']}”{where}"
+        prompt = f"\n\n“{entry['prompt']}”" if entry.get("prompt") else ""
+        return f"{entry.get('lesson', '')}{prompt}{where}".strip()
 
     def invoke(self, context, event):
         refresh_manifest_async()
@@ -341,13 +413,23 @@ class ANIMATICA_MT_examples(bpy.types.Menu):
     def draw(self, context):
         refresh_manifest_async()
         layout = self.layout
+        found = entries()
+        if not found:
+            layout.label(text="Listing examples…" if _state["fetching"]
+                         else "Examples need a connection the first time", icon='INFO')
+            return
         last_tier = None
-        for entry in entries():
+        for entry in found:
             tier = entry.get("tier")
             if last_tier is not None and tier != last_tier:
                 layout.separator()
             last_tier = tier
-            text = f"{entry['title']}  ·  {entry['seconds']:g}s  ·  {entry['character']}"
+            parts = [entry["title"]]
+            if entry.get("seconds"):
+                parts.append(f"{entry['seconds']:g}s")
+            if entry.get("character"):
+                parts.append(entry["character"])
+            text = "  ·  ".join(parts)
             icon = 'FILE_BLEND' if is_cached(entry) else 'IMPORT'
             layout.operator("animatica.open_example", text=text, icon=icon).example = entry["id"]
 
