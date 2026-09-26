@@ -845,10 +845,18 @@ class ANIMATICA_OT_generate(Operator):
             # A cycle, if asked for: last, so it closes the motion as it will play.
             if getattr(settings, "loop", False):
                 from . import loop
-                done = loop.apply(arm, action, (gen_start, gen_end))
+                done = loop.apply(arm, action, (gen_start, gen_end),
+                                  in_place=bool(getattr(settings, "inplace", False)))
                 if done:
-                    print(f"[animatica] loop: {done['frames']} frames, cut at {done['cut']}, "
-                          f"seam {done['seam_deg_before']:.0f} deg blended over {done['blend']}")
+                    # Play whole cycles. Left at the generating range, playback
+                    # wrapped mid-cycle and stepped a frame backwards each time.
+                    cycle = done["frames"]
+                    reps = max(1, round((gen_end - gen_start + 1) / cycle))
+                    context.scene.frame_start = gen_start
+                    context.scene.frame_end = gen_start + cycle * reps - 1
+                    print(f"[animatica] loop: {cycle} frames, cut at {done['cut']}, "
+                          f"seam {done['seam_deg_before']:.0f} deg blended over {done['blend']}, "
+                          f"turned {done['turned_deg']:.1f} deg straight; playing {reps} cycle(s)")
 
             # Fold preview-time edits onto the real source now that the bake
             # succeeded — deferred from execute so a failed POST/bake cannot

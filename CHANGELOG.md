@@ -23,7 +23,9 @@ Proscenium, and keep the identifiers those releases actually shipped.
   as any other frame (37.7 degrees of joint change against a median 38.9). The
   root's travel repeats with offset, so a travelling loop keeps walking from
   where it started, at a steady height even on a rig whose root bone rests
-  tilted. With **In place** on as well, it loops on the spot.
+  tilted. A generated walk veers a little, so the loop is turned to travel
+  straight ahead. With **In place** on as well, it loops on the spot, and the
+  scene's range is set to whole cycles so playback wraps without a hitch.
 
 - **In place, chosen before you generate.** The toggle sat in the Preview box,
   so it only appeared after a generation. It now sits beside Loop, under
