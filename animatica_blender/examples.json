@@ -11,10 +11,10 @@
       "lesson": "One gesture, standing still. The simplest thing to ask for.",
       "character": "Animatica Hero",
       "credit": "",
-      "file": "wave.blend",
-      "url": "https://github.com/animatica-ai/animatica-blender-plugin/releases/download/examples-v1/wave.blend",
-      "size": 12550849,
-      "sha256": "c68b860b4e5e6bfeab021a65b0a41fb92c7710d412494ae72768602daa848121"
+      "file": "wave.e4f765a2.blend",
+      "url": "",
+      "size": 12550851,
+      "sha256": "e4f765a28c9a14462111197f12efe4aaf648d6489f3cd5e3c7c45a0c158ab068"
     },
     {
       "id": "walk",
@@ -25,10 +25,10 @@
       "lesson": "Travel. The character goes somewhere, and the trail shows the path.",
       "character": "Cesium Man",
       "credit": "Cesium Man by Cesium, CC-BY-4.0 \u2014 https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CesiumMan",
-      "file": "walk.blend",
-      "url": "https://github.com/animatica-ai/animatica-blender-plugin/releases/download/examples-v1/walk.blend",
-      "size": 768858,
-      "sha256": "7c5742db7e250167dc80e290ea67928aecf5718c5fa85166f1b8b8b1b806d05f"
+      "file": "walk.fc28c015.blend",
+      "url": "https://github.com/animatica-ai/animatica-blender-plugin/releases/download/examples-v1/walk.fc28c015.blend",
+      "size": 768823,
+      "sha256": "fc28c015d4dda139eba87046597deb5789375380566114fba3709977f31daa9f"
     },
     {
       "id": "jump",
@@ -39,10 +39,10 @@
       "lesson": "A beat of effort: wind up, leave the ground, land.",
       "character": "Animatica Hero",
       "credit": "",
-      "file": "jump.blend",
-      "url": "https://github.com/animatica-ai/animatica-blender-plugin/releases/download/examples-v1/jump.blend",
-      "size": 12553346,
-      "sha256": "af2f5a9f52917ebf33d002c5a5978bf6d96a27807a4ab0f73315a50c70fd3c77"
+      "file": "jump.1e62ceb6.blend",
+      "url": "",
+      "size": 12553315,
+      "sha256": "1e62ceb6f49c8edc5ef8105574b6310aca2b53aceac7254bcf9a479f2422e470"
     },
     {
       "id": "jab-cross",
@@ -53,10 +53,10 @@
       "lesson": "Two actions in a row. Order matters, and so does timing.",
       "character": "Cesium Man",
       "credit": "Cesium Man by Cesium, CC-BY-4.0 \u2014 https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CesiumMan",
-      "file": "jab-cross.blend",
-      "url": "https://github.com/animatica-ai/animatica-blender-plugin/releases/download/examples-v1/jab-cross.blend",
-      "size": 768908,
-      "sha256": "99eb1d3149ad136cfe2c6a4298935518d86dd461e16b9122c0f5a17ffab95549"
+      "file": "jab-cross.440e08cb.blend",
+      "url": "https://github.com/animatica-ai/animatica-blender-plugin/releases/download/examples-v1/jab-cross.440e08cb.blend",
+      "size": 768891,
+      "sha256": "440e08cb4f6d4e19ce8a80c367df443ca596d7248029a70371dd00d6e76b6b8c"
     },
     {
       "id": "run-stop",
@@ -67,10 +67,10 @@
       "lesson": "A change of speed inside one clip.",
       "character": "Animatica Hero",
       "credit": "",
-      "file": "run-stop.blend",
-      "url": "https://github.com/animatica-ai/animatica-blender-plugin/releases/download/examples-v1/run-stop.blend",
-      "size": 12550734,
-      "sha256": "0b14d5f2d92dbe00557b5859c8f7fcf418294e4a28e99f113a24c26935c99519"
+      "file": "run-stop.558475ae.blend",
+      "url": "",
+      "size": 12550707,
+      "sha256": "558475aed28e612d25d477df2abe3115998a82db5ccf6e5f176ff72e4ba2b5b2"
     },
     {
       "id": "walk-turn-back",
@@ -78,13 +78,13 @@
       "tier": 3,
       "seconds": 6.0,
       "prompt": "a person walks forward, turns around, and walks back",
-      "lesson": "Words set the gait; the curve on the floor sets the route. Move its points and generate again.",
-      "character": "Cesium Man",
-      "credit": "Cesium Man by Cesium, CC-BY-4.0 \u2014 https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/CesiumMan",
-      "file": "walk-turn-back.blend",
-      "url": "https://github.com/animatica-ai/animatica-blender-plugin/releases/download/examples-v1/walk-turn-back.blend",
-      "size": 768983,
-      "sha256": "0df92651cfdf1c6e05596a6e567971b6b38ab7ca74f6df38a881e1d9840fae92"
+      "lesson": "Words set the gait; each circle on the floor says where to be, and when. Drag one, or change its frame, and generate again.",
+      "character": "Animatica Hero",
+      "credit": "",
+      "file": "walk-turn-back.dee3bd02.blend",
+      "url": "",
+      "size": 12554659,
+      "sha256": "dee3bd0254eab4f79599f97179919f23ff578da158b1147b99398b26e2031a47"
     },
     {
       "id": "crouch-creep",
@@ -95,10 +95,10 @@
       "lesson": "Three beats in sequence, each handing over to the next.",
       "character": "Animatica Hero",
       "credit": "",
-      "file": "crouch-creep.blend",
-      "url": "https://github.com/animatica-ai/animatica-blender-plugin/releases/download/examples-v1/crouch-creep.blend",
-      "size": 12550694,
-      "sha256": "3dd0f3984a5918324929a19b03e1eb268f320312643bf8dc43b99bf397ed287a"
+      "file": "crouch-creep.ad2af430.blend",
+      "url": "",
+      "size": 12550697,
+      "sha256": "ad2af430b4b24cb5137c53733400ec389bc790d60a5af001eb0109d73640d1ae"
     }
   ]
 }

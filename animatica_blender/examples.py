@@ -109,16 +109,46 @@ def find(example_id: str) -> dict | None:
     return next((e for e in entries() if e.get("id") == example_id), None)
 
 
-def _fetch_manifest_worker():
+def _fetch_manifest() -> bool:
+    """Fetch the release's manifest now. True if a newer list replaced ours."""
     try:
         req = urllib.request.Request(MANIFEST_URL, headers={"Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=15.0) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        if isinstance(data, dict) and isinstance(data.get("examples"), list):
-            _cached_manifest_path().write_text(json.dumps(data, indent=2))
-            _state["manifest"] = data
-    except Exception:                       # noqa: BLE001 — the bundled copy stands in
-        pass
+    except Exception:                       # noqa: BLE001 — the copy we have stands in
+        return False
+    if not (isinstance(data, dict) and isinstance(data.get("examples"), list)):
+        return False
+    changed = data != _state["manifest"]
+    _cached_manifest_path().write_text(json.dumps(data, indent=2))
+    _state["manifest"] = data
+    _prune_cache(data)
+    return changed
+
+
+def _prune_cache(data: dict) -> None:
+    """Drop cached example files the current list no longer names.
+
+    File names carry their content hash, so every update to an example is a
+    new file; without this the cache would keep every version ever fetched.
+    """
+    keep = {e.get("file") for e in data.get("examples", [])}
+    for path in cache_dir().glob("*.blend"):
+        # A download in flight is a ".part-" file; pruning it from under the
+        # worker that is writing it is how a retry after an update used to
+        # fail with "no such file".
+        if path.name.startswith("."):
+            continue
+        if path.name not in keep:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
+def _fetch_manifest_worker():
+    try:
+        _fetch_manifest()
     finally:
         _state["fetching"] = False
 
@@ -140,7 +170,7 @@ def _url(entry: dict) -> str:
     return entry.get("url") or f"{BASE_URL}/{entry['file']}"
 
 
-def _download_worker(entry: dict):
+def _download_worker(entry: dict, retried: bool = False):
     dest = cached_path(entry)
     fd, tmp = tempfile.mkstemp(dir=str(dest.parent), prefix=".part-", suffix=".blend")
     os.close(fd)
@@ -158,6 +188,20 @@ def _download_worker(entry: dict):
                 _state["done"] += len(chunk)
         want = (entry.get("sha256") or "").lower()
         if want and digest.hexdigest() != want:
+            # Usually not corruption: the example was updated on the release
+            # and our list still holds the old file's checksum. Fetch the list
+            # again and, if this example changed, try once more against it —
+            # otherwise every fix published to an example would be refused
+            # until the next session, and "try again" would never help.
+            if not retried and _fetch_manifest():
+                fresh = find(entry["id"])
+                if fresh is not None and fresh.get("sha256") != entry.get("sha256"):
+                    try:
+                        os.unlink(tmp)
+                    except FileNotFoundError:
+                        pass
+                    _state["done"] = 0
+                    return _download_worker(fresh, retried=True)
             raise ValueError("the download did not match its checksum — try again")
         os.replace(tmp, dest)               # atomic: a half-written file is never "cached"
     except Exception as exc:                # noqa: BLE001
@@ -256,6 +300,7 @@ class ANIMATICA_OT_open_example(bpy.types.Operator):
         return f"{entry.get('lesson', '')}\n\n“{entry['prompt']}”{where}"
 
     def invoke(self, context, event):
+        refresh_manifest_async()
         entry = find(self.example)
         if entry is None:
             self.report({'ERROR'}, "that example is not in the list")

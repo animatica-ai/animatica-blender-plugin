@@ -93,19 +93,19 @@ EXAMPLES = [
      "character": "hero",   "set": "runway",  "travel": 10.0,
      "lesson": "A change of speed inside one clip."},
     {"id": "walk-turn-back", "title": "Walk, turn, walk back", "tier": 3, "seconds": 6.0,
-     # A root path, because words were not enough. Tested five ways — one
-     # sentence three times, two blocks twice — the model turned the character
-     # round in some samples and walked it straight out in others. A path is a
-     # constraint rather than a request: across seeds the route came back
-     # identical, out, round the turn at the same frame, back, facing the way
-     # it walks. And it teaches the thing the ladder was missing — words set
-     # the gait, a path sets the route.
+     # Waypoints, because words were not enough: tested five ways, one sentence
+     # and two blocks, the model brought the character back in some samples
+     # and walked it straight out in others. Three waypoints — here, there by
+     # frame 72, back by 144 — land within 4 cm of each at its frame, and the
+     # turn between is the model's own. On the Hero rather than Cesium Man for
+     # now: any root constraint on a character much smaller than the model's
+     # body makes the server stretch the root after the retarget, and the feet
+     # slide. That is a server fix; this example should not have to wait on it.
      "prompt": "a person walks forward, turns around, and walks back",
-     "path": [(0.0, 0.0), (0.0, -1.25), (0.0, -2.5), (0.4, -3.0),
-              (0.8, -2.5), (0.8, -1.25), (0.8, 0.0)],
-     "character": "cesium", "set": "outdoor", "travel": 3.0,
-     "lesson": "Words set the gait; the curve on the floor sets the route. Move its "
-               "points and generate again."},
+     "waypoints": [(1, (0.0, 0.0)), (72, (0.0, -2.5)), (144, (0.0, -0.2))],
+     "character": "hero",   "set": "outdoor", "travel": 3.0,
+     "lesson": "Words set the gait; each circle on the floor says where to be, and "
+               "when. Drag one, or change its frame, and generate again."},
     {"id": "crouch-creep",   "title": "Crouch, creep, stand",  "tier": 3, "seconds": 8.0,
      "prompt": "a person crouches, creeps forward slowly, then stands up",
      "character": "hero",   "set": "dusk",    "travel": 2.5,
@@ -183,13 +183,30 @@ def _import_character(which, assets_dir):
     return arm
 
 
+def _character_height(arm):
+    """How tall the character stands, in metres, from its meshes' world bounds.
+
+    Not ``arm.dimensions``: an FBX armature keeps its centimetre-space bone
+    extents under a 0.01 scale, and the Hero read as 29 m tall — the viewport
+    opened 88 m away with the character a speck.
+    """
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    zs = []
+    for obj in bpy.data.objects:
+        if obj.type != "MESH" or obj.find_armature() is not arm:
+            continue
+        ev = obj.evaluated_get(depsgraph)
+        zs += [(ev.matrix_world @ Vector(c)).z for c in ev.bound_box]
+    return (max(zs) - min(zs)) if zs else 1.8
+
+
 def _frame_view(scene, arm, travel):
     """Point the camera, and the 3D viewport, at the whole of the motion.
 
     The viewport matters more than the camera: it is what the artist sees the
     moment the file opens, and a character half off-screen reads as broken.
     """
-    height = max(arm.dimensions.z, 1.2)
+    height = min(max(_character_height(arm), 1.2), 2.5)
     focus = Vector((0.0, -travel * 0.5, height * 0.55))
     distance = max(4.5, height * 3.0, travel * 1.1)
     direction = Vector((0.9, -1.0, 0.45)).normalized()
@@ -226,25 +243,6 @@ def _frame_view(scene, arm, travel):
                         pass
 
 
-def _lay_root_path(arm, points):
-    """A root path, made the way an artist would make one — through the addon's
-    own operator — then shaped. Follow Direction on, so the character faces
-    along the route rather than sliding round the turn backwards."""
-    from animatica_blender import constants
-
-    bpy.context.view_layer.objects.active = arm
-    bpy.ops.animatica.add_root_path(match_direction=True, sample_density=6)
-    curve = next(o for o in bpy.context.scene.objects if o.get(constants.PROP_IS_ROOT_PATH))
-    spline = curve.data.splines[0]
-    handles = spline.bezier_points
-    if len(handles) < len(points):
-        handles.add(len(points) - len(handles))
-    for point, (x, y) in zip(handles, points):
-        point.co = (x, y, 0.0)
-        point.handle_left_type = point.handle_right_type = "AUTO"
-    curve.name = "Route"
-
-
 def build_one(ex, assets_dir, out_dir):
     bpy.ops.wm.read_factory_settings(use_empty=False)
     bpy.ops.preferences.addon_enable(module="animatica_blender")
@@ -273,8 +271,10 @@ def build_one(ex, assets_dir, out_dir):
         block.enabled = True
         cursor += length
 
-    if ex.get("path"):
-        _lay_root_path(arm, ex["path"])
+    if ex.get("waypoints"):
+        from animatica_blender import waypoints
+        for frame, xy in ex["waypoints"]:
+            waypoints.create_marker(scene, frame, xy, owner=arm)
 
     from animatica_blender import properties
     properties.save_blocks_to_armature(arm, settings)
@@ -333,7 +333,18 @@ def main(argv):
     for ex in EXAMPLES:
         if wanted and ex["id"] not in wanted:
             continue
-        path = build_one(ex, assets_dir, out_dir)
+        built = build_one(ex, assets_dir, out_dir)
+        # Content-addressed name: a published file is never overwritten, so a
+        # manifest — fresh, or a CDN edge's copy from before the update — always
+        # names a file that matches its own checksum. Overwriting in place meant
+        # that for minutes after a republish the old list and the new file met,
+        # and every download was refused.
+        digest = _sha256(built)
+        path = built.with_name(f"{ex['id']}.{digest[:8]}.blend")
+        built.replace(path)
+        for stale in out_dir.glob(f"{ex['id']}.*.blend"):
+            if stale != path:
+                stale.unlink()
         entry = {k: ex[k] for k in ("id", "title", "tier", "seconds", "prompt", "lesson")}
         entry.update({
             "character": CHARACTERS[ex["character"]]["name"],
@@ -341,7 +352,7 @@ def main(argv):
             "file": path.name,
             "url": (args.base_url.rstrip("/") + "/" + path.name) if args.base_url else "",
             "size": path.stat().st_size,
-            "sha256": _sha256(path),
+            "sha256": digest,
         })
         manifest["examples"].append(entry)
         print(f"built {path.name:24} {entry['size'] / 1048576:6.1f} MB  {ex['title']}")
