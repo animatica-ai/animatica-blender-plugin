@@ -330,6 +330,12 @@ def build_request(
     if getattr(settings, "loop", False) and model_caps.get("supports_loop") and len(segments) == 1:
         request["options"]["loop"] = True
 
+    # Variations: several samples of the one take, as far as the model allows.
+    wanted = int(getattr(settings, "variations", 1) or 1)
+    if wanted > 1:
+        most = int(((model_caps.get("limits") or {}).get("max_num_samples")) or 1)
+        request["options"]["num_samples"] = max(1, min(wanted, most))
+
     if constraints:
         request["constraints"] = constraints
 
@@ -1408,7 +1414,7 @@ def build_options(settings, *, seed: int | None = None) -> dict[str, Any]:
 
     opts: dict[str, Any] = {
         "diffusion_steps":   int(steps),
-        "num_samples":       1,                          # multi-sample UI is future work
+        "num_samples":       1,                          # Variations raise it (build_request)
         "seed":              resolved_seed,
         "post_processing":   bool(settings.post_processing),
         "transition_frames": int(settings.num_transition_frames),

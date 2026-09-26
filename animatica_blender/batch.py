@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Generate for several characters at once: a scene of actors, or a crowd.
 
-Select the characters and Generate them together. One request per character,
-sent in parallel, each baked onto its character as its answer arrives — with
+Select the characters and Generate them together: one batched request when
+the model takes batches (``supports_batch``), otherwise one request per
+character in parallel. Each is baked onto its character as its answer arrives — with
 the same bake a single Generate uses (``operators.bake_take``), so a take is
 the same whichever made it. The takes then wait for review together: Accept
 All / Reject All run the ordinary Accept / Reject once per character.
@@ -25,7 +26,7 @@ many before the button is pressed.
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
@@ -100,6 +101,40 @@ class _Job:
     extra: dict = field(default_factory=dict)
 
 
+def _submit(pool, jobs, url, model_caps) -> None:
+    """Send the jobs, giving each a future for its own answer.
+
+    A model that takes batches gets them in as few requests as its batch size
+    allows, and a server that has several characters in one request can run
+    them in one pass of the model. Otherwise one request per character, in
+    parallel.
+    """
+    if not model_caps.get("supports_batch"):
+        for job in jobs:
+            job.future = pool.submit(lambda r=job.req: mmcp_client.MmcpClient(url).generate(r))
+        return
+    size = max(1, int((model_caps.get("limits") or {}).get("max_batch_size") or 16))
+    for i in range(0, len(jobs), size):
+        chunk = jobs[i:i + size]
+        for job in chunk:
+            job.future = Future()
+        whole = pool.submit(lambda reqs=[j.req for j in chunk]:
+                            mmcp_client.MmcpClient(url).generate_batch(reqs))
+        whole.add_done_callback(lambda f, chunk=chunk: _fan_out(f, chunk))
+
+
+def _fan_out(whole, chunk) -> None:
+    """One batch's answer, handed to each character's future."""
+    if whole.cancelled():
+        return
+    exc = whole.exception()
+    for job, result in zip(chunk, [exc] * len(chunk) if exc else whole.result(), strict=True):
+        if isinstance(result, BaseException):
+            job.future.set_exception(result)
+        else:
+            job.future.set_result(result)
+
+
 class ANIMATICA_OT_generate_batch(Operator):
     bl_idname = "animatica.generate_batch"
     bl_label = "Generate Selected Characters"
@@ -164,6 +199,8 @@ class ANIMATICA_OT_generate_batch(Operator):
                 continue
             finally:
                 settings.seed = base_seed
+            # One version per character: the switcher is for a single take.
+            req.setdefault("options", {})["num_samples"] = 1
             gen_start, gen_end = request_builder.compute_frame_range(blocks, arm, scene)
             act = arm.animation_data.action if arm.animation_data and arm.animation_data.action else None
             source = act if act is not None and not operators._is_motion_bake_action(act) else None
@@ -179,11 +216,8 @@ class ANIMATICA_OT_generate_batch(Operator):
             self.report({'ERROR'}, "Nothing to generate — " + "; ".join(skipped))
             return {'CANCELLED'}
 
-        url = mmcp_client.get_mmcp_url()
         self._pool = ThreadPoolExecutor(max_workers=min(MAX_PARALLEL, len(jobs)))
-        for job in jobs:
-            job.future = self._pool.submit(
-                lambda r=job.req: mmcp_client.MmcpClient(url).generate(r))
+        _submit(self._pool, jobs, mmcp_client.get_mmcp_url(), model_caps)
         self._jobs = jobs
         self._skipped = skipped
 

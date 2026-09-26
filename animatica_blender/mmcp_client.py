@@ -594,6 +594,32 @@ class MmcpClient:
                 message=f"cannot reach MMCP server at {self.base_url}: {exc.reason}",
             ) from exc
 
+    def generate_batch(self, requests: list[dict[str, Any]]) -> list:
+        """Several requests in one POST /generate (an MMCP batch, for a model
+        that advertises ``supports_batch``). One entry per request, in order:
+        the glTF document, or the :class:`MmcpError` that request came back
+        with. A failure of the whole call raises, as ``generate`` does."""
+        body = {
+            "protocol_version": requests[0].get("protocol_version", "1.0"),
+            "requests": [{k: v for k, v in r.items() if k != "protocol_version"}
+                         for r in requests],
+        }
+        results = (self.generate(body) or {}).get("results") or []
+        if len(results) != len(requests):
+            raise MmcpError(code="internal_error",
+                            message=f"{len(results)} results for {len(requests)} requests")
+        out: list = []
+        for item in results:
+            if "gltf" in item:
+                out.append(item["gltf"])
+            else:
+                err = item.get("error") or {}
+                out.append(MmcpError(code=err.get("code", "internal_error"),
+                                     message=err.get("message", "failed"),
+                                     details={k: v for k, v in err.items()
+                                              if k not in ("code", "message")}))
+        return out
+
     def _poll_job(self, location: str, retry_after: float) -> dict[str, Any]:
         if not location.startswith("/"):
             # Defensive: if the server returned a fully-qualified URL, strip

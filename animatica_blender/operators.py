@@ -552,7 +552,7 @@ def anchor_frames_for(req: dict, src_action, gen_start: int, gen_end: int):
 
 def bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int, gen_end: int,
               anchor_frames=None, splice_target=None, server_looped: bool = False,
-              source_action_name: str = "") -> tuple:
+              source_action_name: str = "", sample_index: int = 0) -> tuple:
     """Bake one generation's result onto *arm* as a take. Returns (action, skipped joints).
 
     Everything a take gets between the server's answer and the preview, for one
@@ -599,7 +599,7 @@ def bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int, 
             result,
             arm,
             splice_target,
-            sample_index=0,
+            sample_index=sample_index,
             request_start_frame=gen_start,
             target_range=(gen_start, gen_end),
             anchor_frames=anchor_frames,
@@ -612,7 +612,7 @@ def bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int, 
         action = gltf_to_blender.bake_gltf_to_armature(
             result,
             arm,
-            sample_index=0,
+            sample_index=sample_index,
             action_name=preview_name,
             start_frame=gen_start,
             anchor_frames=anchor_frames,
@@ -899,6 +899,20 @@ class ANIMATICA_OT_generate(Operator):
                 source_action_name=settings.source_action_name,
             )
             n_actions = 1
+            # Variations: keep the answer, so the others can be shown in turn.
+            import json as _json
+            from types import SimpleNamespace
+            from . import variations
+            variations.remember(
+                arm, self._result, action,
+                prompt_blocks=[SimpleNamespace(**d) for d in _json.loads(
+                    properties._serialize_blocks(settings.prompt_blocks))],
+                gen_start=gen_start, gen_end=gen_end,
+                anchor_frames=getattr(self, "_anchor_frames", None),
+                splice_target_name=(getattr(self, "_splice_target", None) or SimpleNamespace(name="")).name,
+                server_looped=getattr(self, "_server_looped", False),
+                source_action_name=settings.source_action_name,
+            )
 
             # Fold preview-time edits onto the real source now that the bake
             # succeeded — deferred from execute so a failed POST/bake cannot
@@ -1024,6 +1038,8 @@ class ANIMATICA_OT_accept(Operator):
     def execute(self, context):
         s = context.scene.animatica
         arm = _live_target_armature_or_clear(s)
+        from . import variations
+        variations.forget(arm)
 
         if arm is not None:
             import json as _json
@@ -1120,6 +1136,8 @@ class ANIMATICA_OT_reject(Operator):
     def execute(self, context):
         s   = context.scene.animatica
         arm = _live_target_armature_or_clear(s)
+        from . import variations
+        variations.forget(arm)
         if arm is None:
             self.report(
                 {'ERROR'},

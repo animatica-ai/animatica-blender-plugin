@@ -52,6 +52,7 @@ from . import updater
 from . import examples
 from . import waypoints
 from . import batch
+from . import variations
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +171,7 @@ def register():
     examples.register()
     waypoints.register()
     batch.register()
+    variations.register()
 
     _reset_runtime_flags()
 
@@ -196,6 +198,7 @@ def unregister():
     _purge_stale_handlers(bpy.app.handlers.save_pre, "_animatica_save_pre")
     _purge_stale_handlers(bpy.app.handlers.load_post, "_animatica_load_post")
 
+    variations.unregister()
     batch.unregister()
     waypoints.unregister()
     examples.unregister()

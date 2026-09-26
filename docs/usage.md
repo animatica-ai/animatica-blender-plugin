@@ -173,6 +173,11 @@ Not happy? **Generate Again** — every run is a new take. The take box shows
 the seed a take used; **Lock** it to keep getting that one. While a kept take
 exists, Accept reads **Replace Kept**.
 
+Want to choose from a few? Set **Variations** under Generate Motion and one
+Generate makes that many versions of the take — the same prompts and poses,
+performed differently. The take box shows **Variation 1 of N**; the arrows
+flip between them without generating again, and Accept keeps the one showing.
+
 ## Loops for games
 
 Tick **Loop** under Generate Motion and the model makes the block a seamless
@@ -184,7 +189,8 @@ connected model supports it.
 ## Several characters at once
 
 Select two or more characters and the Animatica panel offers **Generate N
-Characters** — one generation each, run in parallel:
+Characters** — one generation each, sent together (in one request, when the
+server takes batches):
 
 - **Each Their Own** — every character uses its own prompts, key poses,
   waypoints and pins. For a scene with distinct actors.

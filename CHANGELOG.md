@@ -13,8 +13,11 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 - **Generate several characters at once — a scene, or a crowd.** Select two
   or more characters and the Animatica panel offers "Generate N Characters":
-  one generation each, sent in parallel, each baked onto its character as it
-  arrives, with the same bake a single Generate uses. Two ways to direct them:
+  one generation each, each baked onto its character as it arrives, with the
+  same bake a single Generate uses. A server that takes batches
+  (`supports_batch`) gets them all in one request and runs characters whose
+  blocks line up through one pass of the model; otherwise they go as parallel
+  requests. Two ways to direct them:
   **Each Their Own** (every character's own prompts, key poses, waypoints and
   pins) or **Shared** (the active character's prompts for everyone, a new seed
   each, starting from where each stands — variations on one action; waypoints
@@ -22,6 +25,12 @@ Proscenium, and keep the identifiers those releases actually shipped.
   each on its own character's NLA track, **Reject All** throws them all away;
   a character that failed is listed and does not stop the rest. The panel says
   how many generations it will cost before you press.
+- **Variations: several versions of a take from one Generate.** Set
+  **Variations** under Generate Motion (shown when the model can) and the
+  model makes that many versions of the same take — same prompts, poses and
+  constraints, performed differently. The take box shows "Variation 1 of N"
+  with arrows to flip between them, no new generation; Accept keeps the one
+  showing. Variations are for a single take: a batch makes one per character.
 - **Waypoints and pins belong to their character.** Made while a character is
   active, they steer that one only — listed, drawn and sent for it — so a route
   set for one character no longer steers the next one you select, or every

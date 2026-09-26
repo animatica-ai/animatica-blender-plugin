@@ -867,6 +867,15 @@ class AnimaticaSettings(PropertyGroup):
         default=False,
         update=_loop_update,
     )
+    variations: IntProperty(
+        name="Variations",
+        description=(
+            "How many versions of the take to make at once: the same prompt and "
+            "poses, performed differently. Flip between them on the preview and "
+            "Accept the one you want. One generation, whatever the number"
+        ),
+        default=1, min=1, max=8,
+    )
     loop_set_inplace: BoolProperty(
         description="Loop turned In place on, and turns it off again with itself",
         default=False,

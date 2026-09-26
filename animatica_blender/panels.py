@@ -471,7 +471,9 @@ def _draw_take_options(layout, context, settings, model, in_preview) -> None:
     is in its box, where it acts on the take in front of you.
     """
     can_loop = bool(model and model.get("supports_loop"))
-    if not can_loop and in_preview:
+    most = int(((model or {}).get("limits") or {}).get("max_num_samples") or 1)
+    can_vary = most > 1
+    if not can_loop and not can_vary and in_preview:
         return
     col = layout.column(heading="Next take" if in_preview else "Options", align=True)
     col.use_property_split = True
@@ -483,6 +485,8 @@ def _draw_take_options(layout, context, settings, model, in_preview) -> None:
         row.prop(settings, "loop")
     if not in_preview:
         col.prop(settings, "inplace")
+    if can_vary:
+        col.prop(settings, "variations")
     if can_loop and settings.loop and not one_block:
         note = layout.row()
         note.active = False
@@ -567,6 +571,8 @@ def _draw_preview(layout, context, settings, arm) -> None:
         lock.enabled = not locked
         lock.operator("animatica.lock_global_seed", text="Locked" if locked else "Lock",
                       icon='LOCKED' if locked else 'UNLOCKED')
+    from . import variations
+    variations.draw(box, arm)
     # Live on the take: the travel is muted, not removed, so it comes back.
     col = box.column()
     col.use_property_split = True
