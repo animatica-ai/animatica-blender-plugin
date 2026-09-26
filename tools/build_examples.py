@@ -264,7 +264,9 @@ EXAMPLES = [
      # Riding the forearm, not the hand: the model's hands come back flat
      # and bent 40 degrees up at the wrist, and a pistol on the hand aimed
      # at the ceiling. The forearm points where the character aims.
-     "weapons": [{"kind": "pistol", "hand": "Right", "follow": "forearm", "upright": True}],
+     "weapons": [{"kind": "pistol", "hand": "Right", "follow": "forearm", "aim_from": "Head",
+                  "upright": True}],
+     "hands": {"left": "GRIP", "right": "GRIP"},
      "character": "hero",   "set": "ring",    "travel": 0.4,
      "lesson": "A prop in the hand is just parented to the hand bone, so it follows "
                "whatever you generate. The blocks do the rest: raise, fire, lower."},
@@ -277,6 +279,7 @@ EXAMPLES = [
      # the sky. Tilted 60 degrees toward the forearm, the blade runs 30
      # degrees off the arm's line, so a thrust points where it goes.
      "weapons": [{"kind": "sword", "hand": "Right", "follow": "forearm", "tilt": 60}],
+     "hands": {"right": "GRIP"},
      "character": "hero",   "set": "dusk",    "travel": 0.8,
      "lesson": "A combo is a block per strike. Retime a block to make a strike "
                "faster or slower, or add one."},
@@ -287,7 +290,9 @@ EXAMPLES = [
      "blocks": [("a person walks forward holding a rifle", 2.0),
                 ("a person stops and aims a rifle", 1.0),
                 ("a person holds a rifle aimed forward", 1.0)],
-     "weapons": [{"kind": "rifle", "hand": "Right", "aim_at": "LeftHand", "upright": True}],
+     "weapons": [{"kind": "rifle", "hand": "Right", "follow": "forearm", "aim_at": "LeftHand",
+                  "upright": True}],
+     "hands": {"left": "GRIP", "right": "GRIP"},
      "waypoints": [(1, (0.0, 0.0)), (60, (0.0, -1.8)), (96, (0.0, -1.85))],
      "face_along_path": True,
      "character": "hero",   "set": "outdoor", "travel": 1.9,
@@ -632,7 +637,7 @@ def _hand_frame(arm, side, along_forearm=False):
 
 
 def _add_weapon(arm, spec):
-    """A weapon in the hand, parented to the hand bone so it follows any take."""
+    """A weapon in the hand, parented to the arm so it follows any take."""
     parts, rgb = _weapon_parts(spec["kind"])
     weapon = _box_mesh(spec["kind"].title(), parts, rgb, roughness=0.45)
     forearm = spec.get("follow") == "forearm"
@@ -647,6 +652,22 @@ def _add_weapon(arm, spec):
         # square to it, which is what makes a thrust point where it goes.
         frame = frame @ Matrix.Rotation(-math.radians(spec["tilt"]), 4, "X")
     weapon.matrix_world = frame
+    if spec.get("align_hand", True):
+        # The hand turns with the weapon. The model's wrist is loose (bent 40
+        # to 90 degrees while aiming or thrusting), and a gripping hand bent
+        # away from its grip reads as not holding anything. A marker riding
+        # the weapon carries the hand's rest orientation relative to it, and
+        # Copy Rotation gives that to the hand bone.
+        grip = bpy.data.objects.new(f"{weapon.name} grip", None)
+        grip.empty_display_size = 0.02
+        bpy.context.scene.collection.objects.link(grip)
+        grip.parent = weapon
+        grip.hide_set(True)
+        bpy.context.view_layer.update()
+        grip.matrix_world = arm.matrix_world @ hand.matrix
+        con = hand.constraints.new("COPY_ROTATION")
+        con.name = "Hand on the weapon"
+        con.target = grip
     if spec.get("aim_at"):
         # Point the barrel at the other hand. A long gun's line runs from the
         # grip hand to the supporting hand, not down the grip forearm: the
@@ -659,6 +680,19 @@ def _add_weapon(arm, spec):
         aim.target = arm
         aim.subtarget = constraints_ui.resolve_effector_bone(arm, spec["aim_at"]).name
         aim.track_axis = "TRACK_Y"
+    if spec.get("aim_from"):
+        # Point the barrel along the sight line: straight away from the head,
+        # through the gun. In a two-handed stance each forearm angles inward to
+        # meet the other, 35 degrees up and across the body, and a pistol on
+        # the forearm aimed there; the eyes-to-gun line is the aim, one hand
+        # or two, and at the side it points the muzzle at the floor.
+        from animatica_blender import constraints_ui
+        head = next(pb for pb in arm.pose.bones if pb.name.split(":")[-1] == spec["aim_from"])
+        sight = weapon.constraints.new("DAMPED_TRACK")
+        sight.name = "Aim along the sight line"
+        sight.target = arm
+        sight.subtarget = head.name
+        sight.track_axis = "TRACK_NEGATIVE_Y"
     if spec.get("upright"):
         # Roll about the barrel so the top of the gun faces up. The generated
         # forearm comes back turned palm-down, and a gun that followed it
@@ -674,24 +708,6 @@ def _add_weapon(arm, spec):
         track.target = up
         track.lock_axis = "LOCK_Y"
         track.track_axis = "TRACK_Z"
-    if spec.get("support"):
-        # The other hand on the weapon: an IK target riding on it, and an IK
-        # constraint on that forearm, so the support hand follows the gun in
-        # any take instead of wherever the model left it.
-        target = bpy.data.objects.new(f"{weapon.name} support", None)
-        target.empty_display_type = "SPHERE"
-        target.empty_display_size = 0.03
-        bpy.context.scene.collection.objects.link(target)
-        target.parent = weapon
-        target.location = spec["support"]
-        other = "Left" if spec.get("hand", "Right") == "Right" else "Right"
-        from animatica_blender import constraints_ui
-        fore = constraints_ui.resolve_effector_bone(arm, f"{other}Hand").parent
-        ik = fore.constraints.new("IK")
-        ik.name = "Support hand on the weapon"
-        ik.target = target
-        ik.chain_count = 2
-        ik.use_tail = True
     return weapon
 
 
@@ -853,6 +869,12 @@ def build_one(ex, assets_dir, out_dir):
         _add_pins(arm, ex["pins"])
     for spec in ex.get("weapons", ()):
         _add_weapon(arm, spec)
+    # Hands: Relaxed unless the example holds something, and shown as the file
+    # opens rather than only after the first generation.
+    from animatica_blender import hand_pose
+    for side in ("left", "right"):
+        setattr(settings, f"hand_pose_{side}", ex.get("hands", {}).get(side, "RELAXED"))
+    hand_pose.show(arm, settings)
     for prop in ex.get("props", ()):
         if prop["kind"] == "box":
             box, size = _build_box(prop["at"], prop["size"])

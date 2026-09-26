@@ -151,10 +151,10 @@
       "prompt": "a person stands still with arms relaxed at their sides \u2192 a person raises a pistol with their right hand and aims forward \u2192 a person fires a pistol twice \u2192 a person lowers both arms to their sides and relaxes",
       "character": "Animatica Hero",
       "credit": "",
-      "file": "pistol.ffacfcb1.blend",
+      "file": "pistol.13036139.blend",
       "url": "",
-      "size": 12554717,
-      "sha256": "ffacfcb10f5420974fbda36340f3d05ab16ee5478acc97b69bfbb5117bc05d4a"
+      "size": 12556343,
+      "sha256": "13036139455378a60a61c28cebf0041252fc7fd0732f90a167e8b3f93daadb3e"
     },
     {
       "id": "sword",
@@ -165,10 +165,10 @@
       "prompt": "a person slashes a sword from right to left \u2192 a person slashes a sword from left to right \u2192 a person thrusts a sword forward",
       "character": "Animatica Hero",
       "credit": "",
-      "file": "sword.5439c2f2.blend",
+      "file": "sword.7a00fdd2.blend",
       "url": "",
-      "size": 12554643,
-      "sha256": "5439c2f25d54c8cbde16df1d50a86a873abcbb14520a2e6fd9567f20ab1e5213"
+      "size": 12558199,
+      "sha256": "7a00fdd2d3e00e92697a90006d56a1ae3ed924298073c4667d61a79d0d8cd6c0"
     },
     {
       "id": "rifle",
@@ -179,10 +179,10 @@
       "prompt": "a person walks forward holding a rifle \u2192 a person stops and aims a rifle \u2192 a person holds a rifle aimed forward",
       "character": "Animatica Hero",
       "credit": "",
-      "file": "rifle.78fa8a48.blend",
+      "file": "rifle.2a4f5d2d.blend",
       "url": "",
-      "size": 12555447,
-      "sha256": "78fa8a488746da3853253c86f66db7133a8f05e7c917b81b2cbddbe317f7cf5e"
+      "size": 12559666,
+      "sha256": "2a4f5d2d5d143f0f382de6cdf15413de56151ffb6064944031f06a8f528721ec"
     },
     {
       "id": "walk-sit",
