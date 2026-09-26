@@ -314,6 +314,19 @@ def _target_armature_update(self, context):
     _redraw_animatica_editors()
 
 
+def _loop_update(self, context):
+    """Loop turns In place on: a travelling cycle walks off the viewport, and
+    one on the spot is what a game controller wants. Turned off again, Loop
+    takes In place with it -- only if it was Loop that turned it on."""
+    if self.loop:
+        if not self.inplace:
+            self.loop_set_inplace = True
+            self.inplace = True
+    elif self.loop_set_inplace:
+        self.loop_set_inplace = False
+        self.inplace = False
+
+
 def _inplace_update(self, context):
     """Live toggle for In-place mode — adds or removes a Limit Location
     constraint on the target armature's root bone. The constraint pins
@@ -328,6 +341,8 @@ def _inplace_update(self, context):
     Imports operators lazily to dodge the circular ``properties ->
     operators -> properties`` chain at module load.
     """
+    if not self.inplace:
+        self.loop_set_inplace = False       # the artist's choice now, not Loop's
     arm = self.target_armature
     if arm is None or arm.type != 'ARMATURE':
         return
@@ -721,9 +736,9 @@ class AnimaticaSettings(PropertyGroup):
     quality_preset: EnumProperty(
         name="Quality",
         items=[
-            ("STANDARD", "Standard", "50 denoising steps"),
-            ("HALF", "Half", "25 denoising steps"),
-            ("QUARTER", "Quarter", "12 denoising steps"),
+            ("STANDARD", "Standard (50 steps)", "50 denoising steps"),
+            ("HALF", "Fast (25 steps)", "25 denoising steps"),
+            ("QUARTER", "Draft (12 steps)", "12 denoising steps"),
             ("CUSTOM", "Custom", "Custom step count"),
         ],
         default="STANDARD",
@@ -733,7 +748,7 @@ class AnimaticaSettings(PropertyGroup):
     )
 
     cfg_enabled: BoolProperty(
-        name="Guidance (CFG)",
+        name="Guidance",
         description=(
             "Enable classifier-free guidance. When on, generation is pushed "
             "to follow your prompt and constraints more closely; turn it off "
@@ -795,13 +810,11 @@ class AnimaticaSettings(PropertyGroup):
     inplace: BoolProperty(
         name="In place",
         description=(
-            "Suppress the root bone's horizontal translation so the "
-            "character animates in place instead of travelling through "
-            "the scene. Vertical motion (jumps, crouches) is kept. Set it "
-            "before generating, or toggle it on a preview: the travel is "
-            "kept but muted, so switching back off restores it without "
-            "re-generating. Useful for game-style cycles (walk loops, "
-            "idles) where the root motion comes from a controller"
+            "Keep the character on the spot: the root's travel across the "
+            "ground is muted, jumps and crouches stay. Set it before "
+            "generating, or switch it on a preview without regenerating -- "
+            "the travel is kept, so switching back restores it. For game "
+            "cycles, where a controller moves the character"
         ),
         default=False,
         update=_inplace_update,
@@ -809,13 +822,19 @@ class AnimaticaSettings(PropertyGroup):
     loop: BoolProperty(
         name="Loop",
         description=(
-            "Make the generated clip a seamless cycle: cut it where the "
-            "motion comes back round to its first pose, blend the seam, and "
-            "repeat it past its end (travel continues from where it ended). "
-            "Applied when you generate. For walk and run cycles, give the "
-            "block two or three seconds"
+            "Generate the block as a seamless cycle: the model samples it so "
+            "its last frame runs straight into its first, and it repeats past "
+            "its end. Turns In place on, so the cycle plays on the spot. "
+            "Needs a single prompt block; walk and run cycles work best at "
+            "two to four seconds. Offered only when the model supports it"
         ),
         default=False,
+        update=_loop_update,
+    )
+    loop_set_inplace: BoolProperty(
+        description="Loop turned In place on, and turns it off again with itself",
+        default=False,
+        options={'HIDDEN', 'SKIP_SAVE'},
     )
     preview_path_snap: BoolProperty(
         name="Snap to Path",

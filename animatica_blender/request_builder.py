@@ -319,9 +319,9 @@ def build_request(
     else:
         request["duration_frames"] = total_frames
 
-    # Loop: sampled as a cycle by the server where it can (motionmcp 0.4
-    # ``options.loop``, one segment). Anywhere else the clip is looped after
-    # the bake instead (loop.py), so the option is only sent where it is known.
+    # Loop: sampled as a cycle by the model (motionmcp 0.4 ``options.loop``),
+    # which needs one segment. Loop is only offered where the model advertises
+    # it; a request it cannot loop goes out without it.
     if getattr(settings, "loop", False) and model_caps.get("supports_loop") and len(segments) == 1:
         request["options"]["loop"] = True
 

@@ -11,34 +11,28 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Added
 
-- **Loop: generate a cycle.** Turn on **Loop** under Generate Motion and the
-  clip comes back seamless, for walk cycles, runs and idles in a game. The
-  model makes a clip with a start and an end, and a walk opens from standing
-  and stops mid-stride, so repeating it jumped on every wrap. After the bake,
-  the addon finds the stretch that best comes back round to itself: a whole
-  number of strides, past the take-off. It keeps only that stretch, blends the
-  leftover difference into the last frames so the last frame lands on the
-  first pose, and adds Cycles modifiers so it plays on past its end. On a
-  three-second walk that is a 35-frame, two-step loop whose wrap is as smooth
-  as any other frame (37.7 degrees of joint change against a median 38.9). The
-  root's travel repeats with offset, so a travelling loop keeps walking from
-  where it started, at a steady height even on a rig whose root bone rests
-  tilted. A generated walk veers a little, so the loop is turned to travel
-  straight ahead. With **In place** on as well, it loops on the spot, and the
-  scene's range is set to whole cycles so playback wraps without a hitch.
-
-  On a server that advertises `supports_loop` (motionmcp 0.4), Loop is asked
-  of the model instead: it samples the whole block as a cycle, so nothing is
-  cut and the loop is the length of the block. Measured through the addon on
-  a walk, a run, marching, boxing, a zombie walk and Cesium Man's walk, the
-  take comes back closed to within 0.2-0.4 degrees of joint rotation, and the
-  wrap moves like the rest of the clip (its sharpest acceleration 0.45-1.14x
-  the clip's 95th percentile, where the addon's own loop left marching and
-  boxing at 3-6x). The Preview box shows the loop's length.
+- **Loop: generate a cycle.** Tick **Loop** under Generate Motion and the model
+  samples the block as a seamless cycle, for walk cycles, runs and idles in a
+  game: its last frame runs straight into its first, and it plays on past its
+  end. Nothing is cut, so the loop is the length of the block. Measured on a
+  walk, a run, marching, boxing, a zombie walk and Cesium Man's walk, the take
+  comes back closed to within 0.2-0.4 degrees of joint rotation, and the wrap
+  moves like the rest of the clip (its sharpest acceleration 0.45-1.14x the
+  clip's 95th percentile). A generated walk veers a little, so the cycle is
+  turned to travel straight ahead; the root's travel repeats with offset, so
+  a travelling loop keeps walking from where it started, and the scene's range
+  is set to the cycle so playback wraps on the seam. Ticking Loop ticks **In
+  place** as well, since a cycle on the spot is what a game controller wants
+  (and a travelling one walks off the viewport); unticking Loop takes In place
+  with it, unless you had it on already. The Preview box says what the loop
+  is. Loop is the model's to make: it appears only when the connected model
+  advertises `supports_loop` (motionmcp 0.4), and needs a single prompt block
+  (with more, it greys out and says so).
 
 - **In place, chosen before you generate.** The toggle sat in the Preview box,
-  so it only appeared after a generation. It now sits beside Loop, under
-  Generate Motion. Set before generating, it is a choice the bake acts on
+  so it only appeared after a generation. It is now an option under Generate
+  Motion, and moves into the Preview box while a take is previewing, where it
+  acts on that take. Set before generating, it is a choice the bake acts on
   rather than a constraint added at once: pinning the root straight away also
   pinned any root keys you had authored, and key poses read their root
   position through the pin. In place also no longer lifts the character off
@@ -335,6 +329,21 @@ Proscenium, and keep the identifiers those releases actually shipped.
   generated take reported tens of thousands of "pose keyframes" — one per bone
   per channel per frame — where the request sends one constraint per authored
   frame. It now reads the authored frames, so the number matches what goes out.
+
+### Changed
+
+- **A tidier sidebar.** The options for the next take are checkboxes under
+  Generate Motion, with one grey line saying what the take covers ("Frames
+  1-80 · 2 key poses") — moved from the Pose panel, where it read as a status
+  of posing. Posing by hand lives in the Pose panel: Set Keyframe sits under
+  the handles ("Add Pose Handles", was "Build Autoposer Rig"), and the hands
+  say which is which. The plan overlay is a sub-panel whose header checkbox
+  turns it all off, with plain checkboxes for its parts, instead of five blue
+  toggles. The Preview box is headed "Previewing take". Help is the ? in the
+  panel header, re-importing the character a button on the Armature row, the
+  warm-up note shows only once a generation has taken ten seconds, Settings
+  is laid out with labels on the left and a Posing sub-panel, and the quality
+  presets say their step counts.
 
 ## [0.5.3] — 2026-09-16
 

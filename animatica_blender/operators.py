@@ -615,8 +615,12 @@ class ANIMATICA_OT_generate(Operator):
             return {'CANCELLED'}
 
         # Whether the server was asked to sample a cycle: the take then comes
-        # back closed, and the bake only straightens and repeats it.
+        # back closed, and the bake only straightens and repeats it. Loop is
+        # the model's alone; a take it did not sample as a cycle is not looped.
         self._server_looped = bool((req.get("options") or {}).get("loop"))
+        if (getattr(settings, "loop", False) and not self._server_looped
+                and (model_caps or {}).get("supports_loop")):
+            self.report({'WARNING'}, "Loop needs a single prompt block; generating without it")
 
         # Save the source action for Accept / Reject (no-op if already saved).
         _stash_source_action_name(settings, arm)
@@ -857,21 +861,19 @@ class ANIMATICA_OT_generate(Operator):
             # Fingers: the model has none, so each hand gets its pose laid on.
             from . import hand_pose
             hand_pose.apply(arm, action, settings, (gen_start, gen_end))
-            # A cycle, if asked for: last, so it closes the motion as it will play.
-            if getattr(settings, "loop", False):
+            # A cycle, if the model sampled one: last, so it repeats the motion
+            # as it will play.
+            if getattr(self, "_server_looped", False):
                 from . import loop
-                done = loop.apply(arm, action, (gen_start, gen_end),
-                                  closed=bool(getattr(self, "_server_looped", False)))
+                done = loop.apply(arm, action, (gen_start, gen_end))
                 if done:
-                    # Play whole cycles. Left at the generating range, playback
-                    # wrapped mid-cycle and stepped a frame backwards each time.
+                    # Play the cycle: its last frame is its first again, so the
+                    # range stops one short of it and playback wraps onto it.
                     cycle = done["frames"]
-                    reps = max(1, round((gen_end - gen_start + 1) / cycle))
                     context.scene.frame_start = gen_start
-                    context.scene.frame_end = gen_start + cycle * reps - 1
-                    print(f"[animatica] loop: {cycle} frames, cut at {done['cut']}, "
-                          f"seam {done['seam_deg_before']:.0f} deg blended over {done['blend']}, "
-                          f"turned {done['turned_deg']:.1f} deg straight; playing {reps} cycle(s)")
+                    context.scene.frame_end = gen_start + cycle - 1
+                    print(f"[animatica] loop: {cycle} frames, seam {done['seam_deg']:.1f} deg, "
+                          f"turned {done['turned_deg']:.1f} deg straight")
 
             # Fold preview-time edits onto the real source now that the bake
             # succeeded — deferred from execute so a failed POST/bake cannot
