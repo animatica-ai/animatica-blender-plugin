@@ -172,7 +172,7 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
         # Examples and help are a click away in the corner, not rows of their
         # own above the button the panel is for.
         row = self.layout.row(align=True)
-        row.menu("ANIMATICA_MT_examples", text="", icon='PRESET')
+        row.menu("ANIMATICA_MT_examples", text="", icon='FILE_BLEND')
         row.operator("animatica.open_discord_help", text="", icon='HELP', emboss=False)
 
     def draw(self, context):
@@ -252,13 +252,12 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
             row.scale_y = 1.5
             row.label(text=f"Working… {elapsed}s", icon='SORTTIME')
             col.operator("animatica.cancel", icon='X', text="Cancel")
-            # Said once the wait is long enough to wonder about, not on every
-            # generation: the cloud scales to zero between generations, and
-            # the first after an idle spell waits for the model to boot.
-            if elapsed >= 10:
-                note = layout.row()
-                note.active = False
-                note.label(text="First run can take 60 s while the model warms up")
+            # How long to expect, from the start: the cloud scales to zero
+            # between generations, and the first after an idle spell waits
+            # for the model to boot.
+            note = layout.row()
+            note.active = False
+            note.label(text="Usually under 30 s · the first run can take a minute")
             return
 
         # The dedicated preview flag, not ``source_action_name``: that is
@@ -272,12 +271,17 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
         has_prompt = any((b.prompt or "").strip() for b in settings.prompt_blocks)
         if not has_prompt and not in_preview:
             box = layout.box()
-            box.label(text="Add a prompt to generate", icon='INFO')
-            box.menu("ANIMATICA_MT_examples", text="Try an example", icon='PRESET')
+            box.label(text="What should the character do?")
+            if len(settings.prompt_blocks) == 1:
+                # The same text as the block on the Timeline, typed here so the
+                # first take needs no discovery at all.
+                box.prop(settings.prompt_blocks[0], "prompt", text="",
+                         placeholder="e.g. a person waves hello")
             sub = box.column(align=True)
             sub.active = False
-            sub.label(text="or double-click the Timeline to add a block,")
-            sub.label(text="then double-click it to type your own.")
+            sub.label(text="Prompts live on the Timeline.")
+            sub.label(text="Double-click a block to edit it.")
+            box.menu("ANIMATICA_MT_examples", text="Or open an example scene", icon='FILE_BLEND')
 
         # Why this cannot be sent, asked of the same function the send asks --
         # so the button greys out for exactly the reasons a click would have
@@ -309,17 +313,20 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
         gen.enabled = not blockers
         row = gen.row()
         row.scale_y = 1.5
+        # Every run is a new take (seed 0), so "again" is what it does.
         row.operator("animatica.generate",
-                     text="Regenerate Motion" if in_preview else "Generate Motion")
-        if blockers:
+                     text="Generate Again" if in_preview else "Generate Motion")
+        # The first-run box above already says what is missing.
+        if blockers and (has_prompt or in_preview):
             note = gen.row()
             note.enabled = True         # readable while the button above is not
             note.active = False
             note.label(text=blockers[0], icon='INFO')
 
-        _draw_take_options(layout, settings, model, in_preview)
+        _draw_take_options(layout, context, settings, model, in_preview)
         if not in_preview:
             _draw_next_take(layout, context)
+            _draw_kept(layout, arm_live)
         examples.draw_status(layout)
 
         # An example's character may need attribution; this is where the file
@@ -335,7 +342,10 @@ def _draw_character(layout, context, settings) -> None:
     """
     from . import canonical_skeleton, remote_asset
 
-    layout.prop(settings, "model_id", text="Model")
+    # A choice only when there is one to make.
+    caps = mmcp_client.cached_capabilities() or {}
+    if len(caps.get("models") or []) > 1:
+        layout.prop(settings, "model_id", text="Model")
     fetching = canonical_skeleton.download_state()
     if fetching["active"]:
         layout.prop(settings, "target_armature", text="Armature")
@@ -359,14 +369,19 @@ def _draw_character(layout, context, settings) -> None:
         sub.label(text=remote_asset.format_rate(fetching["speed"]))
         sub.label(text=remote_asset.format_eta(fetching["eta"]))
     elif properties._live_armature(settings.target_armature) is None:
-        layout.prop(settings, "target_armature", text="Armature")
         box = layout.box()
-        box.label(text="No armature — import a rig to animate on", icon='INFO')
-        box.operator(
+        box.label(text="No character yet")
+        row = box.row()
+        row.scale_y = 1.4
+        row.operator(
             "animatica.import_canonical_skeleton",
             icon='ARMATURE_DATA',
-            text="Import Animatic character",
+            text="Add Ready-Made Character",
         )
+        sub = box.row()
+        sub.active = False
+        sub.label(text="or animate your own rig:")
+        box.prop(settings, "target_armature", text="")
     else:
         # Re-importing is rare; it rides on the picker rather than taking a
         # full-width row of its own.
@@ -375,7 +390,7 @@ def _draw_character(layout, context, settings) -> None:
         row.operator("animatica.import_canonical_skeleton", text="", icon='IMPORT')
 
 
-def _draw_take_options(layout, settings, model, in_preview) -> None:
+def _draw_take_options(layout, context, settings, model, in_preview) -> None:
     """How the next take comes back: as a loop, and on the spot.
 
     Checkboxes, not toggle buttons: they are options of the take, not modes of
@@ -401,6 +416,15 @@ def _draw_take_options(layout, settings, model, in_preview) -> None:
         note = layout.row()
         note.active = False
         note.label(text="Loop needs a single prompt block", icon='INFO')
+    elif can_loop and settings.loop:
+        # The length is the loop's length; a long block makes a long,
+        # meandering cycle. Said where the choice is made, not in a tooltip.
+        b = settings.prompt_blocks[0]
+        fps = context.scene.render.fps / (context.scene.render.fps_base or 1.0)
+        if (b.frame_end - b.frame_start + 1) / fps > 4.5:
+            note = layout.row()
+            note.active = False
+            note.label(text="Loops work best at 2–4 s", icon='INFO')
 
 
 def _draw_next_take(layout, context) -> None:
@@ -411,10 +435,12 @@ def _draw_next_take(layout, context) -> None:
     frames, entries = plan["frames"], plan["entries"]
     dropped = [f for f in frames if not entries[f]["in_range"]]
     sent = len(frames) - len(dropped)
-    poses = "no key poses" if not sent else f"{sent} key pose{'' if sent == 1 else 's'}"
+    poses = "prompt only" if not sent else f"{sent} key pose{'' if sent == 1 else 's'} to hit"
+    a, b = plan["range"]
+    fps = context.scene.render.fps / (context.scene.render.fps_base or 1.0)
     row = layout.row()
     row.active = False
-    row.label(text=f"Frames {plan['range'][0]}–{plan['range'][1]} · {poses}")
+    row.label(text=f"{(b - a + 1) / fps:.1f} s · frames {a}–{b} · {poses}")
     if dropped:
         shown = ", ".join(str(f) for f in dropped[:_MAX_NAMED_DROPPED])
         if len(dropped) > _MAX_NAMED_DROPPED:
@@ -422,6 +448,17 @@ def _draw_next_take(layout, context) -> None:
         warn = layout.row()
         warn.alert = True
         warn.label(text=f"Outside the range, not sent: {shown}", icon='ERROR')
+
+
+def _draw_kept(layout, arm) -> None:
+    """Where an accepted take went. Accept moves it off the rig onto the NLA,
+    and without a word the keyframes vanishing reads as the take lost."""
+    ad = arm.animation_data if arm is not None else None
+    if ad is None or not any(t.name.startswith("Animatica: ") for t in ad.nla_tracks):
+        return
+    row = layout.row()
+    row.active = False
+    row.label(text="Kept take is on the NLA", icon='NLA')
 
 
 def _draw_preview(layout, context, settings, arm, model) -> None:
@@ -448,7 +485,7 @@ def _draw_preview(layout, context, settings, arm, model) -> None:
 
     # Re-roll just the active block (keeping its neighbours) — otherwise only
     # reachable by right-clicking a timeline strip. With a single block this
-    # is Regenerate Motion, so only surface it when there are blocks to keep.
+    # is Generate Again, so only surface it when there are blocks to keep.
     if len(settings.prompt_blocks) >= 2:
         op = box.operator(
             "animatica.regenerate_block",
@@ -512,6 +549,7 @@ _MAX_NAMED_DROPPED = 3
 class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
     bl_label = "Pose"
     bl_idname = "ANIMATICA_PT_pose"
+    bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
         from .autoposer import engine, poser
@@ -725,15 +763,28 @@ class ANIMATICA_PT_settings(AnimaticaPanelBase, Panel):
         if settings.quality_preset == "CUSTOM":
             layout.prop(settings, "custom_steps")
 
+        # Motion cleanup — feet that do not slide, poses hit more exactly.
+        layout.prop(settings, "post_processing")
+
+
+class ANIMATICA_PT_settings_advanced(AnimaticaPanelBase, Panel):
+    """How closely the model follows, and how blocks join. Rarely touched."""
+    bl_label = "Advanced"
+    bl_idname = "ANIMATICA_PT_settings_advanced"
+    bl_parent_id = "ANIMATICA_PT_settings"
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        settings = context.scene.animatica
         layout.prop(settings, "cfg_enabled")
         if settings.cfg_enabled:
             col = layout.column(align=True)
             col.prop(settings, "cfg_text", slider=True)
             col.prop(settings, "cfg_constraint", slider=True)
-
-        layout.prop(settings, "num_transition_frames")
-        # Motion cleanup — tightens keyframe pins and fixes foot skating.
-        layout.prop(settings, "post_processing")
+        layout.prop(settings, "num_transition_frames", text="Blend Between Blocks")
 
 
 class ANIMATICA_PT_settings_posing(AnimaticaPanelBase, Panel):
@@ -772,6 +823,7 @@ _classes = (
     ANIMATICA_PT_overlay,
     ANIMATICA_PT_paths,
     ANIMATICA_PT_settings,
+    ANIMATICA_PT_settings_advanced,
     ANIMATICA_PT_settings_posing,
 )
 

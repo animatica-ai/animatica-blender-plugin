@@ -377,16 +377,17 @@ class ANIMATICA_OT_open_example(bpy.types.Operator):
         if entry is None:
             self.report({'ERROR'}, "that example is not in the list")
             return {'CANCELLED'}
-        # Opening replaces the session. Unsaved work is the one thing worth a
-        # confirmation; a clean file just opens.
+        # Opening replaces the session, and nothing about an example menu
+        # says so: always ask, and say what closes. Unsaved work is named.
+        message = "It opens as a new file; your current scene closes."
         if bpy.data.is_dirty:
-            return context.window_manager.invoke_confirm(
-                self, event,
-                title=f"Open “{entry['title']}”?",
-                message="Unsaved changes in this file will be lost.",
-                confirm_text="Open Example",
-            )
-        return self.execute(context)
+            message += " Unsaved changes will be lost."
+        return context.window_manager.invoke_confirm(
+            self, event,
+            title=f"Open the “{entry['title']}” example?",
+            message=message,
+            confirm_text="Open Example",
+        )
 
     def execute(self, context):
         settings = getattr(context.scene, "animatica", None)
@@ -408,7 +409,7 @@ class ANIMATICA_OT_open_example(bpy.types.Operator):
 
 class ANIMATICA_MT_examples(bpy.types.Menu):
     bl_idname = "ANIMATICA_MT_examples"
-    bl_label = "Try an Example"
+    bl_label = "Open an Example Scene"
 
     def draw(self, context):
         refresh_manifest_async()

@@ -104,12 +104,15 @@ def load_blocks_from_armature(arm_obj, settings):
         settings.active_block_index = int(arm_obj.get(_ACTIVE_KEY, 0))
         return
 
-    # No stored data — seed with one default block covering the scene range.
+    # No stored data — seed with one default block: four seconds, or the scene
+    # range if that is shorter. Covering a default scene's 250 frames, the
+    # first thing anyone generated was a ten-second wave.
     scene = bpy.context.scene
+    fps = scene.render.fps / (scene.render.fps_base or 1.0)
     b = settings.prompt_blocks.add()
     b.prompt = ""
     b.frame_start = scene.frame_start
-    b.frame_end = scene.frame_end
+    b.frame_end = min(scene.frame_end, scene.frame_start + int(round(4 * fps)) - 1)
     b.enabled = True
     settings.active_block_index = 0
 
@@ -720,11 +723,12 @@ class AnimaticaSettings(PropertyGroup):
     seed: IntProperty(
         name="Seed",
         description=(
-            "Clip seed used for every block that doesn't pin its own. The same "
-            "seed with the same inputs reproduces the same motion. 0 = roll a "
-            "fresh random seed each run (recorded below so you can lock it in)"
+            "Clip seed used for every block that doesn't pin its own. 0 (the "
+            "default) makes every run a new take, and the seed it used is shown "
+            "so you can lock a take you like. The same seed with the same inputs "
+            "reproduces the same motion"
         ),
-        default=42, min=0, max=999999,
+        default=0, min=0, max=999999,
     )
     last_used_seed: IntProperty(
         name="Last Used Seed",
@@ -739,9 +743,9 @@ class AnimaticaSettings(PropertyGroup):
     quality_preset: EnumProperty(
         name="Quality",
         items=[
-            ("STANDARD", "Standard (50 steps)", "50 denoising steps"),
-            ("HALF", "Fast (25 steps)", "25 denoising steps"),
-            ("QUARTER", "Draft (12 steps)", "12 denoising steps"),
+            ("STANDARD", "Best", "The finest motion (50 denoising steps)"),
+            ("HALF", "Faster", "About twice as fast, a little rougher (25 steps)"),
+            ("QUARTER", "Draft", "Quick drafts for blocking out (12 steps)"),
             ("CUSTOM", "Custom", "Custom step count"),
         ],
         default="STANDARD",
@@ -802,11 +806,8 @@ class AnimaticaSettings(PropertyGroup):
     post_processing: BoolProperty(
         name="Motion Cleanup",
         description=(
-            "Run server-side motion correction after generation: tightens "
-            "keyframe pins, fixes foot sliding, enforces end-effector "
-            "constraints. Requires the server to have the motion_correction "
-            "package installed. Safe to enable; adds a second or two per "
-            "sample"
+            "Clean the motion up after it is generated: feet stop sliding, "
+            "and key poses and pins are hit more exactly. Adds a second or two"
         ),
         default=True,
     )
@@ -935,11 +936,11 @@ class AnimaticaSettings(PropertyGroup):
         options={"SKIP_SAVE"},
     )
     pose_tightness: FloatProperty(
-        name="Tightness",
+        name="Slack",
         description=(
-            "How exactly the poser must obey a control. Tight puts the joint "
-            "where you put the handle; loose makes it a hint the model may "
-            "overrule to keep the body natural"
+            "How far a joint may stray from its handle, in metres. Low puts "
+            "the joint where you put the handle; high makes it a hint the "
+            "poser may overrule to keep the body natural"
         ),
         default=0.005, min=0.001, max=0.2, precision=3, step=1,
         update=_tightness_update,

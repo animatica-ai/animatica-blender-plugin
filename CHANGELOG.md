@@ -163,6 +163,18 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Fixed
 
+- **Reject no longer throws away takes you kept.** It cleared every Animatica
+  NLA track: accept a wave, try a walk, reject the walk, and the wave was gone
+  too. Reject now drops only the take in front of you.
+- **Loop in a new scene.** The generating window is widened by the blend
+  margin (Transition Frames, 5 by default) so a take can blend into what is
+  around it. A loop was widened too, so its single prompt block went out with
+  padding either side, as more than one segment, and Loop was quietly not
+  asked for. A loop is now exactly its block.
+- **The rig picker's update acts on its own scene.** It read the active
+  scene's settings, so a rig set on another scene could clear the preview of
+  the one on screen.
+
 - **The inference runtime installs itself.** Solving a pose needs onnxruntime,
   and the addon used to stop at a message asking the artist to open the
   preferences and press Install Runtime. That step exists only because the
@@ -331,6 +343,28 @@ Proscenium, and keep the identifiers those releases actually shipped.
   frame. It now reads the authored frames, so the number matches what goes out.
 
 ### Changed
+
+- **Friction out of the first take.**
+  - **Every run is a new take.** The seed defaults to 0 (fresh each run), so
+    Generate Again gives a different take instead of the same one; the seed a
+    run used is shown in Settings, with Lock to keep it.
+  - **Your first prompt can be typed in the sidebar**, in the box that asks
+    "What should the character do?". An empty Timeline block now says
+    "Double-click to describe the motion" instead of "unconditioned", and the
+    sidebar updates as soon as a prompt is typed there.
+  - **The first block is four seconds long**, not the whole 250-frame scene.
+  - **"Add Ready-Made Character"** comes first when there is no character,
+    with your own rig as the second choice.
+  - **Opening an example scene always asks first**, and says your current
+    scene closes.
+  - **Plain language:** Accept says where the take goes ("Take kept: it plays
+    from the NLA track…"), and the panel says so afterwards; the tooltips of
+    Generate, Accept and Reject say what they do, not how; quality is Best /
+    Faster / Draft; guidance and block blending moved to Settings → Advanced;
+    the poser's Tightness is Slack, which is what its number is; the next
+    take's line reads "4.0 s · frames 1–96 · prompt only"; a loop longer than
+    four and a half seconds is told that loops work best at 2–4 s; the wait
+    says how long to expect from the start. The Pose panel starts closed.
 
 - **A sidebar ordered by how often you reach for it.** You set the scene up the
   way you would anyway; the panel is there to turn it into motion. Generate

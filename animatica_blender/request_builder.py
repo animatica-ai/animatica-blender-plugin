@@ -160,6 +160,11 @@ def compute_frame_range(
     block_ends = [int(b.frame_end) for b in considered]
     if block_starts and block_ends:
         lo, hi = min(block_starts), max(block_ends)
+        # A loop is the block, exactly: its length is the cycle's length, and
+        # there is nothing either side to blend into.
+        settings = getattr(scene, "animatica", None)
+        if getattr(settings, "loop", False) and len(considered) == 1:
+            return (lo, hi)
         # Widen by the blend margin, but never past the scene the user set up
         # — unless a block already reaches beyond it, in which case the block
         # is the authority and must not be clipped.

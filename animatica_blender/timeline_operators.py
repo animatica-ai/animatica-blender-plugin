@@ -1024,7 +1024,10 @@ class ANIMATICA_OT_timeline_strip_inline_edit(bpy.types.Operator):
         if 0 <= idx < len(props.prompt_blocks):
             props.prompt_blocks[idx].prompt = inline_edit_state["text"]
         inline_edit_state["active"] = False
-        context.area.tag_redraw()
+        # Every editor, not just the Timeline: the sidebar's Generate button
+        # waits on a prompt, and it sat greyed until the mouse crossed it.
+        for area in context.screen.areas:
+            area.tag_redraw()
 
     def _cancel(self, context):
         """Revert text and exit edit mode."""

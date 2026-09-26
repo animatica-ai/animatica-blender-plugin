@@ -248,16 +248,6 @@ def _push_actions_to_nla(armature_obj, actions) -> None:
         strip.blend_out = 0.0
 
 
-def _clear_animatica_nla_tracks(armature_obj) -> None:
-    """Remove every NLA track the addon owns. Called from Reject."""
-    if armature_obj is None or armature_obj.animation_data is None:
-        return
-    nla = armature_obj.animation_data.nla_tracks
-    for track in list(nla):
-        if track.name.startswith(_NLA_TRACK_PREFIXES):
-            nla.remove(track)
-
-
 def _root_location_data_path(armature_obj) -> str | None:
     """The fcurve data_path that drives the armature's root-bone location."""
     if armature_obj is None or armature_obj.type != 'ARMATURE':
@@ -521,8 +511,8 @@ class ANIMATICA_OT_generate(Operator):
     bl_idname = "animatica.generate"
     bl_label = "Generate Motion"
     bl_description = (
-        "Build an MMCP request from the current scene (segments + constraints), "
-        "POST it to /generate, and bake the returned glTF onto the target armature"
+        "Make motion from the prompts on the Timeline and the poses you keyed. "
+        "Each run is a new take unless you lock a seed in Settings"
     )
 
     _timer = None
@@ -1021,19 +1011,15 @@ class ANIMATICA_OT_cancel_generation(Operator):
 
 class ANIMATICA_OT_accept(Operator):
     bl_idname = "animatica.accept"
-    bl_label = "Push to NLA"
+    bl_label = "Accept"
     bl_description = (
-        "Commit the generated motion to the NLA stack. The preview action "
-        "(single-block) or its per-block split (multi-block) is placed on a "
-        "single shared NLA track named 'Animatica: Motion'. The active "
-        "action is cleared so NLA drives playback, and the source-action "
-        "reference is released"
+        "Keep this take. It moves to the NLA track 'Animatica: Motion', "
+        "replacing the take kept before; your own keys stay"
     )
 
     def execute(self, context):
         s = context.scene.animatica
         arm = _live_target_armature_or_clear(s)
-        n_pushed = 0
 
         if arm is not None:
             import json as _json
@@ -1105,7 +1091,6 @@ class ANIMATICA_OT_accept(Operator):
                         _zero_root_xz_keyframes(a, arm)
 
                 _push_actions_to_nla(arm, actions_to_push)
-                n_pushed = len(actions_to_push)
 
             # Always pull the constraint after Accept — its job is done
             # (either we baked the in-place state or the toggle was off).
@@ -1116,14 +1101,7 @@ class ANIMATICA_OT_accept(Operator):
 
         s.source_action_name = ""
         s.is_previewing = False
-        if n_pushed:
-            label = "strip" if n_pushed == 1 else "strips"
-            self.report(
-                {'INFO'},
-                f"Pushed {n_pushed} {label} to NLA track 'Animatica: Motion'",
-            )
-        else:
-            self.report({'INFO'}, "Generated motion pushed to NLA")
+        self.report({'INFO'}, "Take kept: it plays from the NLA track 'Animatica: Motion'")
         return {'FINISHED'}
 
 
@@ -1131,10 +1109,8 @@ class ANIMATICA_OT_reject(Operator):
     bl_idname = "animatica.reject"
     bl_label = "Reject"
     bl_description = (
-        "Drop the generated motion samples while keeping authored keyframes "
-        "(both originally typed and any added during preview). When a "
-        "pre-generation source action exists, the kept keys are merged onto "
-        "it so bones the bake covered keep their pose at authored frames"
+        "Throw this take away and go back to what you had. Your own keys, "
+        "including any you added while previewing, stay"
     )
 
     def execute(self, context):
@@ -1165,10 +1141,10 @@ class ANIMATICA_OT_reject(Operator):
             and preview.name.startswith(request_builder._GENERATED_ACTION_PREFIXES)
         )
 
-        # Defensive: if the user manually assembled per-block actions onto
-        # NLA, strip our tracks before reassigning so they don't keep
-        # playing on top of the restored / cleaned action.
-        _clear_animatica_nla_tracks(arm)
+        # The NLA is left alone: what is on it is takes kept earlier, and
+        # throwing this one away must not throw those away with it. (It
+        # cleared every Animatica track: accept a wave, reject a walk, and
+        # the wave was gone too.)
 
         # Drop any in-place constraint left over from preview state.
         _apply_inplace_constraint(arm, enabled=False)
@@ -1690,7 +1666,7 @@ DISCORD_HELP_URL = "https://discord.com/invite/A8CrURBewz"
 class ANIMATICA_OT_open_discord_help(Operator):
     bl_idname = "animatica.open_discord_help"
     bl_label = "Need help?"
-    bl_description = "Open the Animatica Discord — questions, feedback, and help from the team"
+    bl_description = "Ask for help on the Animatica Discord (opens your browser)"
 
     def execute(self, context):
         bpy.ops.wm.url_open(url=DISCORD_HELP_URL)

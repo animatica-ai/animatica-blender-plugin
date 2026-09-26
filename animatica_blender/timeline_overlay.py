@@ -448,7 +448,7 @@ def draw_timeline_strips():
             )
         else:
             label = (
-                "unconditioned"
+                "Double-click to describe the motion"
                 if _is_unconditioned(fr)
                 else fr.prompt
             )
