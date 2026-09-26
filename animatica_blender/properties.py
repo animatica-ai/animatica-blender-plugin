@@ -699,6 +699,24 @@ class AnimaticaSettings(PropertyGroup):
     )
 
     # -- Target armature --
+    batch_direction: EnumProperty(
+        name="Direction",
+        items=[
+            ('OWN', "Each Their Own",
+             "Every character uses its own prompts, key poses, waypoints and pins"),
+            ('SHARED', "Shared",
+             "Every character uses the active character's prompts, each with its "
+             "own seed, starting from where it stands: variations on one action, "
+             "a crowd. Waypoints and pins are left out"),
+        ],
+        default='OWN',
+    )
+    # The characters whose batch take waits for Accept All / Reject All (JSON).
+    batch_pending: StringProperty(default="", options={'HIDDEN'})
+    # "name: reason" for the characters a batch could not make (JSON).
+    batch_failed: StringProperty(default="", options={'HIDDEN'})
+    batch_total: IntProperty(default=0, options={'HIDDEN', 'SKIP_SAVE'})
+    batch_done: IntProperty(default=0, options={'HIDDEN', 'SKIP_SAVE'})
     follow_active: BoolProperty(
         name="Follow Selection",
         description=(

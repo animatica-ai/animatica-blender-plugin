@@ -1123,6 +1123,7 @@ def _collect_constraints(
         out.extend(waypoints.request_constraints(
             scene, frame_range,
             face_along_path=bool(getattr(settings, "waypoint_heading", False)),
+            marks=constraint_objects["waypoints"],
         ))
 
     for curve in constraint_objects.get("root_paths", []):

@@ -32,5 +32,8 @@ EFFECTOR_COLORS = {
 # constraints. Picked up by the constraints scene-walker.
 PROP_IS_ROOT_PATH    = "animatica_is_root_path"
 PROP_TARGET_JOINT    = "animatica_target_joint"
+# The character a pin was made for (waypoints carry "animatica_waypoint_owner").
+# Absent on objects from before characters owned them: those belong to everyone.
+PROP_OWNER           = "animatica_owner"
 PROP_MATCH_DIRECTION = "animatica_match_direction"
 PROP_SAMPLE_DENSITY  = "animatica_sample_density"

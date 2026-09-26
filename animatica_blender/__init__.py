@@ -51,6 +51,7 @@ from . import timeline_operators
 from . import updater
 from . import examples
 from . import waypoints
+from . import batch
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +169,7 @@ def register():
     updater.register()
     examples.register()
     waypoints.register()
+    batch.register()
 
     _reset_runtime_flags()
 
@@ -194,6 +196,7 @@ def unregister():
     _purge_stale_handlers(bpy.app.handlers.save_pre, "_animatica_save_pre")
     _purge_stale_handlers(bpy.app.handlers.load_post, "_animatica_load_post")
 
+    batch.unregister()
     waypoints.unregister()
     examples.unregister()
     updater.unregister()

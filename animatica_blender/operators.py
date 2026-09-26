@@ -507,6 +507,179 @@ class ANIMATICA_OT_connect(Operator):
 # Generate
 # ═══════════════════════════════════════════════════════════════════════════
 
+def anchor_frames_for(req: dict, src_action, gen_start: int, gen_end: int):
+    """The frames (and bones) the artist keyed, which the bake keeps typed as theirs.
+
+    Every frame from the generated timeline is tagged ``GENERATED`` except
+    these, collapsed to scene-frame space:
+
+    1. ``pose_keyframe`` constraints — frame index is timeline-relative
+       (0 = request's first frame), so shifted by *gen_start*.
+    2. Every keyframe on the source action's fcurves, regardless of channel.
+       This catches location-only keys (e.g. root-bone path animation) and
+       scale keys that the pose_keyframe sampler filters out (it only emits
+       constraints from rotation fcurves), so a hand-authored Hips path stays
+       distinguishable from the generated motion afterwards.
+
+    Not effector_target frames, and not root_path ones: a pin or a waypoint
+    lives on its own object, and the rig's pose at that frame is generated.
+    Tagging it KEYFRAME made Reject keep it and the next generation send it
+    back as a full-body key pose — the previous take's pose, root and all,
+    pinned at every pin frame.
+
+    Only motion-bake output is excluded from 2 — pose-generator output is the
+    user's authored content. The BONE each key sits on is kept, not just its
+    frame: tagging by frame alone marked every bone as authored wherever any
+    one was keyed, so a hips-only keyframe came back looking like a full-body
+    one. A dict iterates as its frames, so frame-only consumers are unaffected.
+    """
+    anchor_frames: set[int] = set()
+    for c in req.get("constraints", []):
+        if c.get("type") == "pose_keyframe":
+            anchor_frames.add(int(c["frame"]) + gen_start)
+    anchor_bones: dict[int, set[str]] = {}
+    if src_action is not None and not _is_motion_bake_action(src_action):
+        for fc in constraints_ui.iter_action_fcurves(src_action):
+            bone = constraints_ui._bone_name_from_data_path(fc.data_path)
+            for kp in fc.keyframe_points:
+                f = int(round(kp.co.x))
+                if gen_start <= f <= gen_end:
+                    anchor_frames.add(f)
+                    if bone is not None:
+                        anchor_bones.setdefault(f, set()).add(bone)
+    return anchor_bones if anchor_bones else anchor_frames
+
+
+def bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int, gen_end: int,
+              anchor_frames=None, splice_target=None, server_looped: bool = False,
+              source_action_name: str = "") -> tuple:
+    """Bake one generation's result onto *arm* as a take. Returns (action, skipped joints).
+
+    Everything a take gets between the server's answer and the preview, for one
+    character: the bake (or an in-place splice), the authored keys either side
+    of the window carried in, pins put back on target, the fingers, the cycle,
+    In place, and the block ranges Accept splits by. Shared by Generate and by
+    the batch, so a character's take is the same whichever made it. Raises on
+    failure; the caller reports it.
+    """
+    block_ranges = (
+        _block_ranges_for_split(prompt_blocks, gen_start, gen_end)
+        if not request_builder.is_control_rig(arm)
+        else []
+    )
+    # Always bake as a single action for preview — it scrubs cleanly via the
+    # active-action / dopesheet display, no NLA stack required. Multi-block
+    # scenes still get split into per-block actions on Accept; the block
+    # ranges are stashed on the armature so the Accept handler knows what to do.
+    preview_name = (
+        f"{MOTION_ACTION_PREFIX}: Preview"
+        if block_ranges
+        else _build_motion_action_name(prompt_blocks)
+    )
+    # Splice in place when the rig already carries motion either side of the
+    # window. Generating over a gap is an edit to an existing animation, not a
+    # new take: the frames belong in the action the user is working in, so the
+    # walk and the sit stay exactly where they are and nothing has to be
+    # reassembled afterwards. A fresh bake is still right when there is
+    # nothing to preserve.
+    #
+    # Not routed through here for control rigs: splice_gltf_into_action has no
+    # control-rig hand-off, only bake_gltf_to_armature does.
+    spliced = (
+        splice_target is not None
+        and not block_ranges
+        and not request_builder.is_control_rig(arm)
+        and _action_has_keys_outside(splice_target, gen_start, gen_end)
+    )
+    if spliced:
+        # keyframe writes go through animation_data.action, so the target has
+        # to be the active one.
+        arm.animation_data.action = splice_target
+        gltf_to_blender.splice_gltf_into_action(
+            result,
+            arm,
+            splice_target,
+            sample_index=0,
+            request_start_frame=gen_start,
+            target_range=(gen_start, gen_end),
+            anchor_frames=anchor_frames,
+        )
+        action = splice_target
+        # Accept and Reject both need to know this was an in-place edit: there
+        # is nothing to push, and nothing to restore from.
+        arm["animatica_spliced_in_place"] = True
+    else:
+        action = gltf_to_blender.bake_gltf_to_armature(
+            result,
+            arm,
+            sample_index=0,
+            action_name=preview_name,
+            start_frame=gen_start,
+            anchor_frames=anchor_frames,
+        )
+    skipped = list(action.get("animatica_skipped_joints") or [])
+
+    # Splice, don't replace. The bake covers only the window the prompt blocks
+    # asked for, so on its own the preview would be that window and nothing
+    # else — every pose authored before or after it gone from view. Carry those
+    # back in so Generate reads as "this stretch changed" rather than
+    # "everything else was thrown away". Reject is unaffected: these keep their
+    # original type, and it strips only GENERATED ones.
+    src_action = bpy.data.actions.get(source_action_name) if source_action_name else None
+    if not spliced and src_action is not None and src_action is not action:
+        carried = constraints_ui.carry_keyframes_outside_range(
+            src_action, action, (gen_start, gen_end),
+        )
+        if carried:
+            print(f"[animatica] carried {carried} authored key(s) from "
+                  f"outside {gen_start}..{gen_end} into the preview")
+
+    # Pins land where they were put, on this rig, whatever the server's
+    # retarget did to them (see pin_fix).
+    from . import pin_fix
+    fixed = pin_fix.apply(arm, action, context.scene, (gen_start, gen_end))
+    if fixed:
+        print("[animatica] pins put back on target: "
+              + ", ".join(f"{j.split(':')[-1]}@{f} was {cm} cm off" for j, f, cm in fixed))
+    # Fingers: the model has none, so each hand gets its pose laid on.
+    from . import hand_pose
+    hand_pose.apply(arm, action, settings, (gen_start, gen_end))
+    # A cycle, if the model sampled one: last, so it repeats the motion as it
+    # will play.
+    if server_looped:
+        from . import loop
+        done = loop.apply(arm, action, (gen_start, gen_end))
+        if done:
+            # Play the cycle: its last frame is its first again, so the range
+            # stops one short of it and playback wraps onto it.
+            cycle = done["frames"]
+            context.scene.frame_start = gen_start
+            context.scene.frame_end = gen_start + cycle - 1
+            print(f"[animatica] loop: {cycle} frames, seam {done['seam_deg']:.1f} deg, "
+                  f"turned {done['turned_deg']:.1f} deg straight")
+
+    # In-place mode: a Limit Location constraint on the root pins the character
+    # on the ground plane while vertical motion still plays. Toggling the
+    # property afterwards adds/removes it live via its update callback; this is
+    # the "toggle was already on when the bake completed" case.
+    _apply_inplace_constraint(arm, enabled=bool(getattr(settings, "inplace", False)))
+
+    if block_ranges:
+        # Stash split metadata for Accept. Blender's ID-property arrays are
+        # homogeneous numerics-only, which rules out a list-of-(int, int, str)
+        # shape: JSON-encode into a string custom prop instead — survives save/
+        # reload, decodes cheaply on Accept.
+        import json as _json
+        arm["animatica_pending_block_ranges"] = _json.dumps([
+            [int(fs), int(fe), str(name)] for fs, fe, name in block_ranges
+        ])
+    elif "animatica_pending_block_ranges" in arm:
+        # Single-block / control-rig path: drop any stale stash from a prior
+        # multi-block preview that is being overwritten in place.
+        del arm["animatica_pending_block_ranges"]
+    return action, skipped
+
+
 class ANIMATICA_OT_generate(Operator):
     bl_idname = "animatica.generate"
     bl_label = "Generate Motion"
@@ -615,63 +788,18 @@ class ANIMATICA_OT_generate(Operator):
         # Save the source action for Accept / Reject (no-op if already saved).
         _stash_source_action_name(settings, arm)
 
-        # Remember which scene-frames the user actually keyed so we can tag
-        # them ``'KEYFRAME'`` after the bake (while every other frame from
-        # the generated timeline gets tagged ``'GENERATED'``). Three sources
-        # contribute, all collapsed to scene-frame space:
-        #   1. ``pose_keyframe`` constraints — frame index is timeline-
-        #      relative (0 = request's first frame), so shift by gen_start.
-        #   2. Every keyframe on the source action's fcurves, regardless of
-        #      channel. This catches location-only keys (e.g. root-bone
-        #      path animation) and scale keys that the pose_keyframe
-        #      sampler filters out (it only emits constraints from rotation
-        #      fcurves), so a hand-authored Hips path stays visually
-        #      distinguishable from the generated motion afterwards.
+        # The frames the artist keyed stay theirs after the bake (see anchor_frames_for).
         gen_start, gen_end = request_builder.compute_frame_range(
             settings.prompt_blocks, arm, context.scene
         )
         self._gen_start_frame = gen_start
-
-        anchor_frames: set[int] = set()
-        for c in req.get("constraints", []):
-            t = c.get("type")
-            if t == "pose_keyframe":
-                anchor_frames.add(int(c["frame"]) + gen_start)
-            # Not effector_target frames, and not root_path ones: a pin or a
-            # waypoint lives on its own object, and the rig's pose at that
-            # frame is generated. Tagging it KEYFRAME made Reject keep it and
-            # the next generation send it back as a full-body key pose — the
-            # previous take's pose, root and all, pinned at every pin frame.
-            # Regenerating a scene with pins walked the character the wrong
-            # way and dragged it back.
 
         src_action = (
             arm.animation_data.action
             if arm.animation_data and arm.animation_data.action
             else None
         )
-        # Only motion-bake output is excluded — pose-generator output
-        # (``Animatica_Pose`` / legacy ``Animatica_Poses``) is the user's
-        # authored content (they chose to keep those poses as anchors), so
-        # those keyframes should stay typed as ``KEYFRAME`` after the bake.
-        # Keep the BONE each key sits on, not just its frame. Tagging by frame
-        # alone marked every bone as authored wherever the user had keyed any one
-        # of them, so a hips-only keyframe came back from the bake looking like a
-        # full-body one and the next generation widened the request accordingly.
-        anchor_bones: dict[int, set[str]] = {}
-        if src_action is not None and not _is_motion_bake_action(src_action):
-            for fc in constraints_ui.iter_action_fcurves(src_action):
-                bone = constraints_ui._bone_name_from_data_path(fc.data_path)
-                for kp in fc.keyframe_points:
-                    f = int(round(kp.co.x))
-                    if gen_start <= f <= gen_end:
-                        anchor_frames.add(f)
-                        if bone is not None:
-                            anchor_bones.setdefault(f, set()).add(bone)
-
-        # A dict iterates as its frames, so consumers that only want frames are
-        # unaffected; the tagger is the one that reads the bone sets.
-        self._anchor_frames = anchor_bones if anchor_bones else anchor_frames
+        self._anchor_frames = anchor_frames_for(req, src_action, gen_start, gen_end)
 
         # Reset state and kick worker.
         settings.is_generating = True
@@ -756,114 +884,21 @@ class ANIMATICA_OT_generate(Operator):
             settings.prompt_blocks, arm, context.scene
         )
 
-        block_ranges = (
-            _block_ranges_for_split(settings.prompt_blocks, gen_start, gen_end)
-            if not request_builder.is_control_rig(arm)
-            else []
-        )
-
         self._remove_regen_scratch_actions()
 
         n_actions = 0
         skipped: list[str] = []
         try:
-            # Always bake as a single action for preview — it scrubs cleanly
-            # via the active-action / dopesheet display, no NLA stack
-            # required. Multi-block scenes still get split into per-block
-            # actions on Accept; we just stash the block ranges on the
-            # armature so the Accept handler knows what to do.
-            preview_name = (
-                f"{MOTION_ACTION_PREFIX}: Preview"
-                if block_ranges
-                else _build_motion_action_name(settings.prompt_blocks)
+            action, skipped = bake_take(
+                context, settings, arm, self._result,
+                prompt_blocks=settings.prompt_blocks,
+                gen_start=gen_start, gen_end=gen_end,
+                anchor_frames=getattr(self, "_anchor_frames", None),
+                splice_target=getattr(self, "_splice_target", None),
+                server_looped=getattr(self, "_server_looped", False),
+                source_action_name=settings.source_action_name,
             )
-            # Splice in place when the rig already carries motion either side
-            # of the window. Generating over a gap is an edit to an existing
-            # animation, not a new take: the frames belong in the action the
-            # user is working in, so the walk and the sit stay exactly where
-            # they are and nothing has to be reassembled afterwards. A fresh
-            # bake is still right when there is nothing to preserve.
-            #
-            # Not routed through here for control rigs: splice_gltf_into_action
-            # has no control-rig hand-off, only bake_gltf_to_armature does.
-            splice_target = getattr(self, "_splice_target", None)
-            spliced = (
-                splice_target is not None
-                and not block_ranges
-                and not request_builder.is_control_rig(arm)
-                and _action_has_keys_outside(splice_target, gen_start, gen_end)
-            )
-            if spliced:
-                # keyframe writes go through animation_data.action, so the
-                # target has to be the active one.
-                arm.animation_data.action = splice_target
-                gltf_to_blender.splice_gltf_into_action(
-                    self._result,
-                    arm,
-                    splice_target,
-                    sample_index=0,
-                    request_start_frame=gen_start,
-                    target_range=(gen_start, gen_end),
-                    anchor_frames=getattr(self, "_anchor_frames", None),
-                )
-                action = splice_target
-                # Accept and Reject both need to know this was an in-place
-                # edit: there is nothing to push, and nothing to restore from.
-                arm["animatica_spliced_in_place"] = True
-            else:
-                action = gltf_to_blender.bake_gltf_to_armature(
-                    self._result,
-                    arm,
-                    sample_index=0,
-                    action_name=preview_name,
-                    start_frame=gen_start,
-                    anchor_frames=getattr(self, "_anchor_frames", None),
-                )
             n_actions = 1
-            skipped = list(action.get("animatica_skipped_joints") or [])
-
-            # Splice, don't replace. The bake covers only the window the
-            # prompt blocks asked for, so on its own the preview would be
-            # that window and nothing else — every pose authored before or
-            # after it gone from view. Carry those back in so Generate reads
-            # as "this stretch changed" rather than "everything else was
-            # thrown away". Reject is unaffected: these keep their original
-            # type, and it strips only GENERATED ones.
-            src_action = (
-                bpy.data.actions.get(settings.source_action_name)
-                if settings.source_action_name else None
-            )
-            if not spliced and src_action is not None and src_action is not action:
-                carried = constraints_ui.carry_keyframes_outside_range(
-                    src_action, action, (gen_start, gen_end),
-                )
-                if carried:
-                    print(f"[animatica] carried {carried} authored key(s) from "
-                          f"outside {gen_start}..{gen_end} into the preview")
-
-            # Pins land where they were put, on this rig, whatever the
-            # server's retarget did to them (see pin_fix).
-            from . import pin_fix
-            fixed = pin_fix.apply(arm, action, context.scene, (gen_start, gen_end))
-            if fixed:
-                print("[animatica] pins put back on target: "
-                      + ", ".join(f"{j.split(':')[-1]}@{f} was {cm} cm off" for j, f, cm in fixed))
-            # Fingers: the model has none, so each hand gets its pose laid on.
-            from . import hand_pose
-            hand_pose.apply(arm, action, settings, (gen_start, gen_end))
-            # A cycle, if the model sampled one: last, so it repeats the motion
-            # as it will play.
-            if getattr(self, "_server_looped", False):
-                from . import loop
-                done = loop.apply(arm, action, (gen_start, gen_end))
-                if done:
-                    # Play the cycle: its last frame is its first again, so the
-                    # range stops one short of it and playback wraps onto it.
-                    cycle = done["frames"]
-                    context.scene.frame_start = gen_start
-                    context.scene.frame_end = gen_start + cycle - 1
-                    print(f"[animatica] loop: {cycle} frames, seam {done['seam_deg']:.1f} deg, "
-                          f"turned {done['turned_deg']:.1f} deg straight")
 
             # Fold preview-time edits onto the real source now that the bake
             # succeeded — deferred from execute so a failed POST/bake cannot
@@ -874,37 +909,6 @@ class ANIMATICA_OT_generate(Operator):
                     self._regen_src, self._regen_preview,
                 )
                 self._clear_regen_state()
-
-            # In-place mode: drop a Limit Location constraint on the root
-            # so the character is pinned at bone-local xz=0 while still
-            # playing vertical motion. Toggling the property afterwards
-            # adds/removes the constraint live via its update callback;
-            # this branch is just for the "toggle was already on when the
-            # bake completed" case.
-            if getattr(settings, "inplace", False):
-                _apply_inplace_constraint(arm, enabled=True)
-            else:
-                # Defensive: if a stale constraint lingers from a prior
-                # session, clear it.
-                _apply_inplace_constraint(arm, enabled=False)
-
-            if block_ranges:
-                # Stash split metadata for Accept. Blender's ID-property
-                # arrays are homogeneous numerics-only ("only floats, ints,
-                # booleans and dicts are allowed in ID property arrays"),
-                # which rules out a list-of-(int, int, str) shape. JSON-
-                # encode into a string custom prop instead — survives save/
-                # reload, decodes cheaply on Accept.
-                import json as _json
-                arm["animatica_pending_block_ranges"] = _json.dumps([
-                    [int(fs), int(fe), str(name)] for fs, fe, name in block_ranges
-                ])
-            else:
-                # Single-block / control-rig path: drop any stale stash
-                # from a prior multi-block preview that the user is
-                # overwriting in place.
-                if "animatica_pending_block_ranges" in arm:
-                    del arm["animatica_pending_block_ranges"]
         except Exception as exc:                         # noqa: BLE001 — surfaced to UI
             self._cleanup(context)
             self.report({'ERROR'}, f"Bake failed: {exc}")

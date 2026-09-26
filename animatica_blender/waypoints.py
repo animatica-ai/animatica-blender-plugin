@@ -128,14 +128,22 @@ def is_waypoint(obj) -> bool:
     return obj is not None and bool(obj.get(PROP_IS_WAYPOINT))
 
 
-def waypoints(scene) -> list:
-    """Every waypoint marker in *scene*, earliest frame first."""
-    found = [o for o in scene.objects if is_waypoint(o)]
+def waypoints(scene, owner=None) -> list:
+    """The waypoint markers that steer *owner* in *scene*, earliest frame first.
+
+    *owner* defaults to the scene's current character: with several in a
+    scene, each has its own route, and the ones drawn, listed, added over and
+    sent are that character's (plus any made for no one in particular).
+    """
+    from . import constraints_ui
+
+    arm = constraints_ui.resolve_owner(scene, constraints_ui.ACTIVE if owner is None else owner)
+    found = [o for o in scene.objects if is_waypoint(o) and constraints_ui.belongs_to(o, arm)]
     return sorted(found, key=lambda o: int(o.animatica_waypoint_frame))
 
 
-def at_frame(scene, frame: int):
-    return next((o for o in waypoints(scene) if int(o.animatica_waypoint_frame) == int(frame)), None)
+def at_frame(scene, frame: int, owner=None):
+    return next((o for o in waypoints(scene, owner) if int(o.animatica_waypoint_frame) == int(frame)), None)
 
 
 def marker_name(frame: int) -> str:
@@ -212,7 +220,8 @@ def _on_frame_changed(self, context):
 # To the request
 # ---------------------------------------------------------------------------
 
-def request_constraints(scene, frame_range, *, face_along_path: bool = False) -> list[dict]:
+def request_constraints(scene, frame_range, *, face_along_path: bool = False,
+                        marks=None) -> list[dict]:
     """One single-frame ``root_path`` per waypoint inside *frame_range*.
 
     Single-frame, deliberately, as in the plugin: the server conditions on a
@@ -224,7 +233,8 @@ def request_constraints(scene, frame_range, *, face_along_path: bool = False) ->
     from . import coords
 
     lo, hi = int(frame_range[0]), int(frame_range[1])
-    inside = [o for o in waypoints(scene) if lo <= int(o.animatica_waypoint_frame) <= hi]
+    marks = waypoints(scene) if marks is None else marks
+    inside = [o for o in marks if lo <= int(o.animatica_waypoint_frame) <= hi]
     out = []
     for obj in inside:
         x_m, _y, z_m = coords.blender_pos_to_mmcp(obj.matrix_world.translation)

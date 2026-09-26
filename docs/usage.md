@@ -181,6 +181,21 @@ on the spot. Loop needs a single prompt block, and cycles work best at 2–4
 seconds: the block's length is the loop's length. It appears only when the
 connected model supports it.
 
+## Several characters at once
+
+Select two or more characters and the Animatica panel offers **Generate N
+Characters** — one generation each, run in parallel:
+
+- **Each Their Own** — every character uses its own prompts, key poses,
+  waypoints and pins. For a scene with distinct actors.
+- **Shared** — every character uses the active character's prompts, each with
+  its own seed, starting from where it stands: variations on one action, for a
+  crowd. Waypoints and pins are left out.
+
+The takes wait together: **Accept All** keeps each on its own character's NLA
+track, **Reject All** throws them all away. Waypoints and pins belong to the
+character that was active when you made them.
+
 ## Single pose at one frame
 
 Use **Generate Pose at Frame N** (in the **Pose** panel) when you only want one

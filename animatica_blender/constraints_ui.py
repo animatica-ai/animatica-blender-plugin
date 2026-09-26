@@ -297,20 +297,50 @@ def merge_preview_keyframes_into_source(source_action, preview_action) -> int:
 # Scene walker
 # ---------------------------------------------------------------------------
 
-def walk_scene_constraints(scene: bpy.types.Scene) -> dict[str, list[bpy.types.Object]]:
+#: ``owner=ACTIVE`` means the scene's current character.
+ACTIVE = object()
+
+
+def owner_name(obj) -> str:
+    """The character a waypoint or pin was made for, or "" for everyone."""
+    return str(obj.get("animatica_waypoint_owner") or obj.get(constants.PROP_OWNER) or "")
+
+
+def belongs_to(obj, arm) -> bool:
+    """Whether *obj* steers *arm*: made for it, or made for no one in particular.
+
+    With several characters in a scene, a waypoint set for one must not steer
+    the next one you select — or every character in a batch.
+    """
+    owner = owner_name(obj)
+    return not owner or arm is None or owner == arm.name
+
+
+def resolve_owner(scene, owner):
+    if owner is ACTIVE:
+        settings = getattr(scene, "animatica", None)
+        return getattr(settings, "target_armature", None) if settings else None
+    return owner
+
+
+def walk_scene_constraints(scene: bpy.types.Scene, owner=ACTIVE) -> dict[str, list[bpy.types.Object]]:
     """Find every Blender object in the scene that the addon should treat as
-    an MMCP constraint. Returns a dict keyed by primitive type."""
+    an MMCP constraint for *owner* (the current character by default).
+    Returns a dict keyed by primitive type."""
     from . import waypoints as _waypoints
 
+    arm = resolve_owner(scene, owner)
     root_paths: list[bpy.types.Object] = []
     effectors:  list[bpy.types.Object] = []
     for obj in scene.objects:
+        if not belongs_to(obj, arm):
+            continue
         if obj.get(constants.PROP_IS_ROOT_PATH) and obj.type == 'CURVE':
             root_paths.append(obj)
         elif obj.get(constants.PROP_TARGET_JOINT) and obj.type == 'EMPTY':
             effectors.append(obj)
     return {"root_paths": root_paths, "effector_targets": effectors,
-            "waypoints": _waypoints.waypoints(scene)}
+            "waypoints": _waypoints.waypoints(scene, owner=arm)}
 
 
 # ---------------------------------------------------------------------------
@@ -752,6 +782,7 @@ class ANIMATICA_OT_add_effector_target(Operator):
         empty.location           = start_pos
 
         empty[constants.PROP_TARGET_JOINT] = joint_name
+        empty[constants.PROP_OWNER] = arm.name
         # Drop a colour swatch on Object so the user can spot it in viewport.
         if label in constants.EFFECTOR_COLORS:
             empty.color = constants.EFFECTOR_COLORS[label]

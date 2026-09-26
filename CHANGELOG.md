@@ -11,6 +11,22 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Added
 
+- **Generate several characters at once — a scene, or a crowd.** Select two
+  or more characters and the Animatica panel offers "Generate N Characters":
+  one generation each, sent in parallel, each baked onto its character as it
+  arrives, with the same bake a single Generate uses. Two ways to direct them:
+  **Each Their Own** (every character's own prompts, key poses, waypoints and
+  pins) or **Shared** (the active character's prompts for everyone, a new seed
+  each, starting from where each stands — variations on one action; waypoints
+  and pins are left out). The takes then wait together: **Accept All** puts
+  each on its own character's NLA track, **Reject All** throws them all away;
+  a character that failed is listed and does not stop the rest. The panel says
+  how many generations it will cost before you press.
+- **Waypoints and pins belong to their character.** Made while a character is
+  active, they steer that one only — listed, drawn and sent for it — so a route
+  set for one character no longer steers the next one you select, or every
+  character in a batch. Ones from older files belong to everyone.
+
 - **Follow Selection: select a character to animate it.** With several
   characters in a scene, switching meant finding the other one in the Armature
   field. Now making a character the active object — its armature, or the body

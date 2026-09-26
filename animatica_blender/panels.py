@@ -253,7 +253,11 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
             elapsed = int(getattr(settings, "generation_elapsed", 0))
             row = col.row()
             row.scale_y = 1.5
-            row.label(text=f"Working… {elapsed}s", icon='SORTTIME')
+            if settings.batch_total:
+                row.label(text=f"Working… {settings.batch_done} of {settings.batch_total}"
+                               f" characters · {elapsed}s", icon='SORTTIME')
+            else:
+                row.label(text=f"Working… {elapsed}s", icon='SORTTIME')
             col.operator("animatica.cancel", icon='X', text="Cancel")
             # How long to expect, from the start: the cloud scales to zero
             # between generations, and the first after an idle spell waits
@@ -304,8 +308,10 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
 
         _draw_prompt(layout, settings, has_prompt, in_preview)
 
+        from . import batch
+        batch_waiting = bool(batch.pending(settings))
         gen = layout.column(align=True)
-        gen.enabled = not blockers
+        gen.enabled = not blockers and not batch_waiting
         row = gen.row()
         row.scale_y = 1.5
         # Every run is a new take (seed 0), so "again" is what it does.
@@ -322,6 +328,7 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
         if not in_preview:
             _draw_next_take(layout, context)
             _draw_kept(layout, arm_live)
+        _draw_batch(layout, context, settings)
         examples.draw_status(layout)
 
         # An example's character may need attribution; this is where the file
@@ -403,6 +410,56 @@ def _draw_character(layout, context, settings) -> None:
         # Follow Selection: the focused character becomes this one.
         row.prop(settings, "follow_active", text="", icon='RESTRICT_SELECT_OFF')
         row.operator("animatica.import_canonical_skeleton", text="", icon='IMPORT')
+
+
+def _draw_batch(layout, context, settings) -> None:
+    """Several characters at once: generate them together, or review their takes."""
+    from . import batch
+
+    names = batch.pending(settings)
+    failed = batch.failures(settings)
+    if names or failed:
+        box = layout.box()
+        n = len(names)
+        box.label(text=f"Batch · {n} take{'' if n == 1 else 's'} to review" if n
+                  else "Batch · no takes made")
+        col = box.column(align=True)
+        col.active = False
+        for name in names[:6]:
+            col.label(text=name, icon='ARMATURE_DATA')
+        if n > 6:
+            col.label(text=f"+{n - 6} more")
+        for line in failed[:3]:
+            row = box.row()
+            row.alert = True
+            row.label(text=line, icon='ERROR')
+        row = box.row(align=True)
+        row.scale_y = 1.3
+        row.operator("animatica.accept_batch", icon='CHECKMARK')
+        row.operator("animatica.reject_batch", icon='X')
+        return
+
+    chars = batch.selected_characters(context)
+    if len(chars) < 2 or settings.is_previewing:
+        return
+    box = layout.box()
+    box.label(text=f"{len(chars)} characters selected", icon='COMMUNITY')
+    box.row().prop(settings, "batch_direction", expand=True)
+    note = box.column(align=True)
+    note.active = False
+    active = properties._live_armature(settings.target_armature)
+    if settings.batch_direction == 'SHARED':
+        note.label(text=f"{active.name}'s prompts, a new seed each" if active
+                   else "Set a character to share its prompts")
+    else:
+        note.label(text="Each with its own prompts, poses and waypoints")
+    row = box.row()
+    row.scale_y = 1.3
+    row.operator("animatica.generate_batch", text=f"Generate {len(chars)} Characters",
+                 icon='PLAY')
+    note = box.row()
+    note.active = False
+    note.label(text=f"{len(chars)} generations")
 
 
 def _draw_take_options(layout, context, settings, model, in_preview) -> None:
