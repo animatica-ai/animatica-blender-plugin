@@ -73,20 +73,6 @@
       "sha256": "8697596dc4cd86afe0e69d01f810f7457951bd485d2edf2072625b597d6ce632"
     },
     {
-      "id": "kick-ball",
-      "title": "Kick the ball",
-      "tier": 3,
-      "seconds": 2.0,
-      "lesson": "Pins work on feet too. The foot meets the ball at the pinned frame; move the ball and its pin together to kick somewhere else.",
-      "prompt": "a person kicks a ball with their right foot",
-      "character": "Animatica Hero",
-      "credit": "",
-      "file": "kick-ball.782d4f76.blend",
-      "url": "",
-      "size": 12564312,
-      "sha256": "782d4f76ffb6faed1d449207b24857ba5e91aa3b98dc6060fea3faf1a7853b51"
-    },
-    {
       "id": "strike-pose",
       "title": "Walk and strike a pose",
       "tier": 3,
@@ -127,48 +113,6 @@
       "url": "",
       "size": 12556381,
       "sha256": "c500d084b486f8f8650df72bb45e1917e260af18e82d2697e5878d8e41c91572"
-    },
-    {
-      "id": "pistol",
-      "title": "Aim and fire a pistol",
-      "tier": 3,
-      "seconds": 4.25,
-      "lesson": "A prop in the hand is just parented to the hand bone, so it follows whatever you generate. The blocks do the rest: raise, fire, lower.",
-      "prompt": "a person stands still with arms relaxed at their sides \u2192 a person raises a pistol with their right hand and aims forward \u2192 a person fires a pistol twice \u2192 a person lowers both arms to their sides and relaxes",
-      "character": "Animatica Hero",
-      "credit": "",
-      "file": "pistol.13036139.blend",
-      "url": "",
-      "size": 12556343,
-      "sha256": "13036139455378a60a61c28cebf0041252fc7fd0732f90a167e8b3f93daadb3e"
-    },
-    {
-      "id": "sword",
-      "title": "Sword combo",
-      "tier": 3,
-      "seconds": 4.0,
-      "lesson": "A combo is a block per strike. Retime a block to make a strike faster or slower, or add one.",
-      "prompt": "a person slashes a sword from right to left \u2192 a person slashes a sword from left to right \u2192 a person thrusts a sword forward",
-      "character": "Animatica Hero",
-      "credit": "",
-      "file": "sword.7a00fdd2.blend",
-      "url": "",
-      "size": 12558199,
-      "sha256": "7a00fdd2d3e00e92697a90006d56a1ae3ed924298073c4667d61a79d0d8cd6c0"
-    },
-    {
-      "id": "rifle",
-      "title": "Walk, then aim a rifle",
-      "tier": 4,
-      "seconds": 4.0,
-      "lesson": "Two hands on one prop: the rifle rides the right hand and aims at the left, so it sits in both hands whatever you generate.",
-      "prompt": "a person walks forward holding a rifle \u2192 a person stops and aims a rifle \u2192 a person holds a rifle aimed forward",
-      "character": "Animatica Hero",
-      "credit": "",
-      "file": "rifle.2a4f5d2d.blend",
-      "url": "",
-      "size": 12559666,
-      "sha256": "2a4f5d2d5d143f0f382de6cdf15413de56151ffb6064944031f06a8f528721ec"
     },
     {
       "id": "walk-sit",
