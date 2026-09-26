@@ -284,7 +284,10 @@ def _target_armature_update(self, context):
     if _in_target_reset:
         return
 
-    settings = context.scene.animatica
+    # The settings whose picker changed, not the active scene's: a rig set in
+    # one scene (an import run for another scene, a script) cleared the
+    # preview of whichever scene happened to be on screen.
+    settings = self
     new_arm = _live_armature(settings.target_armature)
     old_arm = _live_armature(settings.previous_target_armature)
 
