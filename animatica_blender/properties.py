@@ -18,6 +18,23 @@ from bpy.types import AddonPreferences, PropertyGroup
 
 from . import autoposer
 from .autoposer import prefs as autoposer_prefs
+from .hand_pose import STYLES as _hand_pose_items
+
+
+def _on_hand_pose(settings, context):
+    """Show a changed hand pose at once: on the preview if there is one, else on the rig."""
+    from . import hand_pose
+
+    arm = _live_armature(settings.target_armature)
+    if arm is None:
+        return
+    ad = arm.animation_data
+    action = ad.action if ad is not None else None
+    if settings.is_previewing and action is not None:
+        lo, hi = (int(v) for v in action.frame_range)
+        hand_pose.apply(arm, action, settings, (lo, hi))
+    else:
+        hand_pose.show(arm, settings)
 
 
 # ---------------------------------------------------------------------------
@@ -737,6 +754,27 @@ class AnimaticaSettings(PropertyGroup):
             "poses and paths you authored. Typical range 1–3"
         ),
         default=2.0, min=0.0, max=5.0, step=10,
+    )
+
+    hand_pose_left: EnumProperty(
+        name="Left hand",
+        description=(
+            "The left hand's fingers, laid over every generation — the model "
+            "has none of its own and leaves them dead straight"
+        ),
+        items=_hand_pose_items,
+        default='RELAXED',
+        update=lambda self, context: _on_hand_pose(self, context),
+    )
+    hand_pose_right: EnumProperty(
+        name="Right hand",
+        description=(
+            "The right hand's fingers, laid over every generation — the model "
+            "has none of its own and leaves them dead straight"
+        ),
+        items=_hand_pose_items,
+        default='RELAXED',
+        update=lambda self, context: _on_hand_pose(self, context),
     )
 
     post_processing: BoolProperty(

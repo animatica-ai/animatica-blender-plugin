@@ -501,6 +501,12 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
             row.prop(settings, "pose_tightness", slider=True)
             row.prop(settings, "pose_details", text="", icon='OPTIONS')
 
+        # --- the hands: the model has no fingers, so they are chosen here ---
+        row = layout.row(align=True)
+        row.label(text="Hands", icon='VIEW_PAN')
+        row.prop(settings, "hand_pose_left", text="")
+        row.prop(settings, "hand_pose_right", text="")
+
         # --- what is drawn --------------------------------------------------
         layout.separator()
         col = layout.column(align=True)
