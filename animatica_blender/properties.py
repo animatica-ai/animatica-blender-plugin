@@ -36,8 +36,10 @@ def _on_hand_pose(settings, context):
     ad = arm.animation_data
     action = ad.action if ad is not None else None
     if settings.is_previewing and action is not None:
+        from . import preview_session
         lo, hi = (int(v) for v in action.frame_range)
-        hand_pose.apply(arm, action, settings, (lo, hi))
+        with preview_session.keeping_edits(action):     # the take's keys, not edits
+            hand_pose.apply(arm, action, settings, (lo, hi))
     else:
         hand_pose.show(arm, settings)
 
@@ -315,10 +317,19 @@ def _target_armature_update(self, context):
         except ReferenceError:
             pass
 
-    # Preview / Accept-Reject bookkeeping is tied to the rig that was baked,
-    # so switching rigs always invalidates it.
-    settings.is_previewing = False
-    settings.source_action_name = ""
+    # Preview / Accept-Reject bookkeeping is tied to the rig that was baked.
+    # A take left waiting on the old rig stays there (its session keeps the
+    # user's action alive and knows how to restore it) and comes back for
+    # review when that rig is picked again. Clearing it stranded the take:
+    # no Reject, and the user's action lost on the next save.
+    from . import preview_session
+    waiting = preview_session.get(new_arm)
+    if waiting is not None and not new_arm.get("animatica_batch_take"):
+        settings.is_previewing = True
+        settings.source_action_name = waiting.get("source", "")
+    else:
+        settings.is_previewing = False
+        settings.source_action_name = ""
 
     load_blocks_from_armature(new_arm, settings)
     settings.previous_target_armature = new_arm

@@ -98,14 +98,17 @@ def _build_regen_request_action(
 ) -> tuple[bpy.types.Action | None, list[bpy.types.Action]]:
     """Scratch action merging ``preview`` edits into ``src`` for request build.
 
+    Only the artist's edits come over (see preview_session.edits), not the
+    take's own keys: its KEYFRAME-typed keys on the user's key frames hold the
+    model's pose, and merging them overwrote the user's keys with it.
+
     Does not mutate ``src`` or ``preview``. Caller removes the returned
     temporaries (including the scratch) when done.
     """
-    preview_work = preview.copy()
-    constraints_ui.strip_generated_keyframe_points(preview_work)
+    from . import preview_session
     scratch = src.copy()
-    constraints_ui.merge_preview_keyframes_into_source(scratch, preview_work)
-    return scratch, [preview_work]
+    preview_session.apply_edits(preview_session.edits(preview), scratch)
+    return scratch, []
 
 
 MOTION_ACTION_PREFIX = "Animatica_Motion"
@@ -326,19 +329,21 @@ def _apply_inplace_constraint(armature_obj, enabled: bool) -> None:
     action = ad.action if ad is not None else None
     if action is None:
         return
-    from . import root_edit
+    from . import preview_session, root_edit
     edited = root_edit.find(action) is not None
-    if not enabled:
-        if inplace.applied_mode(action) == "in_place":
-            inplace.restore(armature_obj, action)
-        if edited and inplace.applied_mode(action) is None and _is_motion_bake_action(action):
-            # off, with an edited path: the take goes along it
-            inplace.apply(armature_obj, action, bpy.context.scene,
-                          _inplace_spans(armature_obj, action), mode="repath")
-        return
-    if inplace.applied_mode(action) == "in_place" or not _is_motion_bake_action(action):
-        return
-    inplace.apply(armature_obj, action, bpy.context.scene, _inplace_spans(armature_obj, action))
+    # The root keys this rewrites are the take's, not edits of the artist's.
+    with preview_session.keeping_edits(action):
+        if not enabled:
+            if inplace.applied_mode(action) == "in_place":
+                inplace.restore(armature_obj, action)
+            if edited and inplace.applied_mode(action) is None and _is_motion_bake_action(action):
+                # off, with an edited path: the take goes along it
+                inplace.apply(armature_obj, action, bpy.context.scene,
+                              _inplace_spans(armature_obj, action), mode="repath")
+            return
+        if inplace.applied_mode(action) == "in_place" or not _is_motion_bake_action(action):
+            return
+        inplace.apply(armature_obj, action, bpy.context.scene, _inplace_spans(armature_obj, action))
 
 
 def _keep_inplace(armature_obj, actions) -> None:
@@ -624,10 +629,33 @@ def anchor_frames_for(req: dict, src_action, gen_start: int, gen_end: int):
     return anchor_bones if anchor_bones else anchor_frames
 
 
-def bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int, gen_end: int,
-              anchor_frames=None, splice_target=None, server_looped: bool = False,
-              source_action_name: str = "", sample_index: int = 0) -> tuple:
+def bake_take(context, settings, arm, result, **bake) -> tuple:
     """Bake one generation's result onto *arm* as a take. Returns (action, skipped joints).
+
+    The first take on a character opens its preview session (see
+    preview_session): what Reject puts back. If that first bake fails, the
+    rig goes back to where it was -- its own action active, not an empty
+    take with nothing to Reject.
+    """
+    from . import preview_session
+    src_name = bake.get("source_action_name") or ""
+    opened = preview_session.begin(
+        context, arm, bpy.data.actions.get(src_name) if src_name else None)
+    try:
+        action, skipped = _bake_take(context, settings, arm, result, **bake)
+    except Exception:
+        if opened:
+            preview_session.abort(context, arm)
+        raise
+    # What the take baked, so Reject can tell the artist's edits from it.
+    preview_session.record_baseline(action)
+    return action, skipped
+
+
+def _bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int, gen_end: int,
+               anchor_frames=None, splice_target=None, server_looped: bool = False,
+               source_action_name: str = "", sample_index: int = 0) -> tuple:
+    """The bake itself, for :func:`bake_take`.
 
     Everything a take gets between the server's answer and the preview, for one
     character: the bake (or an in-place splice), the authored keys either side
@@ -666,6 +694,12 @@ def bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int, 
         and _action_has_keys_outside(splice_target, gen_start, gen_end)
     )
     if spliced:
+        # What Reject puts back: the action as it was, keys in the window and all.
+        from . import preview_session
+        preview_session.backup_before_splice(arm, splice_target)
+        # A take spliced over one (a regenerate) is recorded afresh after the
+        # bake: the old record would read every new key as the artist's.
+        preview_session.forget_baseline(splice_target)
         # keyframe writes go through animation_data.action, so the target has
         # to be the active one.
         arm.animation_data.action = splice_target
@@ -680,8 +714,13 @@ def bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int, 
         )
         action = splice_target
         # Accept and Reject both need to know this was an in-place edit: there
-        # is nothing to push, and nothing to restore from.
+        # is nothing to push, and Reject restores the copy kept above.
         arm["animatica_spliced_in_place"] = True
+        # A cycle the action was once made into is not one now a stretch of it
+        # was rewritten; the marker would still label it a seamless loop and
+        # make In place read it as one. (Reject's copy keeps it.)
+        if "animatica_loop" in action:
+            del action["animatica_loop"]
     else:
         action = gltf_to_blender.bake_gltf_to_armature(
             result,
@@ -743,6 +782,10 @@ def bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int, 
             cycle = done["frames"]
             context.scene.frame_start = gen_start
             context.scene.frame_end = gen_start + cycle - 1
+            # Reject puts the scene's own range back.
+            from . import preview_session
+            preview_session.update(arm, loop_range=[int(context.scene.frame_start),
+                                                    int(context.scene.frame_end)])
             print(f"[animatica] loop: {cycle} frames, seam {done['seam_deg']:.1f} deg, "
                   f"turned {done['turned_deg']:.1f} deg straight")
 
@@ -774,6 +817,9 @@ class ANIMATICA_OT_generate(Operator):
         "Make motion from the prompts on the Timeline and the poses you keyed. "
         "Each run is a new take unless you lock a seed in Settings"
     )
+    # One undo step for the take, pushed when the bake finishes: Ctrl+Z after
+    # a generation goes back to before it, not one step further.
+    bl_options = {'REGISTER', 'UNDO'}
 
     _timer = None
     _thread: threading.Thread | None = None
@@ -822,6 +868,7 @@ class ANIMATICA_OT_generate(Operator):
         self._regen_scratch_actions = []
         self._regen_src = None
         self._regen_preview = None
+        self._regen_edits = []
 
         src_name = settings.source_action_name
         if src_name:
@@ -837,6 +884,13 @@ class ANIMATICA_OT_generate(Operator):
                     if arm.animation_data and arm.animation_data.action
                     else None
                 )
+                # Keys the artist added or changed on the take showing are
+                # theirs: onto what Reject restores, and typed as theirs so the
+                # request follows them and a splice keeps them. (Typed over a
+                # generated key they stayed GENERATED, and were thrown away.)
+                from . import preview_session
+                self._regen_edits = preview_session.edits(preview)
+                preview_session.fold_edits(arm, preview)
                 if (
                     preview is not None
                     and preview is not src
@@ -847,6 +901,11 @@ class ANIMATICA_OT_generate(Operator):
                     self._regen_src = src
                     self._regen_preview = preview
                     arm.animation_data.action = scratch
+                    # The new take is made against the user's action, as the
+                    # first was: splicing it into the preview (which carries
+                    # the user's keys either side) marked the take an in-place
+                    # edit, and Reject then never gave the user's action back.
+                    self._splice_target = src
                 else:
                     arm.animation_data.action = src
 
@@ -870,7 +929,12 @@ class ANIMATICA_OT_generate(Operator):
         self._server_looped = bool((req.get("options") or {}).get("loop"))
         if (getattr(settings, "loop", False) and not self._server_looped
                 and (model_caps or {}).get("supports_loop")):
-            self.report({'WARNING'}, "Loop needs a single prompt block; generating without it")
+            gen_range = request_builder.compute_frame_range(settings.prompt_blocks, arm, context.scene)
+            if request_builder.will_splice(arm, gen_range):
+                self.report({'WARNING'}, "Loop is off for a generation into a gap between "
+                                         "your keys; generating without it")
+            else:
+                self.report({'WARNING'}, "Loop needs a single prompt block; generating without it")
 
         # Save the source action for Accept / Reject (no-op if already saved).
         _stash_source_action_name(settings, arm)
@@ -1001,14 +1065,15 @@ class ANIMATICA_OT_generate(Operator):
                 source_action_name=settings.source_action_name,
             )
 
-            # Fold preview-time edits onto the real source now that the bake
-            # succeeded — deferred from execute so a failed POST/bake cannot
-            # corrupt the user's action.
+            # The artist's edits on the take replaced are on the source already
+            # (execute); again here for a take from an older version, which
+            # has no session to fold them into. The replaced take goes.
             if self._regen_src is not None and self._regen_preview is not None:
-                constraints_ui.strip_generated_keyframe_points(self._regen_preview)
-                constraints_ui.merge_preview_keyframes_into_source(
-                    self._regen_src, self._regen_preview,
-                )
+                from . import preview_session
+                preview_session.apply_edits(getattr(self, "_regen_edits", []), self._regen_src)
+                old = self._regen_preview
+                if old is not action and old.users == 0 and not old.use_fake_user:
+                    bpy.data.actions.remove(old)
                 self._clear_regen_state()
         except Exception as exc:                         # noqa: BLE001 — surfaced to UI
             self._cleanup(context)
@@ -1066,11 +1131,15 @@ class ANIMATICA_OT_generate(Operator):
         self._clear_regen_state()
 
         if not preview:
-            still_previewing = (
-                arm is not None
-                and arm.animation_data is not None
-                and arm.animation_data.action is not None
-                and _is_motion_bake_action(arm.animation_data.action)
+            from . import preview_session
+            still_previewing = arm is not None and (
+                # a take spliced into the user's action is not a motion bake
+                preview_session.get(arm) is not None
+                or (
+                    arm.animation_data is not None
+                    and arm.animation_data.action is not None
+                    and _is_motion_bake_action(arm.animation_data.action)
+                )
             )
             if not still_previewing:
                 s.source_action_name = ""
@@ -1121,11 +1190,17 @@ class ANIMATICA_OT_accept(Operator):
         "Keep this take. It moves to the NLA track 'Animatica: Motion', "
         "replacing the take kept before; your own keys stay"
     )
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        s = context.scene.animatica
+        return s.is_previewing and not s.is_generating
 
     def execute(self, context):
         s = context.scene.animatica
         arm = _live_target_armature_or_clear(s)
-        from . import variations
+        from . import preview_session, variations
         variations.forget(arm)
 
         if arm is not None:
@@ -1139,6 +1214,12 @@ class ANIMATICA_OT_accept(Operator):
                 _drop_legacy_inplace_constraint(arm)
                 if "animatica_pending_block_ranges" in arm:
                     del arm["animatica_pending_block_ranges"]
+                # The take's frames stay typed GENERATED, so the next request
+                # does not read them as key poses; a later Reject restores its
+                # own copy of the action, which has them, instead of stripping
+                # GENERATED keys. Keys the artist typed over them are theirs.
+                preview_session.promote_edits(arm.animation_data.action)
+                preview_session.finish(context, arm, accepted=True)
                 s.source_action_name = ""
                 s.is_previewing = False
                 _clear_quota_state(s)
@@ -1164,6 +1245,8 @@ class ANIMATICA_OT_accept(Operator):
             )
 
             actions_to_push: list = []
+            preview_session.promote_edits(preview_action)
+            preview_session.forget_baseline(preview_action)
 
             # In place: the take is already in place if the toggle was on
             # while it showed; make sure of it before it is split into blocks.
@@ -1204,6 +1287,7 @@ class ANIMATICA_OT_accept(Operator):
 
             if "animatica_pending_block_ranges" in arm:
                 del arm["animatica_pending_block_ranges"]
+            preview_session.finish(context, arm, accepted=True)
 
         s.source_action_name = ""
         s.is_previewing = False
@@ -1218,11 +1302,19 @@ class ANIMATICA_OT_reject(Operator):
         "Throw this take away and go back to what you had. Your own keys, "
         "including any you added while previewing, stay"
     )
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        # Nothing previewing, nothing to throw away: run anyway (F3, a
+        # script) it detached the user's own action.
+        s = context.scene.animatica
+        return s.is_previewing and not s.is_generating
 
     def execute(self, context):
         s   = context.scene.animatica
         arm = _live_target_armature_or_clear(s)
-        from . import root_edit, variations
+        from . import preview_session, root_edit, variations
         variations.forget(arm)
         root_edit.discard_all()
         if arm is None:
@@ -1235,11 +1327,11 @@ class ANIMATICA_OT_reject(Operator):
         if arm.animation_data is None:
             arm.animation_data_create()
 
-        # ``source`` is the pre-generation action stashed by Generate. After
-        # stripping generated samples from the preview we merge the survivors
-        # onto ``source`` and assign it, so channels that only had generated
-        # keys still evaluate from the original curves (avoids T-pose).
-        source = bpy.data.actions.get(s.source_action_name) if s.source_action_name else None
+        # ``source`` is the pre-generation action stashed by Generate (kept by
+        # the preview session, which survives a change of rig). It goes back
+        # on the rig as it was, with the artist's preview edits added.
+        source = preview_session.source_of(arm) or (
+            bpy.data.actions.get(s.source_action_name) if s.source_action_name else None)
         preview = (
             arm.animation_data.action
             if arm.animation_data and arm.animation_data.action
@@ -1263,40 +1355,62 @@ class ANIMATICA_OT_reject(Operator):
         if "animatica_pending_block_ranges" in arm:
             del arm["animatica_pending_block_ranges"]
 
+        # The keys the artist added or changed while the take showed: they
+        # stay, whatever else goes (see preview_session.edits).
+        kept = preview_session.edits(preview)
+
         if arm.get("animatica_spliced_in_place"):
-            # The generated frames were written into the user's action; undo
-            # is simply removing them again. They are tagged GENERATED and the
-            # surrounding keys are not, so the gap comes back exactly.
+            # The generated frames were written into the user's action. The
+            # copy kept before the splice goes back in its place: the window's
+            # old keys, the handles either side, no curves the take added.
+            # (Stripping GENERATED keys instead took accepted takes with it,
+            # and could not bring back what the splice had replaced.)
             del arm["animatica_spliced_in_place"]
-            removed = constraints_ui.strip_generated_keyframe_points(
-                preview, promote_unauthored=False,
-            )
+            restored = preview_session.restore_backup(arm)
+            if restored is not None:
+                preview_session.apply_edits(kept, restored)
+                removed = None
+            else:   # spliced by an older version: no copy
+                removed = constraints_ui.strip_generated_keyframe_points(
+                    preview, promote_unauthored=False,
+                )
+            name = arm.animation_data.action.name if arm.animation_data.action else ""
+            preview_session.finish(context, arm, accepted=False)
             s.source_action_name = ""
             s.is_previewing = False
             _clear_quota_state(s)
             self.report({'INFO'},
-                        f"Removed {removed} generated sample(s); "
-                        f"'{preview.name}' is back as it was")
+                        (f"Removed {removed} generated sample(s); " if removed is not None else "")
+                        + f"'{name}' is back as it was")
             return {'FINISHED'}
 
         n_rm = 0
         if is_motion_preview:
-            # Widen authored frames to the whole body only when the preview is
-            # about to become the action outright; when ``source`` is restored it
-            # already carries the user's keys, and promoting here would merge the
-            # generated pose into them.
-            n_rm = constraints_ui.strip_generated_keyframe_points(
-                preview, promote_unauthored=(source is None),
-            )
             if source is not None:
-                constraints_ui.merge_preview_keyframes_into_source(source, preview)
+                # The user's action as it was, plus their edits. Nothing else
+                # of the preview comes over: its KEYFRAME-typed keys on the
+                # user's key frames hold the model's values, and copying them
+                # back overwrote the user's keys (and added channels to bones
+                # they never keyed).
+                n_rm = sum(len(fc.keyframe_points)
+                           for fc in constraints_ui.iter_action_fcurves(preview)) - len(kept)
+                preview_session.apply_edits(kept, source)
                 arm.animation_data.action = source
             else:
+                # Widen authored frames to the whole body only when the preview
+                # is about to become the action outright.
+                n_rm = constraints_ui.strip_generated_keyframe_points(
+                    preview, promote_unauthored=True,
+                )
                 arm.animation_data.action = preview
         else:
             # Unexpected: preview isn't a motion bake. Fall back to assigning
             # whatever ``source`` we have (or detach if none).
             arm.animation_data.action = source
+
+        # The pose of every bone no key drives, the scene's frame range, the
+        # source's own fake-user flag: back as they were before Generate.
+        preview_session.finish(context, arm, accepted=False)
 
         # Drop motion-bake orphans. Multi-block bakes mark each per-block
         # action with ``use_fake_user`` so Blender doesn't purge them while
@@ -1318,7 +1432,7 @@ class ANIMATICA_OT_reject(Operator):
         if is_motion_preview and source is not None:
             self.report(
                 {'INFO'},
-                f"Restored {source.name!r}; merged authored keys, "
+                f"Restored {source.name!r}; kept {len(kept)} key(s) you edited, "
                 f"removed {n_rm} generated sample(s)",
             )
         elif is_motion_preview:

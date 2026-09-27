@@ -311,11 +311,9 @@ class ANIMATICA_OT_generate_batch(Operator):
                 # Its variations, to flip through in the review.
                 variations.remember(arm, result, action,
                                     splice_target_name=job.splice_target_name, **bake)
-                source = bpy.data.actions.get(job.source_name)
-                if source is not None:
-                    # Kept alive while the take waits: nothing else uses it,
-                    # and a save in between would drop it.
-                    source.use_fake_user = True
+                # The source is kept alive while the take waits (a fake user,
+                # given by the take's preview session, and taken back by the
+                # Accept / Reject that ends it).
                 arm[_PENDING_KEY] = json.dumps({"source": job.source_name})
                 settings.batch_pending = json.dumps(
                     [n for n in pending(settings) if n != job.name] + [job.name])
@@ -370,9 +368,12 @@ def _review(context, op_name: str, names: list | None = None) -> int:
         settings.target_armature = arm          # swaps in its blocks, clears the flags
         settings.source_action_name = info.get("source", "")
         settings.is_previewing = True
+        from . import preview_session
+        legacy = preview_session.get(arm) is None
         getattr(bpy.ops.animatica, op_name)()
         source = bpy.data.actions.get(info.get("source", ""))
-        if source is not None:
+        if legacy and source is not None:
+            # A take from an older version, which set the fake user itself.
             source.use_fake_user = False
         if _PENDING_KEY in arm:
             del arm[_PENDING_KEY]
