@@ -52,12 +52,22 @@ _pending: dict = {"at": None}
 
 # --- finding it -----------------------------------------------------------------------
 
-def find(action):
-    """The curve holding *action*'s edited root trajectory, or None."""
+def _in_scene(obj, scene=None) -> bool:
+    """Is *obj* in a collection of the scene (not left over, linked nowhere)?"""
+    if not obj.users_collection:
+        return False
+    scene = scene or getattr(bpy.context, "scene", None)
+    return scene is None or scene.objects.get(obj.name) == obj
+
+
+def find(action, scene=None):
+    """The curve holding *action*'s edited root trajectory, or None. Only one
+    in the scene counts: a curve linked nowhere cannot be edited or seen."""
     if action is None:
         return None
     for obj in bpy.data.objects:
-        if obj.type == 'CURVE' and obj.get(OWNER_PROP) is not None and obj.get(OWNER_PROP) == action:
+        if (obj.type == 'CURVE' and obj.get(OWNER_PROP) is not None and obj.get(OWNER_PROP) == action
+                and _in_scene(obj, scene)):
             return obj
     return None
 
@@ -85,11 +95,27 @@ def discard_all() -> None:
 
 
 def purge() -> None:
-    """Remove curves whose take has gone (a rejected or replaced preview)."""
+    """Remove curves whose take has gone (a rejected or replaced preview), and
+    any left linked in no collection at all."""
     for obj in [o for o in bpy.data.objects if o.type == 'CURVE' and OWNER_PROP in o]:
         owner = obj.get(OWNER_PROP)
-        if owner is None or getattr(owner, "users", 0) == 0:
+        if (owner is None or getattr(owner, "users", 0) == 0 or not obj.users_collection) \
+                and obj.library is None:
             _remove(obj)
+
+
+def _editable(coll) -> bool:
+    return coll is not None and coll.library is None and coll.override_library is None
+
+
+def _home(arm, scene):
+    """Where the curve goes: beside the rig, when that collection can be
+    changed; else the scene's own (a rig linked or overridden from a library
+    sits in a collection that cannot take a new object)."""
+    for coll in arm.users_collection:
+        if coll == scene.collection or (_editable(coll) and coll in scene.collection.children_recursive):
+            return coll
+    return scene.collection
 
 
 # --- building it ----------------------------------------------------------------------
@@ -123,13 +149,26 @@ def _knots(xy):
 def create(arm, action, scene):
     """Turn the take's root trajectory into an editable curve, or return the one
     it already has. None when there is nothing to edit (on the spot)."""
-    obj = find(action)
+    obj = find(action, scene)
     if obj is not None:
         return obj
     purge()
     from . import inplace
     spans = inplace.fitted_path(arm, action, scene)
     curve = bpy.data.curves.new("Root Trajectory", 'CURVE')
+    try:
+        return _build(arm, action, scene, spans, curve)
+    except Exception:
+        # nothing half made is left behind: a curve linked nowhere still
+        # answered find(), and the take could not be edited again
+        for obj in [o for o in bpy.data.objects if o.data == curve]:
+            bpy.data.objects.remove(obj, do_unlink=True)
+        if curve.users == 0:
+            bpy.data.curves.remove(curve)
+        raise
+
+
+def _build(arm, action, scene, spans, curve):
     curve.dimensions = '3D'
     curve.resolution_u = 24
     meta = []
@@ -159,8 +198,7 @@ def create(arm, action, scene):
     obj[OWNER_PROP] = action
     obj[SPANS_PROP] = json.dumps({"spans": meta})
     obj.show_in_front = True
-    coll = arm.users_collection[0] if arm.users_collection else scene.collection
-    coll.objects.link(obj)
+    _home(arm, scene).objects.link(obj)
     return obj
 
 
@@ -271,13 +309,15 @@ def refresh(scene, *, reuse: bool = True) -> None:
         key_poses.request_root_refresh()
         return
     key_poses._baking = True
+    from . import preview_session
     try:
-        if mode == "in_place":
-            inplace.apply(arm, action, scene, operators._inplace_spans(arm, action), reuse=reuse)
-        elif edited:
-            inplace.apply(arm, action, scene, operators._inplace_spans(arm, action), reuse=reuse, mode="repath")
-        else:
-            inplace.restore(arm, action)              # re-pathed, and the curve is gone
+        with preview_session.keeping_edits(action):   # the take's keys, not the artist's edits
+            if mode == "in_place":
+                inplace.apply(arm, action, scene, operators._inplace_spans(arm, action), reuse=reuse)
+            elif edited:
+                inplace.apply(arm, action, scene, operators._inplace_spans(arm, action), reuse=reuse, mode="repath")
+            else:
+                inplace.restore(arm, action)              # re-pathed, and the curve is gone
     finally:
         key_poses._baking = False
     key_poses.request_rebuild()

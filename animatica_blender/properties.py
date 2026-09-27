@@ -36,8 +36,10 @@ def _on_hand_pose(settings, context):
     ad = arm.animation_data
     action = ad.action if ad is not None else None
     if settings.is_previewing and action is not None:
+        from . import preview_session
         lo, hi = (int(v) for v in action.frame_range)
-        hand_pose.apply(arm, action, settings, (lo, hi))
+        with preview_session.keeping_edits(action):     # the take's keys, not edits
+            hand_pose.apply(arm, action, settings, (lo, hi))
     else:
         hand_pose.show(arm, settings)
 
@@ -315,10 +317,24 @@ def _target_armature_update(self, context):
         except ReferenceError:
             pass
 
-    # Preview / Accept-Reject bookkeeping is tied to the rig that was baked,
-    # so switching rigs always invalidates it.
-    settings.is_previewing = False
-    settings.source_action_name = ""
+    # Preview / Accept-Reject bookkeeping is tied to the rig that was baked.
+    # A take left waiting on the old rig stays there (its session keeps the
+    # user's action alive and knows how to restore it) and comes back for
+    # review when that rig is picked again. Clearing it stranded the take:
+    # no Reject, and the user's action lost on the next save.
+    from . import preview_session
+    if preview_session._copied_from(new_arm, preview_session.get(new_arm) or {}):
+        # A duplicate of a character whose take waits: that take is not this one's.
+        preview_session.drop(new_arm, "a copy of another character's")
+    waiting = preview_session.get(new_arm)
+    if waiting is not None and not new_arm.get("animatica_batch_take"):
+        preview_session.owner_name(new_arm)
+        src = preview_session.source_of(new_arm)
+        settings.is_previewing = True
+        settings.source_action_name = src.name if src is not None else ""
+    else:
+        settings.is_previewing = False
+        settings.source_action_name = ""
 
     load_blocks_from_armature(new_arm, settings)
     settings.previous_target_armature = new_arm
@@ -602,7 +618,8 @@ class AnimaticaAddonPreferences(AddonPreferences):
         layout = self.layout
 
         # --- This build -------------------------------------------------------
-        updater.check_async()
+        if mmcp_client.online_access():
+            updater.check_async()
         updater.draw_preferences(layout, context)
 
         # --- Account ----------------------------------------------------------
@@ -637,7 +654,10 @@ class AnimaticaAddonPreferences(AddonPreferences):
         if caps is None:
             mmcp_client.connect_async()
             err = mmcp_client.last_connection_error()
-            if mmcp_client.connecting() or not err:
+            if err == mmcp_client.OFFLINE_MESSAGE:
+                row.label(text=err, icon='INTERNET_OFFLINE')
+                row.label(text="")
+            elif mmcp_client.connecting() or not err:
                 row.label(text="Connecting…", icon='SORTTIME')
                 row.label(text="")              # keep the split's second column filled
             else:

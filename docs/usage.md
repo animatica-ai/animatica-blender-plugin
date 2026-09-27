@@ -8,189 +8,123 @@
 2. In the 3D View, open the **N** panel → **Animatica** tab — it connects on
    its own
 
-## Choose your character
+The tab has four panels, top to bottom:
 
-**Starting fresh?**  
-Click **Add Ready-Made Character** in the **Animatica** panel, then animate
-that character. You can switch to your own later once you're comfortable.
+- **Animatica** — the shot: model, character, prompt, Generate, and the review
+- **Pose** — the character's pose: the Autoposer, Set Keyframe, fingers
+- **Constraints** — waypoints (where to stand, when) and pins (a hand or foot held in place)
+- **Settings** — set once and left alone, with **Viewport**, **Posing** and **Advanced** inside
 
-**Already have an armature?**  
-Select it in the viewport, or pick it under **or animate your own rig**. The
-**Model** and **Armature** stay at the top of the Animatica panel, so you can
-change either at any time.
+## The Animatica panel
 
-**Several characters?**  
-Select the one to animate — its armature or its body — and it becomes
-Animatica's character, with its own prompts and key poses (**Follow
-Selection**, the toggle next to the Armature field). While a take is being made
-or reviewed, the character stays until you Accept or Reject.
+### Model and character
 
-With **Animatica Cloud**, you can also generate onto many custom armatures — not
-only the imported skeleton.
+The **Model** and **Armature** are always at the top, so you can change either
+at any time.
 
-## Direct the motion
+**Starting fresh?**
+Click **Add Ready-Made Character**, then animate that character. It downloads
+the first time. You can switch to your own rig later.
 
-Use any combination that fits your shot:
+**Already have an armature?**
+Pick it under **or animate your own rig**, or in the **Armature** field.
 
-| Tool | What it does |
-|---|---|
-| **Prompt** | What the character does (e.g. "walks forward sadly"). The sidebar shows the selected block's prompt; more blocks go on the Timeline |
-| **Key poses** | Pose your character and press **Set Keyframe** — the motion is made to pass through each pose |
-| **Waypoints** | **Add Waypoint** at a frame, then drag the circle to where the character should stand then |
-| **Pins** | **Add Pin** holds a hand or foot on an empty, so it stays on an object |
+**Want to see a finished shot first?**
+The file icon in the panel's header opens an **example scene**: a character on
+a set, with the prompt already in place, ready for **Generate Motion**. The
+examples climb from a single gesture to a sequence of key poses. Opening one
+asks first, because it replaces your current file; it opens with scripts off.
+Use **Save As** to keep your changes somewhere of your own.
 
-Key poses are made in the **Pose** panel (the **Autoposer** at its top lets
-you drag hands, feet or hips and have the body follow); waypoints and pins are
-in the **Constraints** panel below it. The status line under Generate Motion says
-how many key poses the next take will hit. The more direction you give, the
-closer the result tends to match your intent.
+**Several characters?**
+With **Follow Selection** on (the arrow icon next to the Armature field, on by
+default), selecting a character — its armature or its body — makes it the one
+Animatica animates, with its own prompts and key poses. While a take is being
+made or reviewed, the character stays until you Accept or Reject; the review
+says *Accept or Reject to switch to …*.
 
-### Prompt blocks on the timeline
+With **Animatica Cloud** you can generate onto many custom armatures, not only
+the ready-made character.
 
-Prompt blocks live on Blender's **Timeline** as colored strips in the
-**Animatica** lane:
+### Prompt and Generate
 
-- **Double-click** an empty part of the lane to add a block
-- **Double-click** a block to type its prompt (or right-click → **Edit Prompt**)
-- **Drag** a block to move it; **drag its edges** to resize it
-- **Drag** the top edge of the lane to make the strips taller
-- **Right-click** a block to enable/disable, regenerate, or delete it
-- **Delete** / **Backspace** removes the block under the cursor
-- The **+ / −** buttons in the Timeline header add/remove blocks too
+Type what the character should do in **Prompt** (for example "walks forward
+sadly"). This is the selected Timeline block's prompt; more blocks go on the
+Timeline (see [Prompt blocks](#prompt-blocks-on-the-timeline)).
 
-A block with **no prompt** is shown hatched ("Double-click to describe the
-motion") — the model fills that span on its own. A *disabled* block is skipped
-entirely. The first block is also in the sidebar while it is empty, so your
-first prompt can be typed there.
+Press **Generate Motion**. It is usually under 30 seconds; the first run after
+a while can take a minute while the cloud wakes up. The panel shows
+**Working… Ns** and a **Cancel** button.
 
-> Non-Latin text (e.g. CJK) can't be typed through the on-strip editor — use
-> right-click → **Edit Prompt** for those.
+If something stops a take being sent, the button greys out and the line under
+it says why. The grey line below the options says how long the take is, which
+frames, and how many key poses it will hit. A key pose outside that range is
+named in red: it will not be sent.
 
-## See the plan — ghosts
+### Options
 
-Your key poses *are* the plan: each one becomes a full-body constraint the
-motion has to pass through. Open **Settings → Viewport** and tick its header checkbox
-to see them.
+Under **Generate Motion**:
 
-In the viewport, each pose you keyed appears as a ghost where it sits in the
-scene — tinted with the colour of the **prompt block** it falls under and
-labelled with its **frame number**. On the timeline, a diamond marks each pose
-in the **Animatica** lane, so you can see which block each one lands in.
+- **Loop** — the model makes the block a seamless cycle: a walk, a run, an
+  idle. It plays on past its end, and ticking it ticks **In place** too, so
+  the cycle stays on the spot. Loop needs a single prompt block, and cycles
+  work best at 2–4 seconds: the block's length is the loop's length. It only
+  appears when the model supports it.
+- **In place** — keeps the character on the spot. Only the travel is taken
+  out: the path it moves along (a line, an arc, or a curve). The body's sway
+  and bounce, jumps and crouches all stay. You can set it before generating
+  or switch it on and off while reviewing, without generating again.
+- **Variations** — how many versions of the take one Generate makes: the same
+  prompts and poses, performed differently. It only appears when the model
+  supports it.
 
-Running through them is the **motion trail**: the path the animation actually
-takes, frame by frame. It carries the same colours, so the curve changes colour
-where the prompt blocks change — you can see which stretch of the motion belongs
-to which instruction. The dots are one per frame, so their spacing is the timing
-(bunched is slow, spread is fast); the larger diamonds are your key poses, and
-the white one is the playhead. It traces the joints the model is steered by —
-**hands, feet, root and head** — so the foot lines tell you about sliding and
-footfalls, the hand lines about arcs, and the root line about the trajectory.
+### Reviewing a take
 
-**Click a ghost to edit that pose.** The playhead goes to its frame, the rig
-goes into pose mode, and — where the Autoposer is driving that rig — the pose
-is handed to it so you can push the body around with its controls. When you
-are happy, **Set Keyframe** (in the **Pose** panel, under the handles)
-writes the pose onto that frame's keyframe, so the pose the next generation is
-asked to hit is the one you just made. Without the Autoposer the click still
-takes you there, and Set Keyframe still keys what you posed by hand.
+A new take waits for you in the **Reviewing take** box at the top of the panel.
+Play it in the viewport, then decide.
 
-**Drag a point on a motion trail** and that end effector moves at *that*
-frame — the playhead stays where it is. The other traced joints stay pinned
-where they were, the Autoposer solves the body around the one you moved, and a
-yellow skeleton shows the pose you are about to commit. Let go and it is keyed
-there, as a pose of yours: one more full-body constraint for the next
-generation. It solves at about 100 Hz, so the body follows the cursor.
+- **Variation 1 of N** — with Variations above 1, the arrows flip between the
+  versions without generating again. Accept keeps the one showing.
+- **Seed N** and **Lock** — the seed this take used. Lock it to get this take
+  again next time; otherwise every Generate is a new take.
+- **In place** — switch it on or off for this take. Switching it off brings
+  the travel back.
+- **Generate Again** — a new take with the same direction.
+- **Regenerate Active Block** — with two or more prompt blocks, makes the
+  selected block again and keeps its neighbours.
 
-That holds for the hips as much as for a hand: dragging the root curve shifts
-the pelvis while the feet and hands stay where they are, which is a weight
-shift. **Hold Shift to move the whole pose instead** — every joint travels
-together, so the character is carried to a new place with its shape intact.
-Shift can be taken up or let go mid-drag; the header names it while you are
-dragging.
+**Accept** keeps the take.
 
-A control always wins the click: the controls sit on their joints and the
-trail runs through those same joints, so the two overlap by construction.
-Clicking a control selects it, as it would anywhere in Blender.
+Each accepted take is added to the NLA as its own named clip, on its own
+track (*Animatica: <prompt>*), above the takes you accepted earlier, which stay
+where they are. A take with several prompt blocks becomes one clip per block,
+each on its own track, so every block exports as its own animation. The action
+you had before you generated is kept too, stashed on a muted *[Action Stash]*
+track, and your keys either side of the take keep playing. A kept loop keeps
+cycling to the end of the scene. The one exception is a take generated into a
+gap between your own keys: that one is filled into your action instead.
 
-Your key poses are the big diamonds on the curve, and they are what a click
-reaches for: a key pose wins over the frames either side of it even when they
-are a pixel apart. To bend the curve between keys instead, click exactly on
-the small dot you want. The label by the cursor names the frame you grabbed
-while you drag, so a mis-grab is one **Esc** away.
+In NLA tweak mode, Generate, Accept and Reject wait: press **Tab** in the NLA
+editor to leave it first.
 
-A pose **outside the generating range is not sent** at all — those are greyed
-out in the viewport, red on the timeline, and named in the panel. Widen a prompt
-block to bring one back into the plan, or move the pose.
+**Reject** throws the take away and puts back exactly what you had: your
+action, your pose and the scene's frame range. Keys you added or changed
+during the review are kept. Takes you accepted earlier stay.
 
-The Autoposer works on the character you picked for generation — there is one
-armature in the app, chosen once. The first time you open a pose for editing it
-gives that rig its control bones, so there is nothing to build by hand; the
-Pose panel's **Add Pose Handles** button is only there for a rig that has none
-yet.
+A few things you can rely on:
 
-The controls follow the playhead, so you can start posing at any frame: scrub
-to where you want a pose and grab one. Posing with them keys the pose where you
-made it, so it survives frame changes on its own — there is no mode to enter or leave. (A rig left detached
-by an older session can still be handed back from the Pose panel.)
+- Accept, Reject and Generate are one undo step each.
+- Saving the file during a review is safe. Reopen it and the take is still
+  waiting, and Reject still knows what to put back.
+- A loop keeps cycling after you accept it.
+- What In place took out is kept with the accepted take as its root motion,
+  so it is not lost.
 
-> **Use Set Keyframe rather than `I` on top of a generated take.** Blender
-> keeps a keyframe's existing type when you key over one, so pressing `I` on a
-> frame a previous generation baked leaves a key the addon reads as the
-> model's own output — it gets no ghost and is left out of the next request.
-> **Set Keyframe** marks the pose as yours.
+### Several characters at once
 
-The posed bodies and the trail are independent — show either on its own
-(**Settings → Viewport**):
-
-| Setting | What it does |
-|---|---|
-| **Ghosts** | Draw the body at each pose you keyed |
-| **Trail** | Trace the path the motion takes, through the hands, feet, root and head |
-| **Frame Numbers** | Label each pose with the frame it sits on |
-| **X-Ray** | Draw poses through the character instead of behind it |
-| **Ghost Style** | *Auto* uses the skinned character if the rig has one, the skeleton otherwise. Force either with *Mesh* / *Bones* |
-| **Auto Refresh** | Re-read the plan when you key a pose or move the rig. Turn off on a heavy character and use **Refresh Ghosts** |
-
-Refreshing re-reads the poses by stepping the playhead, so it costs a short
-pause — about a tenth of a second on a normal character — and it happens even
-while the animation is playing: playback picks up exactly where it was. Only a
-running generation makes a refresh wait, since it owns the playhead itself;
-until it finishes you keep seeing the last one, and the panel says so.
-
-## Generate a full clip
-
-1. Type the prompt (the block's length on the Timeline is the clip's length),
-   and direct it if you like
-2. Click **Generate Motion** — usually under 30 seconds; the first run after
-   a while can take a minute
-3. Play the result in the viewport
-4. **Accept** — keeps the take: it moves to the NLA track *Animatica: Motion*
-   (replacing a take kept before), and your own keys stay  
-   **Reject** — throws the take away and goes back to what you had; takes
-   you kept earlier stay on the NLA
-
-Not happy? **Generate Again** — every run is a new take. The take box shows
-the seed a take used; **Lock** it to keep getting that one. While a kept take
-exists, Accept reads **Replace Kept**.
-
-Want to choose from a few? Set **Variations** under Generate Motion and one
-Generate makes that many versions of the take — the same prompts and poses,
-performed differently. The take box shows **Variation 1 of N**; the arrows
-flip between them without generating again, and Accept keeps the one showing.
-
-## Loops for games
-
-Tick **Loop** under Generate Motion and the model makes the block a seamless
-cycle — a walk, a run, an idle. **In place** ticks with it, so the cycle plays
-on the spot. Loop needs a single prompt block, and cycles work best at 2–4
-seconds: the block's length is the loop's length. It appears only when the
-connected model supports it.
-
-## Several characters at once
-
-Select two or more characters and the Animatica panel offers **Generate N
-Characters** — one generation each, sent together (in one request, when the
-server takes batches):
+Select two or more characters and the panel offers **Generate N Characters**,
+with a line saying how many generations it will cost. Choose how they are
+directed:
 
 - **Each Their Own** — every character uses its own prompts, key poses,
   waypoints and pins. For a scene with distinct actors.
@@ -198,35 +132,172 @@ server takes batches):
   its own seed, starting from where it stands: variations on one action, for a
   crowd. Waypoints and pins are left out.
 
-With **Variations** above 1, each character comes back with that many
-versions: the review has arrows per character, and **All: next variation** to
-flip the whole crowd at once.
+They are sent together, in one request when the server takes batches. The
+review then has a row per character, with its own ✓ (keep), ✗ (throw away)
+and ↻ (generate that one again). **Accept All** and **Reject All** act on all
+of them, and **Regenerate All** makes every waiting take again. With
+**Variations** above 1, each row has its own arrows, and **All: next
+variation** flips the whole crowd. **In place** acts on every take waiting. A
+character that failed is listed with the reason and does not stop the rest.
 
-The takes wait together: **Accept All** keeps each on its own character's NLA
-track (the version it shows), **Reject All** throws them all away. Each
-character's row has its own ✓ (keep), ✗ (throw away) and ↻ (generate that one
-again, leaving the others as they are); **Regenerate All** makes every waiting
-take again. **In place** acts on all the takes waiting. Waypoints and pins belong to the
-character that was active when you made them.
+## The Pose panel
 
-## Single pose at one frame
+### Autoposer
 
-Use **Generate Pose at Frame N** (in the **Pose** panel) when you only want one
-pose at the current frame — handy for blocking or fixing a single key pose. It
-won't replace your entire action the way **Generate Motion** does.
+The **Autoposer** lets you drag a hand, foot or the hips and have the body
+follow. It is optional and runs on your machine.
 
-## Sidebar panels (quick reference)
+- The first time, press **Download Autoposer** (about 225 MB, once). Nothing
+  downloads until you do. See [the Autoposer](configuration.md#the-autoposer).
+- Then **Start the Autoposer** gives your character its handles.
+- The handles are listed by name (**Hips**, **Chest**, **L hand**, **Head** and
+  so on): click one to switch it on or off, or **+** to add one.
+- **Slack** is how far a joint may stray from its handle. Low puts the joint
+  exactly where you put the handle; high lets the poser keep the body natural.
+  The icon next to it shows each handle's own settings.
 
-- **Animatica** — model and armature, the prompt, generate, Loop and In
-  place, accept / reject; the header icons open an example scene and help
-- **Pose** — the **Autoposer** (drag hands, feet or hips; the body follows),
-  Generate Pose, Set Keyframe, and **Fingers**: each hand's shape, since the
-  model does not move fingers (Relaxed, Gripping, Straight)
-- **Constraints** — waypoints (where to stand when) and pins (a hand or foot held in place)
-- **Settings** — seed, quality, motion cleanup
-  - **Viewport** — what the viewport draws of your key poses and the trail, how ghosts are drawn
-  - **Posing** — the solid floor, Rest Pose
-  - **Advanced** — guidance, blending between blocks
+The handles follow the playhead, so scrub to any frame and grab one. With the
+record button next to **Set Keyframe** on (the default), posing with the
+handles keys the pose where you made it. Turn it off to try a pose out without
+keying it.
+
+### Set Keyframe
+
+**Set Keyframe** keys the pose you are looking at and marks it as yours, so
+the next take is asked to hit it. The line under it says how many key poses
+the next take will hit. It works with or without the Autoposer, and with no
+server connected.
+
+> **Use Set Keyframe rather than `I` on top of a generated take.** Blender
+> keeps a keyframe's existing type when you key over one, so pressing `I` on a
+> frame a take already keyed leaves a key the addon reads as the model's own —
+> it gets no ghost and is left out of the next request. **Set Keyframe** marks
+> the pose as yours.
+
+**Jump to Key Pose** (in the `F3` search) steps the playhead between your own
+poses, which Blender's keyframe jump cannot do once a take has keyed every
+frame.
+
+### Generate Pose at Frame
+
+**Generate Pose at Frame N** makes one pose at the current frame — handy for
+blocking or fixing a single key pose. It won't replace your whole action. It
+only appears when the model supports single poses (Animatica Cloud).
+
+### Fingers
+
+The model does not move fingers, so each hand gets a shape laid over every
+take: **Relaxed** (the default), **Gripping** (closed around a handle) or
+**Straight** (as generated). Set **Left Hand** and **Right Hand** separately.
+
+## See the plan — ghosts and the trail
+
+Your key poses are the plan: each one is a full-body pose the motion has to
+pass through. **Settings → Viewport** controls what is drawn.
+
+**Ghosts.** Each pose you keyed appears as a ghost where it sits in the
+scene, tinted with the colour of the prompt block it falls under and labelled
+with its frame number. On the timeline, a diamond marks each pose in the
+**Animatica** lane. A pose outside the generating range is greyed out in the
+viewport and red on the timeline; widen a prompt block, or move the pose, to
+bring it back.
+
+**The trail.** Running through them is the motion trail: the path the take
+actually follows, frame by frame, in the same colours. There is one dot per
+frame, so spacing is timing (bunched is slow, spread is fast). The large
+diamonds are your key poses and the white one is the playhead. It traces the
+**hips**, **head**, **hands** and **feet**; switch each on or off in
+**Settings → Viewport**.
+
+**Click a ghost to edit that pose.** The playhead goes to its frame and the
+rig goes into pose mode, with the Autoposer's handles on that pose if you use
+it. When you are happy, **Set Keyframe** writes it back onto that frame.
+
+**Drag the trail to repose the body.** Pull a point and that hand, foot or
+the hips moves at that frame; the playhead stays where it is. The other joints
+stay put and the Autoposer solves the body around the one you moved, with a
+yellow skeleton showing the pose. Let go and it is keyed there as one of your
+key poses. Dragging the hips shifts the weight over feet that stay planted.
+**Hold Shift to move the whole pose** instead. The label by the cursor names
+the frame you grabbed; **Esc** cancels. A click reaches for a key pose first;
+to bend the curve between keys, click exactly on the dot you want. A handle
+always wins the click over the trail.
+
+**The root trajectory.** Tick **Root Trajectory** to draw the path the
+character travels along, on the floor, coloured by speed. It is what In place
+takes out. **Edit Root Trajectory** turns it into a curve you can edit: with
+In place off, the character follows the new path as you edit it; with In place
+on, the pose stays and the curve is the take's root motion. Press **Tab** to
+finish, and the reset button next to it to go back to the original.
+
+## The Constraints panel
+
+- **Waypoint at N** — pins where the character stands at the current frame.
+  Drag the circle to where it should be; the route between waypoints is the
+  model's to plan. Each waypoint is a row: its frame (edit it in place), its
+  **Facing** (**Along path**, or **Set** with an angle), a button to go to it,
+  and one to remove it. **Face along the path** also tells the model to face
+  the next waypoint at each one; it is off by default, since the model faces
+  the way it walks.
+- **Pin** — holds a hand or foot on an empty, so it stays on an object.
+
+Waypoints and pins belong to the character that was active when you made
+them. A root-path curve from an older file still works, and **To waypoints**
+converts it.
+
+## The Settings panel
+
+- **Seed** — 0 means a new take every time. The button next to it picks a
+  random seed; **Lock** keeps the one the last run used.
+- **Quality** — **Best**, **Faster**, **Draft**, or **Custom** steps.
+- **Motion Cleanup** — stops feet sliding and hits key poses and pins more
+  exactly. On by default; adds a second or two.
+
+**Viewport** (its header checkbox turns the whole overlay off):
+
+| Setting | What it does |
+|---|---|
+| **Ghosts** | Draw the body at each pose you keyed |
+| **Trail** | Trace the path the motion takes; **Hips**, **Head**, **Hands** and **Feet** pick the joints |
+| **Root Trajectory** | Draw the travel path on the floor, with **Edit Root Trajectory** |
+| **Frame Numbers** | Label each pose with its frame |
+| **X-Ray** | Draw poses through the character instead of behind it |
+| **Ghost Style** | *Auto* uses the skinned character if the rig has one, the skeleton otherwise; force *Mesh* or *Bones* |
+| **Auto Refresh** | Re-read the plan when you key a pose or move the rig. Turn off on a heavy character and use **Refresh Ghosts** |
+| **Rig In Front** / **Hide Skeleton** | How the rig itself is drawn |
+
+**Posing:** **Solid Floor** stops the Autoposer putting any joint below the
+floor; **Rest Pose** clears the pose back to the rest pose and re-seats the
+handles.
+
+**Advanced:** **Guidance** with its **Text Weight** (how literally the motion
+follows the prompt) and **Constraint Weight** (how tightly it sticks to your
+poses, waypoints and pins), and **Blend Between Blocks** (frames blended where
+one prompt block meets the next; 0 is a hard cut).
+
+## Prompt blocks on the timeline
+
+Prompt blocks live on Blender's **Timeline** as coloured strips in the
+**Animatica** lane:
+
+- **Click** a block to select it; its prompt shows in the sidebar
+- **Drag** a block to move it; **drag its edges** to resize it
+- **Drag** the top edge of the lane to make the strips taller
+- **Double-click** an empty part of the lane to add a block
+- **Double-click** a block to type its prompt
+- **Delete** / **Backspace** removes the block under the cursor
+- The **+ / −** buttons in the Timeline header add and remove blocks too
+
+**Right-click** a block for its menu: **Edit Prompt**, **Enable** / **Disable**,
+**Regenerate Range** (while reviewing a take), **Delete Strip**, the seed it
+was generated with (**Reuse seed** pins it to that block), **Add Strip Between
+Keyframes** and **Add Strip in Gap**.
+
+A block with no prompt is hatched ("Double-click to describe the motion"): the
+model fills that stretch on its own. A disabled block is skipped entirely.
+
+> Non-Latin text (for example CJK) can't be typed in the on-strip editor — use
+> right-click → **Edit Prompt**.
 
 ## Help
 

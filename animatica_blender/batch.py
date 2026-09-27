@@ -194,6 +194,8 @@ class ANIMATICA_OT_generate_batch(Operator):
         if not chars:
             self.report({'ERROR'}, "Those characters are gone")
             return {'CANCELLED'}
+        if operators._refuse_in_tweak_mode(self, chars):
+            return {'CANCELLED'}
         model_caps = mmcp_client.cached_model(settings.model_id)
         if model_caps is None:
             self.report({'ERROR'}, "Connect to the server first")
@@ -311,11 +313,9 @@ class ANIMATICA_OT_generate_batch(Operator):
                 # Its variations, to flip through in the review.
                 variations.remember(arm, result, action,
                                     splice_target_name=job.splice_target_name, **bake)
-                source = bpy.data.actions.get(job.source_name)
-                if source is not None:
-                    # Kept alive while the take waits: nothing else uses it,
-                    # and a save in between would drop it.
-                    source.use_fake_user = True
+                # The source is kept alive while the take waits (a fake user,
+                # given by the take's preview session, and taken back by the
+                # Accept / Reject that ends it).
                 arm[_PENDING_KEY] = json.dumps({"source": job.source_name})
                 settings.batch_pending = json.dumps(
                     [n for n in pending(settings) if n != job.name] + [job.name])
@@ -368,11 +368,15 @@ def _review(context, op_name: str, names: list | None = None) -> int:
             continue
         info = json.loads(arm.get(_PENDING_KEY) or "{}")
         settings.target_armature = arm          # swaps in its blocks, clears the flags
-        settings.source_action_name = info.get("source", "")
+        from . import preview_session
+        kept = preview_session.source_of(arm)
+        settings.source_action_name = kept.name if kept is not None else info.get("source", "")
         settings.is_previewing = True
+        legacy = preview_session.get(arm) is None
         getattr(bpy.ops.animatica, op_name)()
         source = bpy.data.actions.get(info.get("source", ""))
-        if source is not None:
+        if legacy and source is not None:
+            # A take from an older version, which set the fake user itself.
             source.use_fake_user = False
         if _PENDING_KEY in arm:
             del arm[_PENDING_KEY]
@@ -388,6 +392,17 @@ def _review(context, op_name: str, names: list | None = None) -> int:
     return handled
 
 
+def _refuse_in_tweak_mode(op, context, names: list | None = None) -> bool:
+    """Before a review: no character it would touch is in NLA tweak mode
+    (see operators._refuse_in_tweak_mode). Each character's Accept or Reject
+    refusing on its own left the review counting it done."""
+    from . import operators
+    waiting = pending(context.scene.animatica)
+    names = waiting if names is None else [n for n in names if n in waiting]
+    arms = [properties._live_armature(bpy.data.objects.get(n)) for n in names]
+    return operators._refuse_in_tweak_mode(op, [a for a in arms if a is not None])
+
+
 class ANIMATICA_OT_accept_batch(Operator):
     bl_idname = "animatica.accept_batch"
     bl_label = "Accept All"
@@ -399,6 +414,8 @@ class ANIMATICA_OT_accept_batch(Operator):
         return not context.scene.animatica.is_generating and bool(pending(context.scene.animatica))
 
     def execute(self, context):
+        if _refuse_in_tweak_mode(self, context):
+            return {'CANCELLED'}
         n = _review(context, "accept")
         self.report({'INFO'}, f"Kept {n} take(s)")
         return {'FINISHED'}
@@ -417,6 +434,8 @@ class ANIMATICA_OT_reject_batch(Operator):
         return not s.is_generating and bool(pending(s) or failures(s))
 
     def execute(self, context):
+        if _refuse_in_tweak_mode(self, context):
+            return {'CANCELLED'}
         n = _review(context, "reject")
         self.report({'INFO'}, f"Threw away {n} take(s)")
         return {'FINISHED'}
@@ -440,6 +459,8 @@ class ANIMATICA_OT_review_one(Operator):
         return not context.scene.animatica.is_generating and bool(pending(context.scene.animatica))
 
     def execute(self, context):
+        if _refuse_in_tweak_mode(self, context, [self.character]):
+            return {'CANCELLED'}
         n = _review(context, "accept" if self.keep else "reject", [self.character])
         if not n:
             self.report({'WARNING'}, f"No take waiting on {self.character}")

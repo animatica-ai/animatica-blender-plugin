@@ -327,7 +327,11 @@ def build_request(
     # Loop: sampled as a cycle by the model (motionmcp 0.4 ``options.loop``),
     # which needs one segment. Loop is only offered where the model advertises
     # it; a request it cannot loop goes out without it.
-    if getattr(settings, "loop", False) and model_caps.get("supports_loop") and len(segments) == 1:
+    # Not into a gap between the user's keys: that take is spliced into their
+    # action, which is not made a cycle (see operators.bake_take), so a cycle
+    # asked of the model would only be thrown away.
+    if (getattr(settings, "loop", False) and model_caps.get("supports_loop") and len(segments) == 1
+            and not will_splice(armature_obj, frame_range)):
         request["options"]["loop"] = True
 
     # Variations: several samples of the one take, as far as the model allows.
@@ -729,6 +733,22 @@ def t_pose_q_matrix(armature_obj: bpy.types.Object, bone_name: str | None):
     t_dir = Vector((sign, 0.0, 0.0))                       # request rest dir
     a_dir = Vector(pb.bone.matrix_local.to_3x3().col[1])   # actual rest dir
     return t_dir.rotation_difference(a_dir).to_matrix()
+
+
+def will_splice(armature_obj, frame_range) -> bool:
+    """True when a generation over ``frame_range`` goes into the rig's own
+    action rather than a new take: it holds keys either side of the window
+    (the test ``operators.bake_take`` makes)."""
+    from .constraints_ui import iter_action_fcurves
+    ad = getattr(armature_obj, "animation_data", None)
+    action = ad.action if ad is not None else None
+    if action is None or is_control_rig(armature_obj):
+        return False
+    lo, hi = int(frame_range[0]), int(frame_range[1])
+    return any(
+        not (lo <= int(round(kp.co.x)) <= hi)
+        for fc in iter_action_fcurves(action) for kp in fc.keyframe_points
+    )
 
 
 def is_control_rig(armature_obj: bpy.types.Object) -> bool:

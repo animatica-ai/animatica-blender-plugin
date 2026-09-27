@@ -20,12 +20,16 @@ Threading: the addon calls these from a worker thread; nothing here touches
 from __future__ import annotations
 
 import json
+import queue
 import sys
+import threading
 import time
+import traceback
 import uuid
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import Request
 
 import bpy
 
@@ -105,6 +109,222 @@ def client_headers() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Online access
+#
+# Blender's "Allow Online Access" (Preferences > System) is the artist's say
+# on whether anything may reach the network. Every request the addon makes
+# asks here first. A self-hosted server on this machine (localhost) is not
+# "online", so it keeps working with the switch off; anything else waits.
+# ---------------------------------------------------------------------------
+
+#: What to show wherever a feature needs the network and is not allowed it.
+OFFLINE_MESSAGE = "Online access is disabled in Preferences > System"
+
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def online_access() -> bool:
+    """True when Blender allows online access (always, on a Blender without the switch)."""
+    return bool(getattr(bpy.app, "online_access", True))
+
+
+def _host_of(url: str) -> str | None:
+    """The host a request to *url* would connect to — or None if that is in doubt.
+
+    Parsed the way urllib will parse it, and refused outright where urllib and
+    ``urlsplit`` could disagree: a backslash (``http://example.com\\@127.0.0.1/``
+    is example.com to one and 127.0.0.1 to the other), userinfo (``user@host``),
+    and whitespace or control characters anywhere in the URL.
+    """
+    if not isinstance(url, str) or "\\" in url:
+        return None
+    if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
+        return None
+    try:
+        parts = urlsplit(url)
+        if "@" in parts.netloc:
+            return None
+        return (parts.hostname or "").lower() or None
+    except ValueError:
+        return None
+
+
+def is_loopback(url: str) -> bool:
+    host = _host_of(url)
+    return host is not None and (host in _LOOPBACK_HOSTS or host.endswith(".localhost"))
+
+
+def may_connect(url: str) -> bool:
+    """True if a request to *url* is allowed right now."""
+    return online_access() or is_loopback(url)
+
+
+def popup(title: str, lines, icon: str = 'INFO') -> bool:
+    """Show a small popup from anywhere on the main thread — a timer included.
+
+    ``popup_menu`` needs a window in the context, and a timer has none: called
+    bare there (or in a background Blender) it crashes Blender outright. So it
+    is given the first window explicitly, and skipped when there is none.
+    """
+    if bpy.app.background:
+        return False
+    wm = getattr(bpy.context, "window_manager", None)
+    windows = list(getattr(wm, "windows", ()) or ())
+    if not windows:
+        return False
+    window = bpy.context.window or windows[0]
+
+    def _draw(menu, _context):
+        col = menu.layout.column(align=True)
+        for line in lines:
+            col.label(text=line)
+    try:
+        with bpy.context.temp_override(window=window, screen=window.screen):
+            wm.popup_menu(_draw, title=title, icon=icon)
+        return True
+    except Exception:                                       # noqa: BLE001
+        traceback.print_exc()
+        return False
+
+
+def draw_offline(layout, text: str = OFFLINE_MESSAGE) -> None:
+    """The offline line, with the button that goes where the switch is."""
+    col = layout.column(align=True)
+    col.label(text=text, icon='INTERNET_OFFLINE')
+    # A row of its own: sharing one with a sentence this long elides the sentence.
+    col.operator("animatica.open_online_prefs", text="Open Preferences", icon='PREFERENCES')
+
+
+def _require_online(url: str) -> None:
+    if not may_connect(url):
+        raise MmcpError(code="offline", message=OFFLINE_MESSAGE)
+
+
+# ---------------------------------------------------------------------------
+# Where the session token may go
+#
+# The Animatica session belongs to Animatica Cloud and to nothing else: not a
+# self-hosted server (which may be anyone's, and is often plain http), not a
+# host a redirect points at. Toggling self-hosted keeps the session — it just
+# stays home.
+# ---------------------------------------------------------------------------
+
+def _origin(url: str) -> tuple[str, str]:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return ("", "")
+    return (parts.scheme.lower(), parts.netloc.lower())
+
+
+def is_cloud_url(url: str) -> bool:
+    """True if *url* is on Animatica Cloud, over https — the only place a token goes."""
+    from .properties import CLOUD_API_URL
+    scheme, netloc = _origin(url)
+    return scheme == "https" and (scheme, netloc) == _origin(CLOUD_API_URL)
+
+
+_OPENER = None
+
+
+def _opener():
+    """The one opener every request of this addon goes through.
+
+    It asks :func:`may_connect` about every request it opens — redirect hops
+    included, so a server on this machine cannot bounce a request off it
+    with online access switched off — and drops ``Authorization`` when a
+    redirect leaves the host.
+    """
+    global _OPENER
+    if _OPENER is None:
+        from .autoposer.vendor.autoposer_runtime import bundle
+        bundle.GATE = may_connect
+        _OPENER = bundle.build_opener()
+    return _OPENER
+
+
+def urlopen(req, timeout: float):
+    """``urllib.request.urlopen``, through the gated opener. Any thread."""
+    return _opener().open(req, timeout=timeout)
+
+
+_open = urlopen
+
+
+def refused(exc: BaseException) -> bool:
+    """Was *exc* the gate refusing a request (online access is off)?"""
+    from .autoposer.vendor.autoposer_runtime.bundle import RequestRefused
+    return isinstance(exc, RequestRefused)
+
+
+# ---------------------------------------------------------------------------
+# Handing results to the main thread
+#
+# Workers never call ``bpy`` — not even ``bpy.app.timers.register``, which is
+# not safe off the main thread. They post a callable here, and a timer that
+# the main thread started runs it. The timer stops itself when there is
+# nothing left to do, and whatever next runs on the main thread (a connect, a
+# panel asking whether the session expired) starts it again.
+# ---------------------------------------------------------------------------
+
+_MAIN_QUEUE: "queue.Queue" = queue.Queue()
+
+
+def post_to_main(fn) -> None:
+    """Run *fn* on the main thread, soon. Safe from any thread."""
+    _MAIN_QUEUE.put(fn)
+    if threading.current_thread() is threading.main_thread():
+        _start_pump()
+
+
+def _pump():
+    # Ask what is still in flight BEFORE draining: a worker posts its result
+    # and only then says it is done, so anything that has said so has
+    # already posted, and the drain below picks it up.
+    busy = bool(_CONNECT["running"])
+    for pred in list(_BUSY):
+        try:
+            if pred():
+                busy = True
+            else:
+                _BUSY.discard(pred)
+        except Exception:                                   # noqa: BLE001
+            _BUSY.discard(pred)
+    while True:
+        try:
+            fn = _MAIN_QUEUE.get_nowait()
+        except queue.Empty:
+            break
+        try:
+            fn()
+        except Exception:                                   # noqa: BLE001
+            traceback.print_exc()
+    return 0.2 if (busy or not _MAIN_QUEUE.empty()) else None
+
+
+#: Work in flight elsewhere (a download on a worker) that will post a result:
+#: the pump keeps going while any of these says True.
+_BUSY: set = set()
+
+
+def pump_while(pred) -> None:
+    """Keep handing results over while ``pred()`` is True. Main thread only."""
+    _BUSY.add(pred)
+    _start_pump()
+
+
+def _start_pump() -> None:
+    """Main thread only."""
+    if threading.current_thread() is not threading.main_thread():
+        return
+    try:
+        if not bpy.app.timers.is_registered(_pump):
+            bpy.app.timers.register(_pump, first_interval=0.0)
+    except Exception:                                       # noqa: BLE001
+        traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
 # Preferences plumbing
 # ---------------------------------------------------------------------------
 
@@ -140,6 +360,8 @@ def get_mmcp_url() -> str:
     appends ``/capabilities`` etc. directly.
     """
     from .properties import CLOUD_API_URL
+    if not _MAIN_QUEUE.empty():
+        _start_pump()
     addon = bpy.context.preferences.addons.get(__package__)
     if addon is None:
         return f"{CLOUD_API_URL.rstrip('/')}/mmcp"
@@ -151,10 +373,11 @@ def get_mmcp_url() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Auth — Animatica Cloud only. Self-hosted servers ignore the Authorization
-# header. Auth is NOT part of the MMCP protocol; the cloud's proxy in front
-# of /generate is what consumes the token. The plugin treats it as
-# "attach if present, prompt to sign in on 401".
+# Auth — Animatica Cloud only. The token is attached only to requests for
+# the cloud host over https (see ``is_cloud_url``); a self-hosted server never
+# receives it. Auth is NOT part of the MMCP protocol; the cloud's proxy in
+# front of /generate is what consumes the token. The plugin treats it as
+# "attach if present, prompt to sign in on the cloud's 401".
 # ---------------------------------------------------------------------------
 
 def _addon_prefs():
@@ -172,13 +395,14 @@ def get_refresh_token() -> str:
     return ((getattr(p, "refresh_token", "") or "").strip()) if p else ""
 
 
-def _auth_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Standard request headers + Bearer token if signed in."""
+def _auth_headers(url: str, extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Standard request headers, plus the Bearer token when signed in AND *url* is
+    Animatica Cloud over https. A self-hosted server never sees the token."""
     hdrs: dict[str, str] = {}
     if extra:
         hdrs.update(extra)
     token = get_access_token()
-    if token:
+    if token and is_cloud_url(url):
         hdrs["Authorization"] = f"Bearer {token}"
     return hdrs
 
@@ -188,9 +412,12 @@ def sign_in(email: str, password: str) -> dict[str, Any]:
 
     The /auth/* endpoints live at the bare host (``api.animatica.ai/auth/login``),
     not under ``/mmcp/``, so this always uses ``get_server_url()`` rather
-    than the MMCP base. Self-hosted setups don't sign in at all.
+    than the MMCP base. Self-hosted setups don't sign in at all — and the
+    password goes to Animatica Cloud whatever the server setting says.
     """
-    base_url = get_server_url()
+    from .properties import CLOUD_API_URL
+    base_url = CLOUD_API_URL.rstrip("/")
+    _require_online(base_url)
     body = json.dumps({"email": email, "password": password, "client": "blender"}).encode()
     req = Request(
         f"{base_url}/auth/login",
@@ -198,11 +425,13 @@ def sign_in(email: str, password: str) -> dict[str, Any]:
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urlopen(req, timeout=30) as resp:
+        with _open(req, timeout=30) as resp:
             data = json.loads(resp.read().decode())
     except HTTPError as exc:
         raise MmcpError.from_response(exc.code, exc.read()) from exc
     except URLError as exc:
+        if refused(exc):
+            raise MmcpError(code="offline", message=OFFLINE_MESSAGE) from exc
         raise MmcpError(
             code="model_unavailable",
             message=f"cannot reach {base_url}: {exc.reason}",
@@ -235,6 +464,8 @@ _EXPIRED: dict = {"reason": ""}
 
 
 def session_expired() -> str:
+    if _EXPIRED.get("pending"):
+        _start_pump()               # a worker expired it; the panels asking is our cue
     return _EXPIRED["reason"]
 
 
@@ -257,8 +488,7 @@ def expire_session(reason: str = "your session has expired") -> None:
     if not (get_access_token() or get_refresh_token()):
         return                      # nothing to expire; a self-hosted server, most likely
     _EXPIRED["pending"] = reason
-    if not bpy.app.timers.is_registered(_apply_expiry):
-        bpy.app.timers.register(_apply_expiry, first_interval=0.0)
+    post_to_main(_apply_expiry)
 
 
 def _apply_expiry():
@@ -278,20 +508,23 @@ def _apply_expiry():
 def refresh_access_token() -> bool:
     """POST /auth/refresh. Returns True on success and updates prefs.
 
-    Always hits the bare cloud auth host (``get_server_url()``), not the
-    MMCP base — ``/auth/refresh`` lives outside the ``/mmcp/`` namespace.
+    Always hits the cloud auth host (``CLOUD_API_URL``) — never the
+    self-hosted URL — and ``/auth/refresh`` lives outside ``/mmcp/``.
     """
+    from .properties import CLOUD_API_URL
     rt = get_refresh_token()
     if not rt:
         return False
-    base_url = get_server_url()
+    base_url = CLOUD_API_URL.rstrip("/")
+    if not is_cloud_url(base_url) or not may_connect(base_url):
+        return False
     req = Request(
         f"{base_url}/auth/refresh",
         data=json.dumps({"refresh_token": rt}).encode(),
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urlopen(req, timeout=15) as resp:
+        with _open(req, timeout=15) as resp:
             data = json.loads(resp.read().decode())
     except Exception:
         return False
@@ -411,9 +644,13 @@ def connect_async(*, force: bool = False) -> bool:
         return False
     if not force and _time.monotonic() - _CONNECT["at"] < CONNECT_RETRY_SECONDS:
         return False        # tried recently and it did not work
+    url = get_mmcp_url()
+    if not may_connect(url):
+        # Said, not attempted: the panels show this line instead of "Connecting…".
+        clear_capabilities(error=OFFLINE_MESSAGE)
+        return False
     _CONNECT["running"] = True
     _CONNECT["at"] = _time.monotonic()
-    url = get_mmcp_url()
 
     def _work():
         caps, error = None, ""
@@ -421,11 +658,12 @@ def connect_async(*, force: bool = False) -> bool:
             caps = MmcpClient(url, timeout=30).capabilities(refresh=True)
         except Exception as exc:                            # noqa: BLE001
             error = str(exc)
+        # Posted before saying "done", so the pump cannot stop in between.
+        post_to_main(lambda: _apply_connection(caps, error, url))
         _CONNECT["running"] = False
-        bpy.app.timers.register(
-            lambda: _apply_connection(caps, error, url), first_interval=0.0)
 
     threading.Thread(target=_work, daemon=True).start()
+    _start_pump()
     return True
 
 
@@ -546,12 +784,15 @@ class MmcpClient:
         refresh + retry before raising.
         """
         body = json.dumps(request_body).encode("utf-8")
+        url = f"{self.base_url}/generate"
+        _require_online(url)
+        cloud = is_cloud_url(url)
 
         def _post():
             req = Request(
-                f"{self.base_url}/generate",
+                url,
                 data=body,
-                headers=_auth_headers({
+                headers=_auth_headers(url, {
                     "Content-Type": "application/json; charset=utf-8",
                     "Accept":       "model/gltf+json",
                     # This is the request that starts a generation — the one
@@ -559,14 +800,16 @@ class MmcpClient:
                     **client_headers(),
                 }),
             )
-            return urlopen(req, timeout=self.timeout)
+            return _open(req, timeout=self.timeout)
 
         try:
             try:
                 resp = _post()
             except HTTPError as exc:
                 # Refresh-and-retry once on 401 (auth-proxy session expired).
-                if exc.code != 401:
+                # Only the cloud's 401 is about the cloud session: a
+                # self-hosted server saying no must not sign anyone out.
+                if exc.code != 401 or not cloud:
                     raise
                 if refresh_access_token():
                     try:
@@ -589,6 +832,8 @@ class MmcpClient:
         except HTTPError as exc:
             raise MmcpError.from_response(exc.code, exc.read()) from exc
         except URLError as exc:
+            if refused(exc):
+                raise MmcpError(code="offline", message=OFFLINE_MESSAGE) from exc
             raise MmcpError(
                 code="model_unavailable",
                 message=f"cannot reach MMCP server at {self.base_url}: {exc.reason}",
@@ -626,12 +871,14 @@ class MmcpClient:
             # to the path so we still hit our base_url.
             location = "/" + location.split("/", 3)[-1]
         url = f"{self.base_url}{location}"
+        cloud = is_cloud_url(url)
         deadline = time.time() + self.timeout
         while time.time() < deadline:
             time.sleep(max(retry_after, 0.5))
+            _require_online(url)
             try:
-                req = Request(url, headers=_auth_headers())
-                with urlopen(req, timeout=self.timeout) as resp:
+                req = Request(url, headers=_auth_headers(url))
+                with _open(req, timeout=self.timeout) as resp:
                     if resp.status == 200:
                         return json.loads(resp.read())
                     if resp.status == 202:
@@ -639,7 +886,7 @@ class MmcpClient:
                         continue
                     raise MmcpError.from_response(resp.status, resp.read())
             except HTTPError as exc:
-                if exc.code == 401 and not refresh_access_token():
+                if exc.code == 401 and cloud and not refresh_access_token():
                     expire_session("your session expired — sign in again")
                 raise MmcpError.from_response(exc.code, exc.read()) from exc
         raise MmcpError(code="timeout", message=f"async job at {url} did not complete in {self.timeout}s")
@@ -648,16 +895,18 @@ class MmcpClient:
 
     def _get_json(self, path: str) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
+        _require_online(url)
+        cloud = is_cloud_url(url)
 
         def _get():
-            req = Request(url, headers=_auth_headers())
-            return urlopen(req, timeout=self.timeout)
+            req = Request(url, headers=_auth_headers(url))
+            return _open(req, timeout=self.timeout)
 
         try:
             try:
                 resp = _get()
             except HTTPError as exc:
-                if exc.code != 401:
+                if exc.code != 401 or not cloud:
                     raise
                 if refresh_access_token():
                     try:
@@ -676,6 +925,8 @@ class MmcpClient:
         except HTTPError as exc:
             raise MmcpError.from_response(exc.code, exc.read()) from exc
         except URLError as exc:
+            if refused(exc):
+                raise MmcpError(code="offline", message=OFFLINE_MESSAGE) from exc
             raise MmcpError(
                 code="model_unavailable",
                 message=f"cannot reach MMCP server at {self.base_url}: {exc.reason}",

@@ -10,23 +10,31 @@ pressing Generate seven times.
 
 Three decisions shape this module.
 
-* **Listed live from the asset repository.** The examples are the ``.blend``
-  files in ``examples/`` of ``animatica-ai/animatica-assets-public``, the
-  repository the addon already takes the Hero from. The menu is built from
-  whatever is there: add a file and it appears, delete one and it goes, with
-  no manifest to keep in step and no addon build. A ``<name>.json`` beside a
+* **Listed from the asset repository, at a pinned commit.** The examples are
+  the ``.blend`` files in ``examples/`` of
+  ``animatica-ai/animatica-assets-public``, the repository the addon already
+  takes the Hero from, as they are at :data:`REF`. A ``<name>.json`` beside a
   file gives the menu its title, place and lesson; without one, the file name
-  stands in. The list is read at one resolved commit, so every file it names
-  and every download it leads to come from the same state of the repository.
-  A CDN cannot pair an old list with a new file. The last list is cached for
-  offline use.
-* **Opened untitled.** ``wm.read_homefile`` loads the example's contents
-  without adopting its path, the way Blender's own demo files behave: Ctrl+S
-  asks where to save instead of writing over the cached copy.
+  stands in. Pinned rather than following ``main``: a .blend is a program as
+  much as a document, and a push to that repository should not change what
+  every installed addon opens. New examples ship by bumping :data:`REF`. The
+  last list is cached for offline use.
 * **Verified.** The repository keeps the files in Git LFS, and an LFS
-  pointer's ``oid`` is the file's sha256. A download that does not match is
-  discarded rather than opened, and the hash is part of the cached file's
-  name, so an updated example is a new download and never a stale hit.
+  pointer's ``oid`` is the file's sha256. A file without one — committed
+  without LFS, so with nothing to check it against — is not offered, and a
+  download that does not match is discarded rather than opened. The hash is
+  part of the cached file's name.
+* **Opened without running anything.** ``wm.open_mainfile(use_scripts=False)``
+  loads the example with Python auto-run off for that file — no registered
+  text blocks, no scripted drivers — even when the artist has Auto Run on.
+  (``wm.read_homefile`` would have opened it untitled, but it honours Auto Run —
+  tested: a registered text block runs through it with Auto Run on — and
+  ``bpy.data.filepath`` is read-only, so the file cannot be made untitled
+  after loading it either.) What is opened is a working copy, so saving over
+  it never touches the verified download. That copy lives in Blender's data
+  folder, which is per Blender version, so the artist is told — once, and
+  again in the sidebar when there are changes — to Save As somewhere of their
+  own.
 """
 
 from __future__ import annotations
@@ -42,9 +50,9 @@ import urllib.request
 import bpy
 
 REPO = "animatica-ai/animatica-assets-public"
-#: The branch the menu follows. A commit here changes what every installed
-#: addon offers, which is the point: examples move without a release.
-REF = "main"
+#: The commit the menu is read at ("Example scenes for the Blender addon",
+#: 2026-09-26). Bump it to publish new or changed examples.
+REF = "9b1f929b3ff31a4528d4ea0bd12e84a5c3f2540e"
 FOLDER = "examples"
 API = f"https://api.github.com/repos/{REPO}"
 
@@ -101,27 +109,48 @@ def is_cached(entry: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 def manifest() -> dict:
-    """The examples as last listed: this session's fetch, else the cached one."""
+    """The examples as last listed: this session's fetch, else the cached one.
+
+    A cached list read at any other commit than :data:`REF` (an older build's,
+    which followed ``main``) is not used.
+    """
     if _state["manifest"] is not None:
         return _state["manifest"]
     try:
-        _state["manifest"] = json.loads(_cached_manifest_path().read_text())
-    except (OSError, ValueError):
-        _state["manifest"] = {"examples": []}
+        data = json.loads(_cached_manifest_path().read_text())
+        if (data.get("source") or {}).get("commit") != REF:
+            data = {"examples": []}
+    except (OSError, ValueError, AttributeError):
+        data = {"examples": []}
+    _state["manifest"] = data
     return _state["manifest"]
 
 
 def entries() -> list[dict]:
-    return list(manifest().get("examples", []))
+    # Only what can be verified is offered.
+    return [e for e in manifest().get("examples", []) if e.get("sha256")]
 
 
 def find(example_id: str) -> dict | None:
     return next((e for e in entries() if e.get("id") == example_id), None)
 
 
+def _online() -> bool:
+    from .mmcp_client import online_access
+    return online_access()
+
+
+def _offline_message() -> str:
+    from .mmcp_client import OFFLINE_MESSAGE
+    return OFFLINE_MESSAGE
+
+
 def _get(url: str, accept: str = "application/json", limit: int | None = None) -> bytes:
+    if not _online():
+        raise OSError(_offline_message())
+    from .mmcp_client import urlopen        # asks may_connect() about every redirect hop
     req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "animatica-blender"})
-    with urllib.request.urlopen(req, timeout=15.0) as resp:
+    with urlopen(req, timeout=15.0) as resp:
         return resp.read(limit) if limit else resp.read()
 
 
@@ -138,20 +167,23 @@ def _lfs_pointer(text: str) -> tuple[str, int] | None:
     return (oid, size) if oid and size else None
 
 
-def _entry(commit: str, item: dict, sidecars: dict) -> dict:
-    """One example from its listing item, its LFS pointer and its sidecar."""
+def _entry(commit: str, item: dict, sidecars: dict) -> dict | None:
+    """One example from its listing item, its LFS pointer and its sidecar.
+
+    None for a file with no LFS pointer: without its hash it cannot be checked,
+    and an unchecked .blend is not opened.
+    """
     stem = item["name"][:-len(".blend")]
+    pointer = _lfs_pointer(_get(_raw_url(commit, item["path"]), "*/*", 512).decode("utf-8", "replace"))
+    if pointer is None:
+        return None
     meta = {}
     if stem in sidecars:
         try:
             meta = json.loads(_get(_raw_url(commit, sidecars[stem])).decode("utf-8"))
         except (OSError, ValueError):
             meta = {}
-    pointer = _lfs_pointer(_get(_raw_url(commit, item["path"]), "*/*", 512).decode("utf-8", "replace"))
-    if pointer is not None:
-        sha, size, url = pointer[0], pointer[1], _media_url(commit, item["path"])
-    else:                               # committed without LFS: no hash to check against
-        sha, size, url = "", int(item.get("size") or 0), _raw_url(commit, item["path"])
+    sha, size, url = pointer[0], pointer[1], _media_url(commit, item["path"])
     return {
         "id": stem,
         "title": meta.get("title") or stem.replace("-", " ").capitalize(),
@@ -162,7 +194,7 @@ def _entry(commit: str, item: dict, sidecars: dict) -> dict:
         "lesson": meta.get("lesson", ""),
         "character": meta.get("character", ""),
         "credit": meta.get("credit", ""),
-        "file": f"{stem}.{sha[:8]}.blend" if sha else item["name"],
+        "file": f"{stem}.{sha[:8]}.blend",
         "url": url,
         "size": size,
         "sha256": sha,
@@ -171,8 +203,8 @@ def _entry(commit: str, item: dict, sidecars: dict) -> dict:
 
 def _fetch_manifest() -> bool:
     """List the examples from the repository now. True if the list changed."""
+    commit = REF
     try:
-        commit = _get(f"{API}/commits/{REF}", "application/vnd.github.sha").decode().strip()
         listing = json.loads(_get(f"{API}/contents/{FOLDER}?ref={commit}"))
     except Exception:                       # noqa: BLE001 — the cached list stands in
         return False
@@ -184,7 +216,8 @@ def _fetch_manifest() -> bool:
     try:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=8) as pool:
-            found = list(pool.map(lambda item: _entry(commit, item, sidecars), blends))
+            found = [e for e in pool.map(lambda item: _entry(commit, item, sidecars), blends)
+                     if e is not None]
     except Exception:                       # noqa: BLE001
         return False
     found.sort(key=lambda e: (e["tier"], e["order"], e["title"]))
@@ -220,17 +253,21 @@ def _fetch_manifest_worker():
     try:
         _fetch_manifest()
     finally:
+        from .mmcp_client import post_to_main
+        post_to_main(_redraw)           # posted before "done", so the pump waits for it
         _state["fetching"] = False
-        bpy.app.timers.register(lambda: (_redraw(), None)[1], first_interval=0.0)
 
 
 def refresh_manifest_async() -> None:
     """List the examples again, once a session, off the main thread."""
     if _state["fetching"] or _state.get("refreshed"):
         return
+    if not _online():
+        return                  # not "refreshed": it lists once online access is allowed
     _state["fetching"] = True
     _state["refreshed"] = True
     threading.Thread(target=_fetch_manifest_worker, daemon=True).start()
+    _pump_while_busy()
 
 
 # ---------------------------------------------------------------------------
@@ -246,9 +283,12 @@ def _download_worker(entry: dict, retried: bool = False):
     fd, tmp = tempfile.mkstemp(dir=str(dest.parent), prefix=".part-", suffix=".blend")
     os.close(fd)
     try:
+        if not _online():
+            raise OSError(_offline_message())
+        from .mmcp_client import urlopen    # asks may_connect() about every redirect hop
         req = urllib.request.Request(_url(entry), headers={"Accept": "application/octet-stream"})
         digest = hashlib.sha256()
-        with urllib.request.urlopen(req, timeout=60.0) as resp, open(tmp, "wb") as out:
+        with urlopen(req, timeout=60.0) as resp, open(tmp, "wb") as out:
             _state["total"] = int(resp.headers.get("Content-Length") or entry.get("size") or 0)
             while True:
                 chunk = resp.read(1 << 16)
@@ -258,7 +298,9 @@ def _download_worker(entry: dict, retried: bool = False):
                 digest.update(chunk)
                 _state["done"] += len(chunk)
         want = (entry.get("sha256") or "").lower()
-        if want and digest.hexdigest() != want:
+        if not want:
+            raise ValueError("it has no checksum to verify it against")
+        if digest.hexdigest() != want:
             # Usually not corruption: the example was replaced in the
             # repository since this list was read (from the cache, say). List
             # again and, if this example changed, try once more against it;
@@ -283,11 +325,13 @@ def _download_worker(entry: dict, retried: bool = False):
         except OSError:
             pass
     finally:
+        from .mmcp_client import post_to_main
+        post_to_main(_after_download)   # posted before "done", so the pump waits for it
         _state["downloading"] = ""
-        bpy.app.timers.register(_after_download, first_interval=0.0)
 
 
 def _after_download():
+    _state["downloading"] = ""
     _redraw()
     pending = _state["pending_open"]
     if pending:
@@ -299,13 +343,24 @@ def _after_download():
 
 
 def download_async(entry: dict, *, then_open: bool) -> bool:
-    if _state["downloading"]:
+    if _state["downloading"] or not _online():
         return False
     _state.update({"downloading": entry["id"], "done": 0,
                    "total": int(entry.get("size") or 0), "error": "",
                    "pending_open": entry["id"] if then_open else ""})
     threading.Thread(target=_download_worker, args=(entry,), daemon=True).start()
+    _pump_while_busy()
     return True
+
+
+def _busy() -> bool:
+    return bool(_state["fetching"] or _state["downloading"])
+
+
+def _pump_while_busy() -> None:
+    """The workers post their results; this keeps the main thread collecting them."""
+    from .mmcp_client import pump_while
+    pump_while(_busy)
 
 
 def download_percent() -> float:
@@ -316,13 +371,67 @@ def download_percent() -> float:
 # Opening one
 # ---------------------------------------------------------------------------
 
+def _working_copy(entry: dict) -> pathlib.Path:
+    """A copy of the verified download to open, so saving never writes over it.
+
+    ``scenes/<name>.blend`` beside the cache — unless one is there that the
+    artist has saved work into, in which case the next free ``<name>-N.blend``.
+    """
+    import filecmp
+    import shutil
+
+    src = cached_path(entry)
+    folder = cache_dir() / "scenes"
+    folder.mkdir(exist_ok=True)
+    n = 1
+    while True:
+        dest = folder / (f"{entry['id']}.blend" if n == 1 else f"{entry['id']}-{n}.blend")
+        if not dest.exists():
+            shutil.copyfile(src, dest)
+            return dest
+        if filecmp.cmp(src, dest, shallow=False):
+            return dest
+        n += 1
+
+
 def open_now(entry: dict) -> None:
-    """Load the example as an untitled session, then put the sidebar on it."""
-    path = cached_path(entry)
-    bpy.ops.wm.read_homefile(filepath=str(path), load_ui=True)
+    """Load the example, with auto-run off for it, then put the sidebar on it.
+
+    ``use_scripts=False`` is the point: a registered text block or a scripted
+    driver in the file does not run, whatever the Auto Run preference says.
+    """
+    path = _working_copy(entry)
+    bpy.ops.wm.open_mainfile(filepath=str(path), load_ui=True, use_scripts=False)
     # The Animatica tab cannot be chosen when the file is built (there is no
     # window in a background build), so it is chosen here, once the UI exists.
     bpy.app.timers.register(_show_sidebar, first_interval=0.1)
+    if not _state.get("told_save_as"):
+        _state["told_save_as"] = True
+        bpy.app.timers.register(_tell_save_as, first_interval=0.3)
+
+
+SAVE_AS_HINT = "Save As… to keep your work"
+
+
+def is_working_copy(filepath: str | None = None) -> bool:
+    """Is the open file an example's working copy (in Blender's per-version data folder)?"""
+    path = filepath if filepath is not None else bpy.data.filepath
+    if not path:
+        return False
+    try:
+        folder = os.path.realpath(str(cache_dir() / "scenes"))
+        return os.path.commonpath([folder, os.path.realpath(path)]) == folder
+    except (OSError, ValueError):
+        return False
+
+
+def _tell_save_as():
+    """Once a session: Ctrl+S would save into a folder a Blender upgrade leaves behind."""
+    from .mmcp_client import popup
+    popup(SAVE_AS_HINT, ["This example is a copy kept in Blender's own data folder,",
+                         "which a Blender upgrade leaves behind. Use File > Save As",
+                         "to keep your work somewhere of your own."])
+    return None
 
 
 def _show_sidebar():
@@ -400,6 +509,9 @@ class ANIMATICA_OT_open_example(bpy.types.Operator):
         if is_cached(entry):
             open_now(entry)
             return {'FINISHED'}
+        if not _online():
+            self.report({'ERROR'}, f"{entry['title']} needs a download. {_offline_message()}")
+            return {'CANCELLED'}
         if not download_async(entry, then_open=True):
             self.report({'WARNING'}, "another example is still downloading")
             return {'CANCELLED'}
@@ -416,6 +528,11 @@ class ANIMATICA_MT_examples(bpy.types.Menu):
         layout = self.layout
         found = entries()
         if not found:
+            if not _online():
+                layout.label(text=_offline_message(), icon='INTERNET_OFFLINE')
+                layout.operator("animatica.open_online_prefs", text="Open Preferences",
+                                icon='PREFERENCES')
+                return
             layout.label(text="Listing examples…" if _state["fetching"]
                          else "Examples need a connection the first time", icon='INFO')
             return
@@ -455,6 +572,10 @@ def draw_credit(layout, scene) -> None:
     CC-BY asks for the credit to be visible where the work is used; the panel
     of the file that uses it is that place.
     """
+    if bpy.data.is_dirty and is_working_copy():
+        row = layout.row(align=True)
+        row.label(text=SAVE_AS_HINT, icon='INFO')
+        row.operator("wm.save_as_mainfile", text="", icon='FILE_TICK')
     credit = scene.get("animatica_example_credit")
     if not credit:
         return

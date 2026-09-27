@@ -105,6 +105,19 @@ def read_extension_metadata(gltf: dict[str, Any]) -> dict[str, Any]:
     return (gltf.get("extensions") or {}).get("MMCP_motion") or {}
 
 
+def _decode_channels(channels, input_for, quats_for, vec3s_for) -> None:
+    """Decode every rotation and translation channel's data up front, so a
+    malformed response raises before the rig or its action is touched."""
+    for ch in channels:
+        path = (ch.get("target") or {}).get("path")
+        if path == ROTATION_PATH:
+            input_for(ch["sampler"])
+            quats_for(ch["sampler"])
+        elif path == TRANSLATION_PATH:
+            input_for(ch["sampler"])
+            vec3s_for(ch["sampler"])
+
+
 def bake_gltf_to_armature(
     gltf: dict[str, Any],
     armature_obj: bpy.types.Object,
@@ -176,6 +189,11 @@ def bake_gltf_to_armature(
                 for i in range(0, len(floats), 3)
             ]
         return decoded_outputs[out_idx]
+
+    # Read every buffer before anything is changed. A response that fails to
+    # decode (a truncated buffer: "Incorrect padding") used to fail here only
+    # after the new, empty action had replaced the user's on the rig.
+    _decode_channels(channels, _input_for, _quats_for, _vec3s_for)
 
     # Make sure pose-bone rotation modes are quaternion (we're feeding quats).
     pose = armature_obj.pose
@@ -377,8 +395,33 @@ def splice_gltf_into_action(
             ]
         return decoded_outputs[out_idx]
 
+    # Decode first: failing halfway through would leave the window wiped.
+    _decode_channels(channels, _input_for, _quats_for, _vec3s_for)
+
     pose = armature_obj.pose
     _ns = bone_namespace(pose)
+
+    # What each channel held just outside the window before the splice, for
+    # the channels the splice leaves with no key on one side (see Step 5).
+    from .constraints_ui import _iter_fcurve_collections as _collections
+    before_edges: dict[tuple[str, int], tuple] = {}
+    for fcurves in _collections(action, armature_obj):
+        for fc in fcurves:
+            xs = [kp.co.x for kp in fc.keyframe_points]
+            before_edges[(fc.data_path, fc.array_index)] = (
+                fc.evaluate(fs_target - 1), fc.evaluate(fe_target + 1),
+                any(x < fs_target - 0.5 for x in xs), any(x > fe_target + 0.5 for x in xs),
+            )
+    # The rotation a bone shows, whatever channels it uses: the splice turns
+    # every bone to quaternions, and a bone posed in Euler (or axis-angle)
+    # has a stale rotation_quaternion -- held from it, the bone snapped to
+    # that old rotation either side of the window.
+    rest_values = {
+        pb.name: {"location": tuple(pb.location),
+                  "rotation_quaternion": tuple(pb.matrix_basis.to_quaternion())
+                  if pb.rotation_mode != 'QUATERNION' else tuple(pb.rotation_quaternion)}
+        for pb in pose.bones
+    }
 
     for pb in pose.bones:
         pb.rotation_mode = 'QUATERNION'
@@ -401,7 +444,7 @@ def splice_gltf_into_action(
     from .constraints_ui import _ensure_fcurve, _iter_fcurve_collections
 
     preserved: dict[tuple[str, int], list[dict[str, Any]]] = {}
-    for fcurves in _iter_fcurve_collections(action):
+    for fcurves in _iter_fcurve_collections(action, armature_obj):
         for fc in fcurves:
             key = (fc.data_path, fc.array_index)
             for kp in fc.keyframe_points:
@@ -423,7 +466,7 @@ def splice_gltf_into_action(
 
     # Step 1b — wipe existing keys in the target range on every fcurve.
     # Neighbours' keys (outside the range) are untouched.
-    for fcurves in _iter_fcurve_collections(action):
+    for fcurves in _iter_fcurve_collections(action, armature_obj):
         for fc in list(fcurves):
             kps = fc.keyframe_points
             for i in range(len(kps) - 1, -1, -1):
@@ -503,7 +546,7 @@ def splice_gltf_into_action(
     # an existing frame updates in-place, so a single insert call is enough.
     user_key_frames: set[int] = set()
     for (data_path, array_index), kps in preserved.items():
-        fc = _ensure_fcurve(action, data_path, array_index)
+        fc = _ensure_fcurve(action, data_path, array_index, armature_obj)
         if fc is None:
             continue
         for state in kps:
@@ -534,16 +577,43 @@ def splice_gltf_into_action(
                     continue
                 kp.type = 'KEYFRAME' if f in anchors else 'GENERATED'
 
-    flat = getattr(action, "fcurves", None)
-    if flat is not None:
-        _tag_in_range(flat)
-    else:
-        for layer in getattr(action, "layers", ()):
-            for strip in getattr(layer, "strips", ()):
-                for slot in getattr(action, "slots", ()):
-                    cb = strip.channelbag(slot, ensure=False) if hasattr(strip, "channelbag") else None
-                    if cb is not None:
-                        _tag_in_range(cb.fcurves)
+    # This rig's curves only: another slot's keys animate something else.
+    for fcurves in _collections(action, armature_obj):
+        _tag_in_range(fcurves)
+
+    # Step 5 — hold the pose outside the window. A channel with keys only
+    # inside it (a bone the user never keyed gets a new curve here) holds its
+    # first and last key forever, so the gap's pose leaked over the whole
+    # action: a foot the user never touched moved on every frame either side.
+    # Where a side has no key of its own, a key just outside the window holds
+    # what the channel showed there before.
+    from .constraints_ui import _bone_name_from_data_path
+    for fcurves in _collections(action, armature_obj):
+        for fc in fcurves:
+            xs = [kp.co.x for kp in fc.keyframe_points]
+            if not xs:
+                continue
+            edge = before_edges.get((fc.data_path, fc.array_index))
+            if edge is None:
+                bone = _bone_name_from_data_path(fc.data_path)
+                prop = fc.data_path.rsplit(".", 1)[-1]
+                vals = (rest_values.get(bone) or {}).get(prop)
+                if vals is None or fc.array_index >= len(vals):
+                    continue
+                v = vals[fc.array_index]
+                edge = (v, v, False, False)
+            left, right, had_left, had_right = edge
+            added = False
+            if not had_left and not any(x < fs_target - 0.5 for x in xs):
+                kp = fc.keyframe_points.insert(fs_target - 1, left, options={'FAST'})
+                kp.type = 'GENERATED'
+                added = True
+            if not had_right and not any(x > fe_target + 0.5 for x in xs):
+                kp = fc.keyframe_points.insert(fe_target + 1, right, options={'FAST'})
+                kp.type = 'GENERATED'
+                added = True
+            if added:
+                fc.update()
 
 
 def bake_gltf_to_actions_per_block(
@@ -1694,16 +1764,10 @@ def _tag_keys_at_frame_as_authored(action: bpy.types.Action, frame: int) -> None
                 if int(round(kp.co[0])) == target:
                     kp.type = 'KEYFRAME'
 
-    flat = getattr(action, "fcurves", None)
-    if flat is not None:
-        _tag(flat)
-        return
-    for layer in getattr(action, "layers", ()):
-        for strip in getattr(layer, "strips", ()):
-            for slot in getattr(action, "slots", ()):
-                cb = strip.channelbag(slot, ensure=False) if hasattr(strip, "channelbag") else None
-                if cb is not None:
-                    _tag(cb.fcurves)
+    # The rig's curves only (the action may animate other things too).
+    from .constraints_ui import _iter_fcurve_collections
+    for fcurves in _iter_fcurve_collections(action):
+        _tag(fcurves)
 
 
 # ---------------------------------------------------------------------------

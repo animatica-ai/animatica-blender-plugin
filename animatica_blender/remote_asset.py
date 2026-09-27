@@ -34,7 +34,7 @@ import os
 import shutil
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 import bpy
 
@@ -136,10 +136,15 @@ def download(progress=None, is_cancelled=None) -> Path:
     if is_cached():
         return target
 
+    from .mmcp_client import OFFLINE_MESSAGE, online_access
+    if not online_access():
+        raise DownloadError(f"The Animatic character needs a one-off download. {OFFLINE_MESSAGE}.")
+
     tmp = target.with_suffix(".part")
     digest = hashlib.sha256()
     received = 0
     try:
+        from .mmcp_client import urlopen    # asks may_connect() about every redirect hop
         req = Request(ASSET_URL, headers={"Accept": "application/octet-stream"})
         with urlopen(req, timeout=60) as resp, open(tmp, "wb") as fh:
             declared = int(resp.headers.get("Content-Length") or ASSET_BYTES)
@@ -162,6 +167,10 @@ def download(progress=None, is_cancelled=None) -> Path:
         ) from exc
     except URLError as exc:
         _discard(tmp)
+        from .mmcp_client import refused
+        if refused(exc):
+            raise DownloadError(f"The Animatic character needs a one-off download. "
+                                f"{OFFLINE_MESSAGE}.") from exc
         raise DownloadError(
             f"Cannot reach {ASSET_REPO} to download the Animatic character "
             f"({exc.reason})."

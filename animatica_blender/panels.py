@@ -233,7 +233,13 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
             mmcp_client.connect_async()
             box = layout.box()
             err = mmcp_client.last_connection_error()
-            if mmcp_client.connecting() or not err:
+            if err == mmcp_client.OFFLINE_MESSAGE:
+                box.label(text="Not connected", icon='INTERNET_OFFLINE')
+                col = box.column(align=True)
+                col.label(text=err)
+                col.operator("animatica.open_online_prefs", text="Open Preferences",
+                             icon='PREFERENCES')
+            elif mmcp_client.connecting() or not err:
                 box.label(text="Connecting…", icon='SORTTIME')
             else:
                 box.label(text="Cannot reach the server", icon='ERROR')
@@ -523,12 +529,15 @@ def _draw_next_take(layout, context) -> None:
 def _draw_kept(layout, arm) -> None:
     """Where an accepted take went. Accept moves it off the rig onto the NLA,
     and without a word the keyframes vanishing reads as the take lost."""
+    from .operators import _NLA_TRACK_PREFIXES
     ad = arm.animation_data if arm is not None else None
-    if ad is None or not any(t.name.startswith("Animatica: ") for t in ad.nla_tracks):
+    n = sum(1 for t in ad.nla_tracks if t.name.startswith(_NLA_TRACK_PREFIXES)) if ad is not None else 0
+    if not n:
         return
     row = layout.row()
     row.active = False
-    row.label(text="Kept take is on the NLA", icon='NLA')
+    row.label(text="Kept take is on the NLA" if n == 1 else "Kept takes are on the NLA",
+              icon='NLA')
 
 
 def _draw_review(layout, context, settings, arm) -> None:
@@ -630,12 +639,9 @@ def _draw_review(layout, context, settings, arm) -> None:
     row = box.row(align=True)
     row.scale_y = 1.3
     if single:
-        # Accept replaces a take kept before; say so on the button, not only
-        # in its tooltip.
-        ad = arm.animation_data if arm is not None else None
-        kept = ad is not None and any(t.name.startswith("Animatica: ") for t in ad.nla_tracks)
-        row.operator("animatica.accept", icon='CHECKMARK',
-                     text="Replace Kept" if kept else "Accept")
+        # Accept adds the take to the NLA, above any kept before; nothing is
+        # replaced, so the button says only that.
+        row.operator("animatica.accept", icon='CHECKMARK', text="Accept")
         row.operator("animatica.reject", icon='X')
         # Re-roll just the active block (keeping its neighbours) — otherwise
         # only reachable by right-clicking a timeline strip. With a single
@@ -693,11 +699,29 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
         if not (status["runtime"] and status["model"]):
             box = layout.box()
             fetching = engine.fetch_state()
+            installing = engine.install_state()
             if fetching["running"]:
                 box.label(text=f"Downloading the poser… {engine.fetch_percent():.0f}%",
                           icon='SORTTIME')
+            elif installing["running"]:
+                box.label(text="Installing the inference runtime…", icon='SORTTIME')
+            elif not engine.online():
+                # Nothing is fetched without Blender's online access.
+                box.label(text=(status.get("model_note") or
+                                "The Autoposer needs a one-off download")[:60], icon='INFO')
+                mmcp_client.draw_offline(box, engine.offline_message())
             else:
-                box.label(text="The poser is setting itself up", icon='SORTTIME')
+                if status.get("model_note"):
+                    box.label(text=status["model_note"][:60], icon='INFO')
+                err = fetching["error"] or installing["error"]
+                if err:
+                    row = box.row()
+                    row.alert = True
+                    row.label(text=err[:60], icon='ERROR')
+                row = box.row()
+                row.scale_y = 1.2
+                row.operator("autoposer.download", icon='IMPORT',
+                             text=engine.download_label())
             box.label(text="Preferences → Animatica for detail")
         elif not poser.has_controls(arm):
             row = layout.row()

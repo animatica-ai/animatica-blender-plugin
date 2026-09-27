@@ -94,6 +94,25 @@ def _animatica_load_post(dummy):
     # viewport until something else invalidated them.
     key_poses.clear()
     key_poses.invalidate_plan()
+    # ...and so would anything else remembered about it: the take In place
+    # last sampled (editing the new file's path re-used the old file's
+    # motion), the Autoposer's last control positions, a bake still pending.
+    from . import inplace, root_edit
+    from .autoposer import poser
+    inplace.clear_cache()
+    poser._LAST_KEY = None
+    key_poses._rebuild_requested_at = None
+    key_poses._rebuild_first_at = None
+    root_edit._pending["at"] = None
+
+    # Sessions only copied onto a duplicate, and splice copies of the user's
+    # action that no waiting take refers to any more (each pinned with a fake
+    # user, so they would stay in the file for good).
+    from . import preview_session
+    try:
+        preview_session.sweep()
+    except Exception as exc:  # noqa: BLE001 -- never break a file load
+        print(f"[animatica] preview: could not tidy waiting takes: {exc}")
 
     from . import mmcp_client
     mmcp_client.connect_async()
@@ -186,8 +205,10 @@ def register():
         from . import mmcp_client
         mmcp_client.connect_async()
         # ...and ask, quietly, whether there is a newer build. Once a day, on a
-        # worker thread; it changes nothing until someone presses Update.
-        updater.check_async()
+        # worker thread; it changes nothing until someone presses Update. Not
+        # at all without Blender's online access.
+        if mmcp_client.online_access():
+            updater.check_async()
         return None
 
     bpy.app.timers.register(_connect_when_ready, first_interval=1.0)
