@@ -670,10 +670,12 @@ def _set_key(fc, f, value):
     kp.type = 'GENERATED'            # the take's, not the artist's: Reject strips it
 
 
-def apply(arm, action, scene, spans, fps: float | None = None) -> list:
+def apply(arm, action, scene, spans, fps: float | None = None, *, reuse: bool = False) -> list:
     """Take the travel out of *action* over each span ``(first, last, loop)``
     (a prompt block each; a loop's cycle), keeping the original keys so
-    :func:`restore` can put it back. Returns what was taken out, per span."""
+    :func:`restore` can put it back. Returns what was taken out, per span.
+    ``reuse`` takes the take as last sampled (an edit to the root trajectory
+    curve changes the path, not the take)."""
     if arm is None or action is None or not spans:
         return []
     restore(arm, action)
@@ -691,7 +693,7 @@ def apply(arm, action, scene, spans, fps: float | None = None) -> list:
     plan, report = {}, []
     hold = None
     turned = 0.0                      # heading earlier spans took out: a turn carries on
-    for span in _fit_spans(arm, action, scene, spans, fps):
+    for span in _fit_spans(arm, action, scene, spans, fps, reuse=reuse):
         first, last, xy, yaw, S = span["first"], span["last"], span["xy"], span["yaw"], span["S"]
         if hold is None:
             hold = xy[0].copy()
@@ -737,10 +739,20 @@ def apply(arm, action, scene, spans, fps: float | None = None) -> list:
     return report
 
 
-def _fit_spans(arm, action, scene, spans, fps):
-    """The trajectory of each span ``(first, last, loop)``: the server's, laid
-    onto the take, or one fitted here. Samples the take (moves the playhead,
-    and puts it back); writes nothing."""
+#: the last fit, before any edit: ``reuse`` reads it back instead of sampling again
+_last_fit: dict = {"key": None, "spans": []}
+
+
+def _fit_spans(arm, action, scene, spans, fps, *, reuse: bool = False):
+    """The trajectory of each span ``(first, last, loop)``: the artist's edited
+    curve (root_edit.py), the server's, laid onto the take, or one fitted here.
+    Samples the take (moves the playhead, and puts it back) unless ``reuse``
+    finds it sampled already; writes nothing. Call on the take as generated
+    (not in place): apply restores it first."""
+    from . import root_edit
+    key = (arm.name, action.name, tuple(sorted(spans)), round(fps, 3), tuple(arm.matrix_world.col[3]))
+    if reuse and _last_fit["key"] == key:
+        return root_edit.overlay(action, _last_fit["spans"], fps)
     A = arm.matrix_world.copy()
     out = []
     for first, last, loop in sorted(spans):
@@ -765,7 +777,8 @@ def _fit_spans(arm, action, scene, spans, fps):
                 yaw = yaw + (turn - yaw[-1]) * u[:, 0]
         out.append({"first": first, "last": last, "loop": bool(loop), "xy": xy, "yaw": yaw,
                     "model": model, "prm": prm, "S": S, "floor": body.floor})
-    return out
+    _last_fit["key"], _last_fit["spans"] = key, out
+    return root_edit.overlay(action, out, fps)
 
 
 def describe(span: dict) -> str:
@@ -781,12 +794,16 @@ def describe(span: dict) -> str:
         bits.append(f"{keys[-1]:.2f} m")
     if model == "still":
         bits = ["on the spot"]
+    if model == "edited":
+        bits = ["edited", f"{span.get('length_m', 0.0):.2f} m"]
+        if span.get("off_fit_cm"):
+            bits.append(f"{span['off_fit_cm']:.0f} cm off the fit")
     if span.get("source") == "server":
         bits.append("server")
     return " · ".join(bits)
 
 
-def fitted_path(arm, action, scene) -> list:
+def fitted_path(arm, action, scene, *, reuse: bool = False) -> list:
     """The root trajectory of the take showing, per span, for the viewport:
     ``[{"frames": [a, b], "path": [[x, y], ...], "floor": z, "label": str}]``
     (world, +Z up). With In place on it is what was taken out; otherwise it is
@@ -801,7 +818,7 @@ def fitted_path(arm, action, scene) -> list:
     from . import operators          # noqa: PLC0415 - lazy: operators imports this module
     fps = scene.render.fps / scene.render.fps_base
     out = []
-    for span in _fit_spans(arm, action, scene, operators._inplace_spans(arm, action), fps):
+    for span in _fit_spans(arm, action, scene, operators._inplace_spans(arm, action), fps, reuse=reuse):
         info = {"model": span["model"], **span["prm"]}
         out.append({"frames": [span["first"], span["last"]], "floor": float(span["floor"]),
                     "path": [[float(x), float(y)] for x, y in span["xy"]], "label": describe(info)})

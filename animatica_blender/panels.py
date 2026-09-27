@@ -913,6 +913,13 @@ class ANIMATICA_PT_settings_viewport(AnimaticaPanelBase, Panel):
         grid.prop(settings, "key_pose_root_path", text="Root Trajectory")
         grid.prop(settings, "key_pose_labels", text="Frame Numbers")
         grid.prop(settings, "key_pose_xray", text="X-Ray")
+        joints = parts.row(align=True)
+        joints.active = settings.key_pose_trail
+        joints.prop(settings, "key_pose_trail_joints")
+        root = parts.row(align=True)
+        root.active = settings.key_pose_root_path
+        root.operator("animatica.edit_root_trajectory", text="Edit Root Trajectory", icon='CURVE_BEZCURVE')
+        root.operator("animatica.reset_root_trajectory", text="", icon='LOOP_BACK')
         col = parts.column()
         col.use_property_split = True
         col.use_property_decorate = False

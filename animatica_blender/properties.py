@@ -965,14 +965,28 @@ class AnimaticaSettings(PropertyGroup):
         default=True,
         update=_key_poses_toggle_update,
     )
+    key_pose_trail_joints: EnumProperty(
+        name="Trail Joints",
+        description="Which joints the motion trail follows",
+        items=[
+            ("HIPS", "Hips", "The root: where the body goes, sway and all"),
+            ("HEAD", "Head", "The head"),
+            ("HANDS", "Hands", "Both hands"),
+            ("FEET", "Feet", "Both feet"),
+        ],
+        options={'ENUM_FLAG'},
+        default={"HIPS", "HEAD", "HANDS", "FEET"},
+        update=_key_poses_redraw_update,
+    )
     key_pose_root_path: BoolProperty(
         name="Root Trajectory",
         description=(
             "Draw the take's root trajectory on the floor, in amber: the path "
             "the character travels along without the sway of its steps -- a "
             "line, an arc, or one of those eased. It is what In place takes "
-            "out, so with In place on it shows what was removed. Labelled with "
-            "what it is (\"line · 1.05 m/s\")"
+            "out, so with In place on it shows what was removed. Coloured by "
+            "speed, green (slow) to red (fast), and labelled with what it is "
+            "(\"line · 1.05 m/s\"). Edit it with Edit Root Trajectory"
         ),
         default=False,
         update=_key_poses_toggle_update,
