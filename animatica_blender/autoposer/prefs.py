@@ -49,35 +49,20 @@ class AP_OT_get_model(bpy.types.Operator):
                       "published checksums (~150 MB, once)")
 
     def execute(self, context):
-        d = engine.data_dir()
-        src, token = engine.source()
-        if not engine.online() and not (src and not str(src).startswith("hf://")):
+        # In the background, like Download Autoposer: ~150 MB on the main thread
+        # froze Blender for as long as the download took.
+        src, _token = engine.source()
+        if src and not str(src).startswith("hf://"):
+            self.report({"INFO"}, f"the model comes from a folder ({src}) — nothing to download")
+            return {"CANCELLED"}
+        if not engine.online():
             self.report({"ERROR"}, engine.offline_message())
             return {"CANCELLED"}
-        wm = context.window_manager
-        wm.progress_begin(0, 100)
-        last = [0.0]
-
-        def on_progress(name, done, total):
-            if total:
-                pct = 100.0 * done / total
-                if pct - last[0] >= 1.0:
-                    last[0] = pct
-                    wm.progress_update(pct)
-
-        try:
-            b = apr.resolve(src, cache_dir=d, token=token, on_progress=on_progress)
-        except apr.BundleError as e:
-            wm.progress_end()
-            self.report({"ERROR"}, str(e))
+        if engine.fetch_state()["running"]:
+            self.report({"WARNING"}, "the model is already downloading")
             return {"CANCELLED"}
-        except Exception as e:                                 # noqa: BLE001
-            wm.progress_end()
-            self.report({"ERROR"}, f"download failed: {e}")
-            return {"CANCELLED"}
-        wm.progress_end()
-        engine.unload()                       # the next solve picks the new model up
-        self.report({"INFO"}, f"model ready ({b.path})")
+        engine.ensure_model(force=True, redownload=True)
+        self.report({"INFO"}, "downloading the model…")
         return {"FINISHED"}
 
 
@@ -111,7 +96,9 @@ class AP_OT_check(bpy.types.Operator):
     def execute(self, context):
         engine.unload()
         try:
-            eng = engine.load()
+            # Never a download from here: that ran on the main thread, and a
+            # model that needs one is what the Download button is for.
+            eng = engine.load(allow_install=False, allow_download=False)
         except engine.NotReady as e:
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}
@@ -216,15 +203,16 @@ def draw(layout, prefs, context):
     elif installing["error"] or fetching["error"]:
         row.alert = True
         row.label(text=(installing["error"] or fetching["error"])[:60], icon='ERROR')
+    elif st.get("model_note"):
+        row.label(text=st["model_note"][:60], icon='INFO')
     else:
         row.label(text="Not downloaded yet", icon='INFO')
     if not (st["runtime"] and st["model"]) and not (fetching["running"] or installing["running"]):
         if engine.online():
             box.operator("autoposer.download", icon='IMPORT', text=engine.download_label())
         else:
-            sub = box.row()
-            sub.active = False
-            sub.label(text=engine.offline_message(), icon='INTERNET_OFFLINE')
+            from ..mmcp_client import draw_offline
+            draw_offline(box)
     box.prop(prefs, "auto_install_runtime")
 
     header, body = layout.panel("animatica_prefs_poser_advanced", default_closed=True)

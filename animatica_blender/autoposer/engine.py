@@ -119,10 +119,200 @@ def source():
         sub = p.hf_subfolder.strip()
         # Empty means the revision this build is pinned to (and has the hashes of).
         pinned = apr.bundle.HF_REVISION
-        rev = p.hf_revision.strip() or pinned
+        rev = p.hf_revision.strip()
+        if rev in _UNPINNED_REVISIONS:
+            rev = pinned            # an older build saved "main"; see migrate_prefs()
+        rev = rev or pinned
         src = f"hf://{repo}" + (f"/{sub}" if sub else "") + (f"@{rev}" if rev != pinned else "")
         return src, (p.hf_token.strip() or None)
     return None, None
+
+
+#: Revisions that meant "whatever the repo has now". Earlier previews saved "main" as the
+#: default, which left those installs unpinned — and, once the pinned commit moved on, stuck
+#: with a model the build no longer vouches for. They mean the pinned commit now.
+_UNPINNED_REVISIONS = ("main", "master", "HEAD")
+
+
+def migrate_prefs() -> None:
+    """Clear a saved "main" revision, so the preference shows what is really used. Main thread."""
+    try:
+        p = prefs()
+        if p.hf_revision.strip() in _UNPINNED_REVISIONS:
+            p.hf_revision = ""
+    except (AttributeError, KeyError, TypeError):
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Is the cached model the one this build wants?
+#
+# Hashing the model is ~150 MB through sha256, about a second and a half. It is
+# done once per set of files — keyed by their sizes and modification times —
+# and never from a panel: `status()` only does the cheap checks (is it there,
+# does its meta.json name the pinned hashes, are the sizes right) and hands the
+# hashing to a worker. A cache that fails any of it counts as not downloaded,
+# so the Download button is offered instead of every solve failing.
+# ---------------------------------------------------------------------------
+
+#: {(folder, ((name, size, mtime_ns), ...)): verified?}
+_VERIFIED: dict = {}
+_VERIFY_LOCK = threading.Lock()
+_VERIFYING = {"running": False}
+
+#: What the panels say about a cached model that is there but will not do.
+MODEL_NOTES = {
+    "stale": "a newer Autoposer model is available",
+    "bad": "the downloaded Autoposer model is damaged",
+}
+
+
+def _signature(path):
+    sig = []
+    for name in apr.bundle.FILES:
+        try:
+            st = os.stat(os.path.join(str(path), name))
+        except OSError:
+            return None
+        sig.append((name, st.st_size, st.st_mtime_ns))
+    return (str(path), tuple(sig))
+
+
+def _mark_verified(bundle) -> None:
+    sig = _signature(bundle.path)
+    if sig is not None:
+        _VERIFIED[sig] = True
+
+
+def _uses_cache(src) -> bool:
+    """Is `src` served from the download cache (rather than a folder named directly)?"""
+    if src and not str(src).startswith("hf://"):
+        return False
+    return not (src is None and os.environ.get(apr.bundle.ENV_BUNDLE))
+
+
+def model_check(d, src, *, hash_now: bool = False):
+    """The cached model, as `(state, bundle)`.
+
+    state is "ok" (verified), "unverified" (looks right, not hashed yet),
+    "missing", "stale" (a model from another commit — an older build's) or
+    "bad" (damaged). With `hash_now`, an unverified model is hashed here —
+    once; the answer is remembered for as long as the files do not change.
+    Never call that from a draw.
+    """
+    try:
+        b = apr.bundle.cached_bundle(d, verify=False)
+    except Exception:                                          # noqa: BLE001
+        b = None
+    if b is None:
+        return "missing", None
+    pinned = need_source = None
+    if src and str(src).startswith("hf://"):
+        try:
+            repo, sub, rev = apr.bundle.parse_hf(src)
+        except apr.BundleError:
+            return "stale", b
+        pinned = apr.bundle.pinned_hashes(repo, sub, rev)
+        need_source = None if pinned else str(src)
+    files = b.meta.get("files")
+    if not isinstance(files, dict):
+        return "bad", b
+    if need_source and b.meta.get("source") != need_source:
+        return "stale", b
+    if pinned:
+        for name in ("poser.onnx", "ik.onnx"):
+            if (files.get(name) or {}).get("sha256") != pinned[name]:
+                return "stale", b
+    for name, info in files.items():
+        want = (info or {}).get("bytes") if isinstance(info, dict) else None
+        if isinstance(want, int):
+            try:
+                if os.path.getsize(os.path.join(str(b.path), name)) != want:
+                    return "bad", b
+            except OSError:
+                return "bad", b
+    sig = _signature(b.path)
+    if sig is None:
+        return "bad", b
+    known = _VERIFIED.get(sig)
+    if known is None and hash_now:
+        with _VERIFY_LOCK:          # a second caller waits for the first one's answer
+            known = _VERIFIED.get(sig)
+            if known is None:
+                try:
+                    known = bool(b.verify(pinned))
+                except OSError:
+                    known = False
+                _VERIFIED[sig] = known
+    if known is None:
+        return "unverified", b
+    return ("ok" if known else "bad"), b
+
+
+def _verify_async(d, src) -> None:
+    """Hash an unverified cache on a worker, so the panel can say what it found."""
+    if _VERIFYING["running"]:
+        return
+    _VERIFYING["running"] = True
+
+    def _work():
+        try:
+            model_check(d, src, hash_now=True)
+        finally:
+            _post(_after_verify)
+            _VERIFYING["running"] = False
+
+    threading.Thread(target=_work, daemon=True).start()
+    _keep_pumping()
+
+
+def _after_verify():
+    status(refresh=True)
+    _redraw()
+    return None
+
+
+def model_problem(state: str) -> str:
+    """The sentence for a model that cannot be used, and what to do about it."""
+    if state == "stale":
+        return f"{MODEL_NOTES['stale']} — press {download_label()}"
+    if state == "bad":
+        return f"{MODEL_NOTES['bad']} — press {download_label()} to fetch it again"
+    return f"the Autoposer is not downloaded yet — press {download_label()}"
+
+
+def _offline_problem(state: str) -> str:
+    if state == "stale":
+        return f"{MODEL_NOTES['stale']}, but it needs a download. {offline_message()}"
+    if state == "bad":
+        return f"{MODEL_NOTES['bad']} and needs downloading again. {offline_message()}"
+    return f"the Autoposer needs a one-off download. {offline_message()}"
+
+
+# ---------------------------------------------------------------------------
+# Handing results to the main thread (see mmcp_client.post_to_main)
+# ---------------------------------------------------------------------------
+
+def _post(fn) -> None:
+    from ..mmcp_client import post_to_main
+    post_to_main(fn)
+
+
+def _busy() -> bool:
+    return bool(_INSTALL["running"] or _FETCH["running"] or _VERIFYING["running"])
+
+
+def _keep_pumping() -> None:
+    """Main thread: keep collecting the workers' results while any is running."""
+    from ..mmcp_client import pump_while
+    pump_while(_busy)
+
+
+def _redraw() -> None:
+    wm = getattr(bpy.context, "window_manager", None)
+    for window in getattr(wm, "windows", ()):
+        for area in window.screen.areas:
+            area.tag_redraw()
 
 
 #: `status()` is called from panel `draw()`, which Blender runs on every redraw — so it must
@@ -146,10 +336,19 @@ def status(refresh: bool = False) -> dict:
     p = prefs()
     d = data_dir()
     runtime_ok = apr.ortsetup.activate(cache_dir=d)
-    try:
-        cached = apr.bundle.cached_bundle(d, verify=False)
-    except Exception:                                          # noqa: BLE001
-        cached = None
+    src, _token = source()
+    state = "external"
+    if _uses_cache(src):
+        state, cached = model_check(d, src)
+        if state == "unverified":
+            _verify_async(d, src)       # hashed off the main thread, once
+        elif state not in ("ok",):
+            cached = None               # there, but not a model this build will run
+    else:
+        try:
+            cached = apr.bundle.cached_bundle(d, verify=False)
+        except Exception:                                      # noqa: BLE001
+            cached = None
     local = None
     if p.model_source == "LOCAL" and p.local_path:
         try:
@@ -176,6 +375,9 @@ def status(refresh: bool = False) -> dict:
                          or ("folder" if local else "")
                          or (b.meta.get("source") if b else "")),
         "step": (b.meta.get("step") if b else None),
+        # Why a model that is on disk does not count: a newer one is pinned, or it is damaged.
+        "model_state": state if b is None or b is cached else "external",
+        "model_note": MODEL_NOTES.get(state, "") if b is None else "",
         "loaded": _ENGINE is not None,
         "data_dir": d,
     }
@@ -193,6 +395,9 @@ def load(*, allow_install=True, allow_download=True, on_progress=None):
         src, token = source()
         if not apr.ortsetup.activate(cache_dir=d):
             if not allow_install:
+                if runtime_needs_network() and not online():
+                    raise NotReady("the inference runtime is not installed, and it needs a "
+                                   f"download. {offline_message()}")
                 raise NotReady("the inference runtime is not installed — press "
                                f"{download_label()}")
             if runtime_needs_network() and not online():
@@ -203,14 +408,23 @@ def load(*, allow_install=True, allow_download=True, on_progress=None):
                 raise NotReady(f"could not install the inference runtime: {e}") from e
             if not apr.ortsetup.activate(cache_dir=d):
                 raise NotReady("the inference runtime installed but will not import")
-        try:
-            bundle = apr.resolve(src, cache_dir=d, token=token,
-                                 allow_download=allow_download and online(),
-                                 on_progress=on_progress)
-        except apr.BundleError as e:
-            if allow_download and not online():
-                raise NotReady(f"the poser model is not downloaded. {offline_message()}") from e
-            raise NotReady(str(e)) from e
+        if _uses_cache(src):
+            state, bundle = model_check(d, src, hash_now=True)    # once per set of files
+            if state != "ok":
+                _reset_status()
+                if not allow_download:
+                    raise NotReady(model_problem(state) if online() else _offline_problem(state))
+                if not online():
+                    raise NotReady(_offline_problem(state))
+                try:
+                    bundle = _download_model(d, src, token, on_progress, force=True)
+                except apr.BundleError as e:
+                    raise NotReady(str(e)) from e
+        else:
+            try:
+                bundle = apr.resolve(src, cache_dir=d, token=token, allow_download=False)
+            except apr.BundleError as e:
+                raise NotReady(str(e)) from e
         try:
             _ENGINE = apr.Engine(bundle, threads=prefs().threads)
             ok, err = _ENGINE.selftest()
@@ -243,10 +457,11 @@ def _install_worker(cache_dir):
     except Exception as exc:                                   # noqa: BLE001
         _INSTALL["error"] = str(exc)
     finally:
-        _INSTALL["running"] = False
         # sys.path is touched on the main thread, where everything else that
-        # imports is, and a redraw picks the new state up.
-        bpy.app.timers.register(_after_install, first_interval=0.0)
+        # imports is, and a redraw picks the new state up. Posted before
+        # saying "done", so the main thread is still listening for it.
+        _post(_after_install)
+        _INSTALL["running"] = False
 
 
 def _after_install():
@@ -280,6 +495,7 @@ def ensure_runtime(*, force: bool = False) -> bool:
         return False        # not an error: it starts once online access is allowed
     _INSTALL.update({"running": True, "done": False, "error": ""})
     threading.Thread(target=_install_worker, args=(d,), daemon=True).start()
+    _keep_pumping()
     return False
 
 
@@ -297,21 +513,51 @@ def fetch_percent() -> float:
     return (100.0 * _FETCH["done"] / total) if total else 0.0
 
 
-def _fetch_worker(cache_dir, src, token):
+def _download_model(cache_dir, src, token, on_progress=None, *, force=False):
+    """Fetch the model into the cache and return it. Worker thread (or a caller that insists).
+
+    `force` downloads even over a cached copy — the case for one that is from another commit
+    or damaged, and for Re-download. The fresh copy was hashed as it arrived, so it is
+    remembered as verified.
+    """
+    if src and str(src).startswith("hf://"):
+        if not force:
+            state, b = model_check(cache_dir, src, hash_now=True)
+            if state == "ok":
+                return b
+        repo, sub, rev = apr.bundle.parse_hf(src)
+        b = apr.bundle.download_hf(repo, cache_dir, revision=rev, subfolder=sub, token=token,
+                                   on_progress=on_progress)
+        apr.bundle._stamp_source(b, str(src))
+    else:
+        b = apr.resolve(src, cache_dir=cache_dir, token=token, allow_download=True,
+                        on_progress=on_progress)
+    _mark_verified(b)
+    return b
+
+
+def _fetch_worker(cache_dir, src, token, force=False):
     def on_progress(_name, done, total):
         _FETCH["done"], _FETCH["total"] = done, total
 
     try:
-        apr.resolve(src, cache_dir=cache_dir, token=token, allow_download=True,
-                    on_progress=on_progress)
+        _download_model(cache_dir, src, token, on_progress, force=force)
+        _FETCH["fetched"] = True
     except Exception as exc:                                   # noqa: BLE001
         _FETCH["error"] = str(exc)
     finally:
+        _post(_after_fetch)          # before "done", so the main thread is still listening
         _FETCH["running"] = False
-        bpy.app.timers.register(_after_fetch, first_interval=0.0)
+
+
+def _reset_status() -> None:
+    global _STATUS_CACHE
+    _STATUS_CACHE = (0.0, None)
 
 
 def _after_fetch():
+    if _FETCH.pop("fetched", False):
+        unload()                    # the next solve picks the new model up
     status(refresh=True)
     preload_async()
     wm = getattr(bpy.context, "window_manager", None)
@@ -321,7 +567,7 @@ def _after_fetch():
     return None
 
 
-def ensure_model(*, force: bool = False) -> bool:
+def ensure_model(*, force: bool = False, redownload: bool = False) -> bool:
     """Start the one-off model download if it is missing. True if it is here.
 
     Called after the runtime install and from the Download Autoposer button;
@@ -334,20 +580,25 @@ def ensure_model(*, force: bool = False) -> bool:
     p = prefs()
     if getattr(p, "model_source", "HF") == "LOCAL":
         return bool(status()["model"])
-    if status()["model"]:
+    st = status(refresh=True)       # cheap; a stale or damaged cache is "not here"
+    if st["model"] and not redownload:
         return True
     if _FETCH["running"]:
         return False
     if _FETCH["error"] and not force:
         return False        # said its piece; the preferences button can retry
     src, token = source()
-    if not src:
-        return False
+    if not src and not redownload:
+        return False        # "Already installed": nothing is fetched unless asked
     if not online():
         return False
+    # Over a cached copy that is stale or damaged — or when asked to — fetch
+    # regardless of what is there.
+    force_fetch = redownload or st.get("model_state") in ("stale", "bad")
     _FETCH.update({"running": True, "error": "", "done": 0, "total": 0})
-    threading.Thread(target=_fetch_worker, args=(data_dir(), src, token),
+    threading.Thread(target=_fetch_worker, args=(data_dir(), src, token, force_fetch),
                      daemon=True).start()
+    _keep_pumping()
     return False
 
 
@@ -405,10 +656,11 @@ def get():
     busy = _INSTALL["running"] or _FETCH["running"]
     needs_network = (not st["runtime"] and runtime_needs_network()) or not st["model"]
     if needs_network and not busy:
+        state = st.get("model_state", "missing") if not st["model"] else "missing"
         if not online():
-            raise NotReady(f"the Autoposer needs a one-off download. {offline_message()}")
+            raise NotReady(_offline_problem(state))
         if not auto_setup() and not (_INSTALL["error"] or _FETCH["error"]):
-            raise NotReady(f"the Autoposer is not downloaded yet — press {download_label()}")
+            raise NotReady(model_problem(state))
     if not ensure_runtime():
         if _INSTALL["error"]:
             raise NotReady(f"the inference runtime would not install: {_INSTALL['error']}")
