@@ -729,7 +729,12 @@ def bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int, 
     hand_pose.apply(arm, action, settings, (gen_start, gen_end))
     # A cycle, if the model sampled one: last, so it repeats the motion as it
     # will play.
-    if server_looped:
+    # Not on a splice: there the take is a stretch of the user's own action,
+    # and making a cycle would rewrite their keys and the scene range with no
+    # Reject to take it back.
+    if server_looped and spliced:
+        print("[animatica] loop: generated into a gap in the action, left as it is (not made a cycle)")
+    elif server_looped:
         from . import loop
         done = loop.apply(arm, action, (gen_start, gen_end))
         if done:

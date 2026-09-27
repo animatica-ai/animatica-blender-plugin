@@ -27,6 +27,7 @@ import math
 import time
 
 import bpy
+from bpy.app.handlers import persistent
 import numpy as np
 from mathutils import Vector
 
@@ -228,6 +229,7 @@ def _owner_of(update):
     return None
 
 
+@persistent
 def _on_root_edit_depsgraph(scene, depsgraph) -> None:
     for update in depsgraph.updates:
         if _owner_of(update) is not None:

@@ -2,6 +2,8 @@
 
 import json
 
+import sys
+
 import bpy
 from bpy.app.handlers import persistent
 from bpy.props import (
@@ -19,6 +21,9 @@ from bpy.types import AddonPreferences, PropertyGroup
 from . import autoposer
 from .autoposer import prefs as autoposer_prefs
 from .hand_pose import STYLES as _hand_pose_items
+
+# Whether this build is a preview (the zip stamps VERSION_TAG, e.g. v0.6.0-preview7).
+_PREVIEW_BUILD = "-preview" in getattr(sys.modules.get(__package__), "VERSION_TAG", "")
 
 
 def _on_hand_pose(settings, context):
@@ -545,11 +550,10 @@ class AnimaticaAddonPreferences(AddonPreferences):
     )
     update_previews: BoolProperty(
         name="Include previews",
-        default=True,
-        description=(
-            "Offer pre-release builds as well as final ones. While Animatica "
-            "is itself a preview, this is where the fixes are"
-        ),
+        # On by default only for a preview build: someone on a release is
+        # not asked to move to the next preview.
+        default=_PREVIEW_BUILD,
+        description="Offer pre-release builds as well as final ones",
     )
 
     # --- Animatica Cloud session (populated by /auth/login) ----------------
@@ -1071,7 +1075,7 @@ class AnimaticaSettings(PropertyGroup):
     )
 
     # -- Runtime state (not saved) --
-    is_generating: BoolProperty(name="Generating", default=False)
+    is_generating: BoolProperty(name="Generating", default=False, options={"SKIP_SAVE"})
     generation_progress: FloatProperty(
         name="Progress", default=0.0, min=0.0, max=1.0, subtype='FACTOR',
     )
@@ -1088,6 +1092,7 @@ class AnimaticaSettings(PropertyGroup):
         name="Cancel Requested",
         default=False,
         description="Flipped by the Cancel button; the running modal op picks it up and exits",
+        options={"SKIP_SAVE"},
     )
 
     # -- Quota / upgrade state. Set when the cloud returns 429

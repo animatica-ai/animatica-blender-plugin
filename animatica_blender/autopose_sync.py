@@ -25,6 +25,7 @@ from __future__ import annotations
 import time
 
 import bpy
+from bpy.app.handlers import persistent
 
 
 #: Quiet needed after the last solve before the pose is written. A live drag
@@ -143,6 +144,7 @@ def write_captured(context) -> int:
 # Controls follow the frame
 # ---------------------------------------------------------------------------
 
+@persistent
 def _on_frame_change(scene, _depsgraph=None) -> None:
     """Re-seat the controls on the pose at the new frame.
 
