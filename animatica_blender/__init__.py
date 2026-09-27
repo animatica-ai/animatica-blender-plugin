@@ -94,6 +94,16 @@ def _animatica_load_post(dummy):
     # viewport until something else invalidated them.
     key_poses.clear()
     key_poses.invalidate_plan()
+    # ...and so would anything else remembered about it: the take In place
+    # last sampled (editing the new file's path re-used the old file's
+    # motion), the Autoposer's last control positions, a bake still pending.
+    from . import inplace, root_edit
+    from .autoposer import poser
+    inplace.clear_cache()
+    poser._LAST_KEY = None
+    key_poses._rebuild_requested_at = None
+    key_poses._rebuild_first_at = None
+    root_edit._pending["at"] = None
 
     from . import mmcp_client
     mmcp_client.connect_async()

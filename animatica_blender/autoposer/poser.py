@@ -256,7 +256,7 @@ MAX_REST_RATIO = 2.0
 MAX_REST_ANGLE = 50.0        # degrees
 
 
-def driven_joints(arm):
+def driven_joints(arm, *, fresh: bool = False):
     """The joints this rig lets us WRITE, in joint order: mapped, anatomically the same joint,
     and hanging directly off the joint above them.
 
@@ -266,7 +266,7 @@ def driven_joints(arm):
     sit in between and the chain visibly tears at them; or its rest offset disagrees with the
     poser's by more than a build difference could explain.
     """
-    cached = arm.get("ap_driven")
+    cached = None if fresh else arm.get("ap_driven")
     if cached:
         return [(j, bn) for j, bn in joint_names(arm) if j in set(cached)]
     meta = engine.meta()
@@ -298,6 +298,29 @@ def driven_joints(arm):
             continue
         out.append((j, bn))
     return out
+
+
+#: what the artist is told when the Autoposer cannot work on a rig, instead of a traceback
+NO_MODEL = "The Autoposer model isn't downloaded yet — see Preferences > Add-ons > Animatica"
+UNSUPPORTED = "This rig isn't supported by the Autoposer"
+
+
+def rig_problem(arm):
+    """Why the Autoposer cannot pose *arm*, in a sentence for the artist, or None.
+
+    Asked before anything is changed on the rig: a Build Rig that failed half way used to hide
+    the whole skeleton, and leave it hidden."""
+    if arm is None:
+        return "Pick the character to pose first"
+    if not engine.meta():
+        return NO_MODEL
+    if len(joint_names(arm)) < 3:
+        return UNSUPPORTED
+    try:
+        engine.skeleton()
+    except engine.NotReady:
+        return NO_MODEL
+    return None
 
 
 def _deform_bones(arm):
@@ -1084,17 +1107,21 @@ class AP_OT_build_rig(bpy.types.Operator):
         except Exception as e:
             self.report({"ERROR"}, f"cannot read /rig from the sidecar: {e}")
             return {"CANCELLED"}
+        # Every check before the first change: a build that stops leaves the rig as it was.
+        problem = rig_problem(arm)
+        if problem is None:
+            try:
+                have = joint_names(arm)
+                drivable = driven_joints(arm, fresh=True)
+            except engine.NotReady:
+                problem = NO_MODEL
+        if problem is not None:
+            self.report({"ERROR"}, problem)
+            return {"CANCELLED"}
         _show_controls_in_front(arm)           # handles inside a body are not handles
         _hide_deform_bones(arm, context.scene.ap_hide_deform)
         arm["ap_prefix"] = joint_prefix(arm)    # settle the namespace once, at build time
-        arm["ap_driven"] = []
-        have = joint_names(arm)
-        drivable = driven_joints(arm)
         arm["ap_driven"] = [j for j, _bn in drivable]
-        if len(have) < 3:
-            self.report({"ERROR"},
-                        "that armature has no SOMA-30 joints (looked for Hips, LeftHand, …)")
-            return {"CANCELLED"}
         global _BUILDING
         _BUILDING = True                    # creating controls must not fire the toggle callbacks
         keep = _preserve_pose(arm)
@@ -1160,6 +1187,10 @@ class AP_OT_add_control(bpy.types.Operator):
     def execute(self, context):
         arm = _armature(context)
         if arm is None or self.control == "NONE":
+            return {"CANCELLED"}
+        problem = rig_problem(arm)
+        if problem is not None:
+            self.report({"ERROR"}, problem)
             return {"CANCELLED"}
         spec = next((s for s in rig_def() if s["name"] == self.control), None)
         if spec is None or joint_bone(arm, spec["joint"]) is None:
@@ -1230,7 +1261,25 @@ class AP_OT_key_pose(bpy.types.Operator):
 
     def execute(self, context):
         arm = _armature(context)
-        if arm is None:
+        problem = rig_problem(arm) if arm is not None else None
+        if arm is None or problem is not None:
+            if problem:
+                self.report({"ERROR"}, problem)
+            return {"CANCELLED"}
+        try:
+            bones = list(_deform_bones(arm))
+        except engine.NotReady:
+            self.report({"ERROR"}, NO_MODEL)
+            return {"CANCELLED"}
+        if not bones:
+            self.report({"ERROR"}, UNSUPPORTED)
+            return {"CANCELLED"}
+        if self.key_controls:
+            bones += list(_controls(arm))
+        from .. import inplace
+        why = inplace.read_only(arm.animation_data.action if arm.animation_data else None)
+        if why:
+            self.report({"ERROR"}, why)
             return {"CANCELLED"}
         f = context.scene.frame_current
         if arm.animation_data is None:
@@ -1238,9 +1287,6 @@ class AP_OT_key_pose(bpy.types.Operator):
         if arm.animation_data.action is None:
             arm.animation_data.action = bpy.data.actions.new(f"{arm.name}_Autoposer")
         n = 0
-        bones = list(_deform_bones(arm))
-        if self.key_controls:
-            bones += list(_controls(arm))
         for b in bones:
             pb = arm.pose.bones.get(b.name)
             if pb is None:
@@ -1270,6 +1316,19 @@ class AP_OT_take_over(bpy.types.Operator):
     def execute(self, context):
         arm = _armature(context)
         if arm is None or arm.animation_data is None:
+            return {"CANCELLED"}
+        # Nothing is detached unless the pose can then be solved: a take-over that stops half
+        # way left the rig with its animation unplugged and no poser driving it.
+        problem = rig_problem(arm)
+        if problem is None and not has_controls(arm):
+            problem = "Build the Autoposer's controls first"
+        if problem is None:
+            try:
+                engine.get()
+            except engine.NotReady as e:
+                problem = str(e)
+        if problem is not None:
+            self.report({"ERROR"}, problem)
             return {"CANCELLED"}
         ad = arm.animation_data
         if ad.action is not None:

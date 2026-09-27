@@ -36,11 +36,14 @@ Toggling In place off puts the original keys back: they are kept on the action
 until Accept, and then what was taken out is kept instead (ROOT_MOTION_KEY):
 it is the root motion a game export puts on a ground root bone
 (game_export.py). An edited path (root_edit.py) re-paths the take instead.
+Root keys the artist sets meanwhile (a crouch keyed in place) are kept: put
+back with the travel, and In place taken out of them again.
 Numpy only (Blender ships it; not scipy).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -720,19 +723,144 @@ def applied_mode(action) -> str | None:
 
 def _backup(action, curves, report, mode, hold):
     keys = {f"{p}|{i}": [[k.co.x, k.co.y, k.handle_left.x, k.handle_left.y, k.handle_right.x,
-                          k.handle_right.y, k.interpolation] for k in fc.keyframe_points]
+                          k.handle_right.y, k.interpolation, k.type] for k in fc.keyframe_points]
             for (p, i), fc in curves.items()}
     action[BACKUP_KEY] = json.dumps({"keys": keys, "removed": report, "mode": mode,
                                      "hold": [float(hold[0]), float(hold[1])]})
 
 
+#: on an action In place is applied to: the root keys as In place left them,
+#: and the move on the floor it made each frame -- so a key the artist sets on
+#: the root meanwhile (a crouch keyed in place) can be told from In place's
+#: own, and kept when the original keys are put back
+APPLIED_KEY = "animatica_inplace_applied"
+#: a root key further than this from what In place wrote is the artist's
+_EDIT_TOL = 1e-5
+
+
+def _remember_applied(action, curves, moves, A) -> None:
+    keys = {f"{p}|{i}": [[k.co.x, k.co.y] for k in fc.keyframe_points] for (p, i), fc in curves.items()}
+    action[APPLIED_KEY] = json.dumps({"keys": keys, "moves": moves,
+                                      "A": [float(v) for row in A for v in row]})
+
+
+def _root_basis(top, curves, x):
+    """The top bone's pose (its own space) the curves give at frame *x*."""
+    loc = Vector([curves[("location", i)].evaluate(x) if ("location", i) in curves else top.location[i]
+                  for i in range(3)])
+    if top.rotation_mode == 'QUATERNION':
+        from mathutils import Quaternion
+        rot = Quaternion([curves[("rotation_quaternion", i)].evaluate(x)
+                          if ("rotation_quaternion", i) in curves else top.rotation_quaternion[i]
+                          for i in range(4)])
+        rot.normalize()
+    elif top.rotation_mode in ('XYZ', 'XZY', 'YXZ', 'YZX', 'ZXY', 'ZYX'):
+        from mathutils import Euler
+        rot = Euler([curves[("rotation_euler", i)].evaluate(x) if ("rotation_euler", i) in curves
+                     else top.rotation_euler[i] for i in range(3)], top.rotation_mode).to_quaternion()
+    else:
+        rot = top.matrix_basis.to_quaternion()
+    return Matrix.LocRotScale(loc, rot, None)
+
+
+def _artist_edits(action, top, curves) -> tuple:
+    """Root keys the artist set or changed (or deleted) since In place wrote
+    them, as the pose they give, taken back to the take's own travel: In
+    place's move at that frame undone. ``({frame: (basis, {channel: type})},
+    {channel: [frame, ...]} deleted)``."""
+    raw = action.get(APPLIED_KEY)
+    if not raw or top is None:
+        return {}, {}
+    try:
+        snap = json.loads(raw)
+        A = Matrix([snap["A"][r * 4:r * 4 + 4] for r in range(4)])
+        moves = {int(f): v for f, v in snap["moves"].items()}
+    except (KeyError, TypeError, ValueError):
+        return {}, {}
+    changed, deleted = {}, {}
+    for chan, pts in snap.get("keys", {}).items():
+        p, i = chan.split("|")
+        fc = curves.get((p, int(i)))
+        if fc is None:
+            continue
+        was = {round(x, 3): y for x, y in pts}
+        now = {round(k.co.x, 3): k for k in fc.keyframe_points}
+        for x, kp in now.items():
+            if x not in was or abs(was[x] - kp.co.y) > _EDIT_TOL:
+                changed.setdefault(x, {})[(p, int(i))] = kp.type
+        gone = [x for x in was if x not in now]
+        if gone:
+            deleted[(p, int(i))] = gone
+    if not changed:
+        return {}, deleted
+    Rl = top.bone.matrix_local
+    Ri = Rl.inverted()
+    Ai = A.inverted()
+    out = {}
+    for x, types in changed.items():
+        mv = moves.get(int(round(x)))
+        C = (Ai @ _rigid(mv[:2], mv[2]) @ A) if mv is not None else Matrix.Identity(4)
+        out[x] = (Ri @ C.inverted() @ Rl @ _root_basis(top, curves, x), types)
+    return out, deleted
+
+
+def _put_key(fc, x, value, kind) -> None:
+    for kp in fc.keyframe_points:
+        if abs(kp.co.x - x) < 1e-3:
+            d = value - kp.co.y
+            kp.co.y = value
+            kp.handle_left.y += d
+            kp.handle_right.y += d
+            return
+    kp = fc.keyframe_points.insert(x, value, options={'FAST'})
+    kp.type = kind
+
+
+def _fold_edits(top, curves, edits, deleted) -> None:
+    """Write the artist's root edits (see :func:`_artist_edits`) into the
+    original keys, just put back: they are the take's now."""
+    for chan, xs in deleted.items():
+        fc = curves.get(chan)
+        if fc is None:
+            continue
+        for x in xs:
+            for kp in fc.keyframe_points:
+                if abs(kp.co.x - x) < 1e-3:
+                    fc.keyframe_points.remove(kp, fast=True)
+                    break
+    for x, (basis, types) in sorted(edits.items()):
+        loc, q, _ = basis.decompose()
+        if top.rotation_mode == 'QUATERNION':
+            q.make_compatible(_root_basis(top, curves, x).to_quaternion())
+            rot = ("rotation_quaternion", list(q))
+        elif top.rotation_mode in ('XYZ', 'XZY', 'YXZ', 'YZX', 'ZXY', 'ZYX'):
+            from mathutils import Euler
+            was = Euler([curves[("rotation_euler", i)].evaluate(x) if ("rotation_euler", i) in curves
+                         else 0.0 for i in range(3)], top.rotation_mode)
+            rot = ("rotation_euler", list(q.to_euler(top.rotation_mode, was)))
+        else:
+            rot = (None, [])
+        kind = next(iter(types.values()), 'KEYFRAME')
+        chans = [(("location", i), v) for i, v in enumerate(loc)] + [((rot[0], i), v) for i, v in enumerate(rot[1])]
+        for chan, v in chans:
+            fc = curves.get(chan)
+            if fc is None:
+                continue
+            if chan in types or abs(fc.evaluate(x) - v) > _EDIT_TOL:
+                _put_key(fc, x, v, types.get(chan, kind))
+    for fc in curves.values():
+        fc.update()
+
+
 def restore(arm, action) -> bool:
-    """Put the travel back: the root's original keys, as they were."""
+    """Put the travel back: the root's original keys, as they were, with any
+    the artist set on the root since (see :func:`_artist_edits`)."""
     if arm is None or not is_applied(action):
         return False
     top = next((pb for pb in arm.pose.bones if pb.parent is None), None)
     saved = json.loads(action[BACKUP_KEY])["keys"]
     curves = _root_curves(action, top.name) if top is not None else {}
+    edits, deleted = _artist_edits(action, top, curves)
     for key, pts in saved.items():
         p, i = key.split("|")
         fc = curves.get((p, int(i)))
@@ -743,13 +871,19 @@ def restore(arm, action) -> bool:
             while len(kps):
                 kps.remove(kps[0], fast=True)
             kps.add(len(pts))
-        for kp, (x, y, lx, ly, rx, ry, interp) in zip(kps, pts):
+        for kp, (x, y, lx, ly, rx, ry, interp, *kind) in zip(kps, pts):
             kp.co = (x, y)
             kp.handle_left = (lx, ly)
             kp.handle_right = (rx, ry)
             kp.interpolation = interp
+            if kind:
+                kp.type = kind[0]
         fc.update()
+    if edits or deleted:
+        _fold_edits(top, curves, edits, deleted)
     del action[BACKUP_KEY]
+    if APPLIED_KEY in action:
+        del action[APPLIED_KEY]
     return True
 
 
@@ -776,6 +910,8 @@ def forget(action) -> None:
         if rec is not None and rec.get("hold") is not None:
             action[ROOT_MOTION_KEY] = json.dumps(rec)
         del action[BACKUP_KEY]
+    if action is not None and APPLIED_KEY in action:
+        del action[APPLIED_KEY]
 
 
 def carry(src_action, new_actions, blocks) -> None:
@@ -897,6 +1033,17 @@ def _entry(span, E) -> dict:
 _BULKY = ("frames", "loop", "model", "path", "yaw", "floor", "facing0", "markers", "support_z")
 
 
+def read_only(action) -> str | None:
+    """Why *action*'s keys cannot be changed here, or None: one linked from
+    another file (or a library override's) keeps no edit when the file is
+    saved, so In place must not look as if it had worked."""
+    if action is None:
+        return None
+    if action.library is not None or getattr(action, "override_library", None) is not None:
+        return f"“{action.name}” is linked from another file, so its keys can't be changed here (make it local first)"
+    return None
+
+
 def apply(arm, action, scene, spans, fps: float | None = None, *, reuse: bool = False,
           mode: str = "in_place") -> list:
     """Over each span ``(first, last, loop)`` (a prompt block each; a loop's
@@ -906,6 +1053,10 @@ def apply(arm, action, scene, spans, fps: float | None = None, *, reuse: bool = 
     was done, per span. ``reuse`` takes the take as last sampled (an edit to
     the path changes the path, not the take)."""
     if arm is None or action is None or not spans:
+        return []
+    why = read_only(action)
+    if why:
+        print(f"[Animatica] In place: {why}")
         return []
     restore(arm, action)
     top = next((pb for pb in arm.pose.bones if pb.parent is None), None)
@@ -924,13 +1075,14 @@ def apply(arm, action, scene, spans, fps: float | None = None, *, reuse: bool = 
         return []
     hold = np.array(fit[0]["xy"][0], float)
     H = _rigid(hold, 0.0)
-    plan, report = {}, []
+    plan, report, moves = {}, [], {}
     for span, (R, E) in zip(fit, _travel(fit)):
         for k, f in enumerate(range(span["first"], span["last"] + 1)):
             # in place: T(hold) R^-1, the root back where the take began, facing as it did;
             # re-pathed: E R^-1, the take moved from its own path onto the edited one
             M = (H if mode == "in_place" else E[k]) @ R[k].inverted()
             plan[f] = (Ri @ (Ai @ M @ A @ span["S"]["top"][k]), abs(_yaw_of(M)) > 1e-5)
+            moves[str(f)] = [float(M[0][3]), float(M[1][3]), float(_yaw_of(M))]
         report.append(_entry(span, E))
     _backup(action, curves, report, mode, hold)
     turn = any(r for _, r in plan.values())
@@ -953,6 +1105,7 @@ def apply(arm, action, scene, spans, fps: float | None = None, *, reuse: bool = 
                     _set_key(fc, f, v)
     for fc in curves.values():
         fc.update()
+    _remember_applied(action, curves, moves, A)
     verb = "in place, took out" if mode == "in_place" else "re-pathed onto"
     for r in report:
         nums = {k: v for k, v in r.items() if k not in _BULKY}
@@ -964,6 +1117,37 @@ def apply(arm, action, scene, spans, fps: float | None = None, *, reuse: bool = 
 _last_fit: dict = {"key": None, "spans": []}
 
 
+def clear_cache() -> None:
+    """Forget the last fit (a file load: the take it sampled is gone)."""
+    _last_fit["key"], _last_fit["spans"] = None, []
+
+
+def _digest(action) -> str:
+    """A hash of every key on *action* (where, and its handles): a fit is only
+    reused on the very take it sampled, not on another with the same names
+    (a file opened since, keys set or changed since)."""
+    h = hashlib.blake2b(digest_size=16)
+    from . import constraints_ui
+    for fc in constraints_ui.iter_action_fcurves(action):
+        kps = fc.keyframe_points
+        h.update(f"{fc.data_path}|{fc.array_index}|{len(kps)}|{int(fc.mute)}".encode())
+        if len(kps):
+            buf = np.empty(len(kps) * 2, np.float32)
+            for attr in ("co", "handle_left", "handle_right"):
+                kps.foreach_get(attr, buf)
+                h.update(buf.tobytes())
+    return h.hexdigest()
+
+
+def _fit_key(arm, action, spans, fps) -> tuple:
+    """What a fit was made from: which rig and action (this session's, not just
+    their names), where the rig is, and the keys themselves."""
+    uid = getattr(action, "session_uid", None) or action.as_pointer()
+    auid = getattr(arm, "session_uid", None) or arm.as_pointer()
+    return (auid, uid, arm.name, action.name, tuple(sorted(spans)), round(fps, 3),
+            tuple(round(v, 6) for row in arm.matrix_world for v in row), _digest(action))
+
+
 def _fit_spans(arm, action, scene, spans, fps, *, reuse: bool = False):
     """The trajectory of each span ``(first, last, loop)``: the server's path,
     laid onto the take, or one fitted here, and the heading the body faces
@@ -972,7 +1156,7 @@ def _fit_spans(arm, action, scene, spans, fps, *, reuse: bool = False):
     unless ``reuse`` finds it sampled already; writes nothing. Call on the take
     as generated (not in place): apply restores it first."""
     from . import root_edit
-    key = (arm.name, action.name, tuple(sorted(spans)), round(fps, 3), tuple(arm.matrix_world.col[3]))
+    key = _fit_key(arm, action, spans, fps)
     if reuse and _last_fit["key"] == key:
         return root_edit.overlay(action, _last_fit["spans"], fps)
     A = arm.matrix_world.copy()
