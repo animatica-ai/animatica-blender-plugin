@@ -271,13 +271,15 @@ def refresh(scene, *, reuse: bool = True) -> None:
         key_poses.request_root_refresh()
         return
     key_poses._baking = True
+    from . import preview_session
     try:
-        if mode == "in_place":
-            inplace.apply(arm, action, scene, operators._inplace_spans(arm, action), reuse=reuse)
-        elif edited:
-            inplace.apply(arm, action, scene, operators._inplace_spans(arm, action), reuse=reuse, mode="repath")
-        else:
-            inplace.restore(arm, action)              # re-pathed, and the curve is gone
+        with preview_session.keeping_edits(action):   # the take's keys, not the artist's edits
+            if mode == "in_place":
+                inplace.apply(arm, action, scene, operators._inplace_spans(arm, action), reuse=reuse)
+            elif edited:
+                inplace.apply(arm, action, scene, operators._inplace_spans(arm, action), reuse=reuse, mode="repath")
+            else:
+                inplace.restore(arm, action)              # re-pathed, and the curve is gone
     finally:
         key_poses._baking = False
     key_poses.request_rebuild()

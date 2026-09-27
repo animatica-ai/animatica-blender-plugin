@@ -1419,16 +1419,19 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             self.report({'ERROR'}, "Preview action vanished mid-regen")
             return {'CANCELLED'}
 
+        from . import preview_session
         try:
-            gltf_to_blender.splice_gltf_into_action(
-                self._result,
-                arm,
-                preview_action,
-                sample_index=0,
-                request_start_frame=self._request_start_frame,
-                target_range=self._target_range,
-                anchor_frames=self._anchor_frames,
-            )
+            # The block's new keys are the take's, not edits of the artist's.
+            with preview_session.keeping_edits(preview_action):
+                gltf_to_blender.splice_gltf_into_action(
+                    self._result,
+                    arm,
+                    preview_action,
+                    sample_index=0,
+                    request_start_frame=self._request_start_frame,
+                    target_range=self._target_range,
+                    anchor_frames=self._anchor_frames,
+                )
         except Exception as exc:                          # noqa: BLE001 — surfaced to UI
             self._cleanup(context)
             self.report({'ERROR'}, f"Splice failed: {exc}")

@@ -105,6 +105,19 @@ def read_extension_metadata(gltf: dict[str, Any]) -> dict[str, Any]:
     return (gltf.get("extensions") or {}).get("MMCP_motion") or {}
 
 
+def _decode_channels(channels, input_for, quats_for, vec3s_for) -> None:
+    """Decode every rotation and translation channel's data up front, so a
+    malformed response raises before the rig or its action is touched."""
+    for ch in channels:
+        path = (ch.get("target") or {}).get("path")
+        if path == ROTATION_PATH:
+            input_for(ch["sampler"])
+            quats_for(ch["sampler"])
+        elif path == TRANSLATION_PATH:
+            input_for(ch["sampler"])
+            vec3s_for(ch["sampler"])
+
+
 def bake_gltf_to_armature(
     gltf: dict[str, Any],
     armature_obj: bpy.types.Object,
@@ -176,6 +189,11 @@ def bake_gltf_to_armature(
                 for i in range(0, len(floats), 3)
             ]
         return decoded_outputs[out_idx]
+
+    # Read every buffer before anything is changed. A response that fails to
+    # decode (a truncated buffer: "Incorrect padding") used to fail here only
+    # after the new, empty action had replaced the user's on the rig.
+    _decode_channels(channels, _input_for, _quats_for, _vec3s_for)
 
     # Make sure pose-bone rotation modes are quaternion (we're feeding quats).
     pose = armature_obj.pose
@@ -376,6 +394,9 @@ def splice_gltf_into_action(
                 for i in range(0, len(floats), 3)
             ]
         return decoded_outputs[out_idx]
+
+    # Decode first: failing halfway through would leave the window wiped.
+    _decode_channels(channels, _input_for, _quats_for, _vec3s_for)
 
     pose = armature_obj.pose
     _ns = bone_namespace(pose)
