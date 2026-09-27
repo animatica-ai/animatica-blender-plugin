@@ -910,6 +910,7 @@ class ANIMATICA_PT_settings_viewport(AnimaticaPanelBase, Panel):
         grid = parts.grid_flow(row_major=True, columns=2, even_columns=True)
         grid.prop(settings, "key_pose_ghosts", text="Ghosts")
         grid.prop(settings, "key_pose_trail", text="Trail")
+        grid.prop(settings, "key_pose_root_path", text="Root Trajectory")
         grid.prop(settings, "key_pose_labels", text="Frame Numbers")
         grid.prop(settings, "key_pose_xray", text="X-Ray")
         col = parts.column()

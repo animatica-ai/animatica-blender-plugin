@@ -965,6 +965,18 @@ class AnimaticaSettings(PropertyGroup):
         default=True,
         update=_key_poses_toggle_update,
     )
+    key_pose_root_path: BoolProperty(
+        name="Root Trajectory",
+        description=(
+            "Draw the take's root trajectory on the floor, in amber: the path "
+            "the character travels along without the sway of its steps -- a "
+            "line, an arc, or one of those eased. It is what In place takes "
+            "out, so with In place on it shows what was removed. Labelled with "
+            "what it is (\"line · 1.05 m/s\")"
+        ),
+        default=False,
+        update=_key_poses_toggle_update,
+    )
     key_pose_xray: BoolProperty(
         name="X-Ray",
         description="Draw the key poses through the character instead of behind it",

@@ -691,26 +691,8 @@ def apply(arm, action, scene, spans, fps: float | None = None) -> list:
     plan, report = {}, []
     hold = None
     turned = 0.0                      # heading earlier spans took out: a turn carries on
-    for first, last, loop in sorted(spans):
-        if last - first < 2:
-            continue
-        S = sample(arm, scene, first, last)
-        body = Body(S, fps, loop)
-        got = _from_server(action, body, first, last)
-        xy, yaw, model, prm = got if got is not None else trajectory(body)
-        if loop:
-            # A cycle repeats with its own travel added each time (Cycles,
-            # repeat with offset): the trajectory taken out must be exactly that
-            # travel, or what is left adds up (1.9 cm a cycle on a walk).
-            # Spread the difference over the cycle; an arc closes its turn too.
-            u = np.linspace(0, 1, len(xy))[:, None]
-            w0, w1 = A @ S["top"][0], A @ S["top"][-1]
-            true = np.array([w1.translation.x - w0.translation.x, w1.translation.y - w0.translation.y])
-            xy = xy + (true - (xy[-1] - xy[0])) * u
-            if model == "arc":
-                f0, f1 = w0.to_3x3() @ _FWD, w1.to_3x3() @ _FWD
-                turn = math.atan2(f0.x * f1.y - f0.y * f1.x, f0.x * f1.x + f0.y * f1.y)
-                yaw = yaw + (turn - yaw[-1]) * u[:, 0]
+    for span in _fit_spans(arm, action, scene, spans, fps):
+        first, last, xy, yaw, S = span["first"], span["last"], span["xy"], span["yaw"], span["S"]
         if hold is None:
             hold = xy[0].copy()
         for k, f in enumerate(range(first, last + 1)):
@@ -722,7 +704,10 @@ def apply(arm, action, scene, spans, fps: float | None = None) -> list:
                         (0, 0, 1, 0), (0, 0, 0, 1)))
             plan[f] = (Ri @ (Ai @ M @ A @ S["top"][k]), abs(y) > 1e-5)
         turned += float(yaw[-1])
-        report.append({"frames": [first, last], "loop": bool(loop), "model": model, **prm})
+        # the path taken out, where the take went (world, +Z up): the viewport draws it
+        report.append({"frames": [first, last], "loop": span["loop"], "model": span["model"], **span["prm"],
+                       "path": [[round(float(x), 4), round(float(y), 4)] for x, y in xy],
+                       "floor": round(span["floor"], 4)})
     if not plan:
         return []
     _backup(action, curves, report)
@@ -747,6 +732,77 @@ def apply(arm, action, scene, spans, fps: float | None = None) -> list:
     for fc in curves.values():
         fc.update()
     for r in report:
-        nums = {k: v for k, v in r.items() if k not in ("frames", "loop", "model")}
+        nums = {k: v for k, v in r.items() if k not in ("frames", "loop", "model", "path", "floor")}
         print(f"[animatica] in place {r['frames'][0]}-{r['frames'][1]}: took out a {r['model']} {json.dumps(nums)}")
     return report
+
+
+def _fit_spans(arm, action, scene, spans, fps):
+    """The trajectory of each span ``(first, last, loop)``: the server's, laid
+    onto the take, or one fitted here. Samples the take (moves the playhead,
+    and puts it back); writes nothing."""
+    A = arm.matrix_world.copy()
+    out = []
+    for first, last, loop in sorted(spans):
+        if last - first < 2:
+            continue
+        S = sample(arm, scene, first, last)
+        body = Body(S, fps, loop)
+        got = _from_server(action, body, first, last)
+        xy, yaw, model, prm = got if got is not None else trajectory(body)
+        if loop:
+            # A cycle repeats with its own travel added each time (Cycles,
+            # repeat with offset): the trajectory taken out must be exactly that
+            # travel, or what is left adds up (1.9 cm a cycle on a walk).
+            # Spread the difference over the cycle; an arc closes its turn too.
+            u = np.linspace(0, 1, len(xy))[:, None]
+            w0, w1 = A @ S["top"][0], A @ S["top"][-1]
+            true = np.array([w1.translation.x - w0.translation.x, w1.translation.y - w0.translation.y])
+            xy = xy + (true - (xy[-1] - xy[0])) * u
+            if model == "arc":
+                f0, f1 = w0.to_3x3() @ _FWD, w1.to_3x3() @ _FWD
+                turn = math.atan2(f0.x * f1.y - f0.y * f1.x, f0.x * f1.x + f0.y * f1.y)
+                yaw = yaw + (turn - yaw[-1]) * u[:, 0]
+        out.append({"first": first, "last": last, "loop": bool(loop), "xy": xy, "yaw": yaw,
+                    "model": model, "prm": prm, "S": S, "floor": body.floor})
+    return out
+
+
+def describe(span: dict) -> str:
+    """A span's trajectory in a few words, for the viewport: ``line · 1.05 m/s``."""
+    model = span.get("model", "")
+    bits = [model.replace(" + distance curve", ", eased")]
+    if "speed" in span:
+        bits.append(f"{span['speed']:.2f} m/s")
+    if "turn_deg_s" in span:
+        bits.append(f"{span['turn_deg_s']:+.0f}°/s")
+    keys = span.get("distance_keys_m")
+    if keys:
+        bits.append(f"{keys[-1]:.2f} m")
+    if model == "still":
+        bits = ["on the spot"]
+    if span.get("source") == "server":
+        bits.append("server")
+    return " · ".join(bits)
+
+
+def fitted_path(arm, action, scene) -> list:
+    """The root trajectory of the take showing, per span, for the viewport:
+    ``[{"frames": [a, b], "path": [[x, y], ...], "floor": z, "label": str}]``
+    (world, +Z up). With In place on it is what was taken out; otherwise it is
+    fitted now, as In place would (samples the take; writes nothing)."""
+    if arm is None or action is None:
+        return []
+    if is_applied(action):
+        spans = removed(action)
+        if spans and all("path" in s for s in spans):
+            return [{"frames": s["frames"], "path": s["path"], "floor": s.get("floor", 0.0),
+                     "label": describe(s)} for s in spans]
+    from . import operators          # noqa: PLC0415 - lazy: operators imports this module
+    fps = scene.render.fps / scene.render.fps_base
+    out = []
+    for span in _fit_spans(arm, action, scene, operators._inplace_spans(arm, action), fps):
+        info = {"model": span["model"], **span["prm"]}
+        out.append({"frames": [span["first"], span["last"]], "floor": float(span["floor"]),
+                    "path": [[float(x), float(y)] for x, y in span["xy"]], "label": describe(info)})
+    return out
