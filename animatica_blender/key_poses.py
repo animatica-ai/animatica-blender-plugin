@@ -119,6 +119,10 @@ ROOT_PATH_LIFT = 0.004            # m above the floor, so it does not z-fight it
 ROOT_PATH_TICK_EVERY = 6          # frames between the small ticks along it
 ROOT_PATH_TICK_RADIUS = 2.2
 ROOT_PATH_CURRENT_RADIUS = 5.0
+#: the root trajectory is coloured by its speed: slow, middling, fast (of the
+#: take's fastest, or of ROOT_PATH_SPEED_FLOOR m/s if it never goes that fast)
+ROOT_PATH_SPEED_RAMP = ((0.20, 0.82, 0.48), (1.00, 0.72, 0.18), (0.96, 0.22, 0.16))
+ROOT_PATH_SPEED_FLOOR = 0.5
 
 LABEL_SIZE         = 11
 LABEL_COLOR        = (0.92, 0.93, 0.96, 0.95)
@@ -189,11 +193,13 @@ _trail: dict = {
 
 # The root trajectory, fitted in the same bake pass (it samples the take too):
 #   spans      [{"frames": [a, b], "path": [(x, y, z), ...], "label": str}]
+#   colors     per point, by speed; "vmax" the speed the ramp tops out at
 _root_path: dict = {
     "spans": [],
     "signature": None,
     "dirty": True,
     "arm": "",
+    "reuse": False,        # only the path changed (its curve edited): no need to sample the take
 }
 
 # Per-frame trail colours are a pure function of the plan, so they are
@@ -628,6 +634,11 @@ def _ghost_bones(arm) -> list[str]:
 # the gaze — so their paths are the ones worth reading. Everything between
 # them is interpolation the artist does not direct directly.
 _TRAIL_JOINTS = ("Hips", "Head", "LeftHand", "RightHand", "LeftFoot", "RightFoot")
+#: ...and the Trail Joints setting each one is shown under.
+_TRAIL_GROUP = {"Hips": "HIPS", "Head": "HEAD", "LeftHand": "HANDS", "RightHand": "HANDS",
+                "LeftFoot": "FEET", "RightFoot": "FEET"}
+#: traced bone -> its Trail Joints group, filled in as the bones are resolved
+_trail_group_of: dict[str, str] = {}
 
 
 def _trail_bones(arm) -> list[str]:
@@ -660,6 +671,7 @@ def _trail_bones(arm) -> list[str]:
         pb = constraints_ui.resolve_effector_bone(arm, joint, allowed)
         if pb is not None and pb.name not in names:
             names.append(pb.name)
+            _trail_group_of[pb.name] = _TRAIL_GROUP[joint]
 
     # A rig that names its root something else still gets its trajectory
     # traced — that is the one line the plan is mostly about.
@@ -667,7 +679,17 @@ def _trail_bones(arm) -> list[str]:
         root = next((pb for pb in arm.pose.bones if pb.parent is None), None)
         if root is not None and root.name not in names:
             names.insert(0, root.name)
+            _trail_group_of[root.name] = "HIPS"
     return names
+
+
+def shown_trail_bones(settings) -> list[str]:
+    """The traced bones the Trail Joints setting shows. All are baked either
+    way, so changing it only redraws."""
+    shown = getattr(settings, "key_pose_trail_joints", None)
+    if shown is None:
+        return list(_trail["bones"])
+    return [n for n in _trail["bones"] if _trail_group_of.get(n, "HIPS") in shown]
 
 
 def _motion_extent(action) -> tuple[int, int] | None:
@@ -980,21 +1002,43 @@ def rebuild(context=None) -> int:
     return len(_ghosts["frames"])
 
 
+def _speed_color(u: float) -> tuple:
+    """The speed ramp at *u* in 0..1."""
+    lo, mid, hi = ROOT_PATH_SPEED_RAMP
+    a, b, t = (lo, mid, u * 2.0) if u < 0.5 else (mid, hi, u * 2.0 - 1.0)
+    return (*(x + (y - x) * t for x, y in zip(a, b)), ROOT_PATH_COLOR[3])
+
+
 def _bake_root_path(arm, action, scene, signature) -> None:
-    """Fit (or read back) the take's root trajectory for the viewport."""
+    """Fit (or read back) the take's root trajectory for the viewport, and
+    colour it by speed."""
     global _baking
     from . import inplace
     spans = []
+    reuse, _root_path["reuse"] = _root_path["reuse"], False
+    fps = scene.render.fps / scene.render.fps_base
     _baking = True
     try:
-        for span in inplace.fitted_path(arm, action, scene):
+        for span in inplace.fitted_path(arm, action, scene, reuse=reuse):
             z = float(span.get("floor", 0.0)) + ROOT_PATH_LIFT
+            pts = [(float(x), float(y), z) for x, y in span["path"]]
+            speed = []
+            for i in range(len(pts)):
+                a, b = pts[max(i - 1, 0)], pts[min(i + 1, len(pts) - 1)]
+                n = min(i + 1, len(pts) - 1) - max(i - 1, 0)
+                speed.append(math.hypot(b[0] - a[0], b[1] - a[1]) * fps / n if n else 0.0)
             spans.append({"frames": list(span["frames"]), "label": span["label"],
-                          "path": [(float(x), float(y), z) for x, y in span["path"]]})
+                          "path": pts, "speed": speed})
     except Exception as exc:                 # noqa: BLE001 — never fail a bake over it
         print(f"[Animatica] root trajectory: {exc}")
     finally:
         _baking = False
+    vmax = max([ROOT_PATH_SPEED_FLOOR] + [v for sp in spans for v in sp["speed"]])
+    for sp in spans:
+        sp["colors"] = [_speed_color(min(v / vmax, 1.0)) for v in sp["speed"]]
+        if sp["speed"]:
+            sp["label"] += f"  ·  {min(sp['speed']):.1f}–{max(sp['speed']):.1f} m/s"
+    _root_path["vmax"] = vmax
     _root_path["spans"] = spans
     _root_path["signature"] = signature
     _root_path["dirty"] = False
@@ -1007,6 +1051,7 @@ def clear() -> None:
     _root_path["signature"] = None
     _root_path["dirty"] = True
     _root_path["arm"] = ""
+    _root_path["reuse"] = False
     _ghosts["frames"] = []
     _ghosts["ghosts"] = {}
     _ghosts["roots"] = {}
@@ -1057,6 +1102,20 @@ def request_rebuild(*, coalesce: bool = False) -> None:
     _ghosts["dirty"] = True
     _trail["dirty"] = True
     _root_path["dirty"] = True
+    _root_path["reuse"] = False
+    _arm_rebuild_timer(coalesce)
+
+
+def request_root_refresh() -> None:
+    """Redraw the root trajectory after its curve was edited: only the path
+    changed, so the take is not sampled again and the rest stays baked."""
+    _root_path["dirty"] = True
+    _root_path["reuse"] = True
+    _arm_rebuild_timer(False)
+
+
+def _arm_rebuild_timer(coalesce: bool) -> None:
+    global _rebuild_requested_at, _rebuild_first_at
     now = time.monotonic()
     if _rebuild_first_at is None:
         _rebuild_first_at = now
@@ -1284,7 +1343,9 @@ def _root_path_ready(settings) -> bool:
     )
     if fresh:
         return bool(_root_path["spans"])
-    request_rebuild(coalesce=True)
+    # only the root trajectory is out of date here: the ghosts and the trail ask
+    # for themselves, and a request_rebuild would lose "only the path changed"
+    _arm_rebuild_timer(True)
     # the previous fit is worth drawing while the refit waits, if it was this rig's
     return bool(_root_path["spans"]) and _root_path["arm"] == arm.name
 
@@ -1604,7 +1665,7 @@ def _draw_trail(settings, p) -> None:
     viewport = _viewport_size()
     line = _line_shader()
 
-    for name in trail["bones"]:
+    for name in shown_trail_bones(settings):
         points = trail["points"].get(name)
         if not points or len(points) != len(colors):
             continue
@@ -1658,7 +1719,7 @@ def _draw_trail_markers(settings, p, region, rv3d, current: int) -> None:
     vert_colors: list[tuple[float, float, float, float]] = []
     indices: list[tuple[int, int, int]] = []
 
-    for name in trail["bones"]:
+    for name in shown_trail_bones(settings):
         points = trail["points"].get(name)
         if not points or len(points) != len(colors):
             continue
@@ -1689,18 +1750,17 @@ def _draw_trail_markers(settings, p, region, rv3d, current: int) -> None:
 
 
 def _draw_root_path() -> None:
-    """The root trajectory, on the floor: one amber line per span."""
+    """The root trajectory, on the floor: one line per span, coloured by speed."""
     spans = _root_path["spans"]
     if not spans:
         return
-    line = _line_uniform_shader()
+    line = _line_shader()
     line.bind()
     line.uniform_float("viewportSize", _viewport_size())
     line.uniform_float("lineWidth", ROOT_PATH_WIDTH * _px())
-    line.uniform_float("color", ROOT_PATH_COLOR)
     for span in spans:
-        if len(span["path"]) >= 2:
-            batch_for_shader(line, 'LINE_STRIP', {"pos": span["path"]}).draw(line)
+        if len(span["path"]) >= 2 and len(span.get("colors", ())) == len(span["path"]):
+            batch_for_shader(line, 'LINE_STRIP', {"pos": span["path"], "color": span["colors"]}).draw(line)
 
 
 def _draw_root_path_markers(region, rv3d, current: int) -> None:
@@ -1710,11 +1770,12 @@ def _draw_root_path_markers(region, rv3d, current: int) -> None:
     if not spans:
         return
     px = _px()
-    verts, indices = [], []
+    verts, colors, indices = [], [], []
 
-    def diamond(co, r):
+    def diamond(co, r, color):
         base = len(verts)
         verts.extend(_diamond(co.x, co.y, r * px))
+        colors.extend([color] * 4)
         indices.extend(((base, base + 1, base + 2), (base, base + 2, base + 3)))
 
     font_id = 0
@@ -1727,7 +1788,10 @@ def _draw_root_path_markers(region, rv3d, current: int) -> None:
                 continue
             co = view3d_utils.location_3d_to_region_2d(region, rv3d, point)
             if co is not None:
-                diamond(co, ROOT_PATH_CURRENT_RADIUS if f == current else ROOT_PATH_TICK_RADIUS)
+                if f == current:
+                    diamond(co, ROOT_PATH_CURRENT_RADIUS, TRAIL_CURRENT_COLOR)
+                else:
+                    diamond(co, ROOT_PATH_TICK_RADIUS, span["colors"][i])
         co = view3d_utils.location_3d_to_region_2d(region, rv3d, span["path"][0])
         if co is not None and span["label"]:
             text = f"root: {span['label']}"
@@ -1735,10 +1799,9 @@ def _draw_root_path_markers(region, rv3d, current: int) -> None:
             blf.color(font_id, *ROOT_PATH_COLOR)
             blf.draw(font_id, text)
     if verts:
-        shader = _shader()
+        shader = gpu.shader.from_builtin("SMOOTH_COLOR")
         shader.bind()
-        shader.uniform_float("color", ROOT_PATH_COLOR)
-        batch_for_shader(shader, 'TRIS', {"pos": verts}, indices=indices).draw(shader)
+        batch_for_shader(shader, 'TRIS', {"pos": verts, "color": colors}, indices=indices).draw(shader)
 
 
 def _draw_screen():

@@ -192,7 +192,7 @@ def pick_point(context, x: float, y: float):
     best_key_d = KEY_PICK_RADIUS * px
     best_frame_d = FRAME_PICK_RADIUS * px
 
-    for bone in trail["bones"]:
+    for bone in key_poses.shown_trail_bones(settings):
         points = trail["points"].get(bone)
         if not points or len(points) != len(frames):
             continue
