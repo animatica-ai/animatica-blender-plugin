@@ -555,12 +555,45 @@ def apply_edits(states, action) -> int:
     return len(states)
 
 
-def fold_edits(arm, preview) -> int:
+def travel_edits(arm, action) -> list:
+    """:func:`edits` as they are with the take travelling: what goes onto the
+    user's own action, which travels.
+
+    With In place on (or the take moved onto an edited path) a root key the
+    artist set is in that space -- a crouch keyed at the spot where the take
+    is held. Carried over as it is, it came back on the user's action at the
+    hold point instead of where the character had walked to by then. A copy
+    of the take gets its travel back, which takes the artist's root keys with
+    it (inplace.restore), and its edits are read from that; the take showing
+    is left as it is."""
+    from . import inplace
+    if action is None:
+        return []
+    if arm is None or inplace.applied_mode(action) is None:
+        return edits(action)
+    tmp = None
+    try:
+        tmp = action.copy()
+        tmp.use_fake_user = False
+        with keeping_edits(tmp):
+            inplace.restore(arm, tmp)
+        return edits(tmp)
+    except Exception:   # noqa: BLE001 -- the edits as they show beat none
+        _log_failure("read your root keys with the travel put back")
+        return edits(action)
+    finally:
+        if tmp is not None:
+            bpy.data.actions.remove(tmp)
+
+
+def fold_edits(arm, preview, states=None) -> int:
     """Before a take is replaced (Regenerate): the artist's changes on it go
     where Reject will restore from -- the user's action, or the splice's copy
     of it -- and are typed as theirs on the take, so the new request sends
-    them and a splice keeps them."""
-    states = edits(preview)
+    them and a splice keeps them. *states*: :func:`travel_edits` of it, if
+    at hand."""
+    if states is None:
+        states = travel_edits(arm, preview)
     if not states:
         return 0
     promote_edits(preview)

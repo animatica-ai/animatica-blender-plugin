@@ -95,6 +95,7 @@ def _action_has_keys_outside(action, lo: int, hi: int) -> bool:
 def _build_regen_request_action(
     src: bpy.types.Action,
     preview: bpy.types.Action,
+    states: list | None = None,
 ) -> tuple[bpy.types.Action | None, list[bpy.types.Action]]:
     """Scratch action merging ``preview`` edits into ``src`` for request build.
 
@@ -107,7 +108,8 @@ def _build_regen_request_action(
     """
     from . import preview_session
     scratch = src.copy()
-    preview_session.apply_edits(preview_session.edits(preview), scratch)
+    preview_session.apply_edits(
+        preview_session.edits(preview) if states is None else states, scratch)
     return scratch, []
 
 
@@ -888,15 +890,17 @@ class ANIMATICA_OT_generate(Operator):
                 # theirs: onto what Reject restores, and typed as theirs so the
                 # request follows them and a splice keeps them. (Typed over a
                 # generated key they stayed GENERATED, and were thrown away.)
+                # With the travel in: the user's action travels (see
+                # preview_session.travel_edits).
                 from . import preview_session
-                self._regen_edits = preview_session.edits(preview)
-                preview_session.fold_edits(arm, preview)
+                self._regen_edits = preview_session.travel_edits(arm, preview)
+                preview_session.fold_edits(arm, preview, self._regen_edits)
                 if (
                     preview is not None
                     and preview is not src
                     and _is_motion_bake_action(preview)
                 ):
-                    scratch, temps = _build_regen_request_action(src, preview)
+                    scratch, temps = _build_regen_request_action(src, preview, self._regen_edits)
                     self._regen_scratch_actions = temps + [scratch]
                     self._regen_src = src
                     self._regen_preview = preview
@@ -1356,8 +1360,9 @@ class ANIMATICA_OT_reject(Operator):
             del arm["animatica_pending_block_ranges"]
 
         # The keys the artist added or changed while the take showed: they
-        # stay, whatever else goes (see preview_session.edits).
-        kept = preview_session.edits(preview)
+        # stay, whatever else goes (see preview_session.edits) -- with the
+        # take's travel in, as the user's action has it.
+        kept = preview_session.travel_edits(arm, preview)
 
         if arm.get("animatica_spliced_in_place"):
             # The generated frames were written into the user's action. The
