@@ -716,6 +716,11 @@ def _bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int,
         # Accept and Reject both need to know this was an in-place edit: there
         # is nothing to push, and Reject restores the copy kept above.
         arm["animatica_spliced_in_place"] = True
+        # A cycle the action was once made into is not one now a stretch of it
+        # was rewritten; the marker would still label it a seamless loop and
+        # make In place read it as one. (Reject's copy keeps it.)
+        if "animatica_loop" in action:
+            del action["animatica_loop"]
     else:
         action = gltf_to_blender.bake_gltf_to_armature(
             result,
@@ -921,7 +926,12 @@ class ANIMATICA_OT_generate(Operator):
         self._server_looped = bool((req.get("options") or {}).get("loop"))
         if (getattr(settings, "loop", False) and not self._server_looped
                 and (model_caps or {}).get("supports_loop")):
-            self.report({'WARNING'}, "Loop needs a single prompt block; generating without it")
+            gen_range = request_builder.compute_frame_range(settings.prompt_blocks, arm, context.scene)
+            if request_builder.will_splice(arm, gen_range):
+                self.report({'WARNING'}, "Loop is off for a generation into a gap between "
+                                         "your keys; generating without it")
+            else:
+                self.report({'WARNING'}, "Loop needs a single prompt block; generating without it")
 
         # Save the source action for Accept / Reject (no-op if already saved).
         _stash_source_action_name(settings, arm)
