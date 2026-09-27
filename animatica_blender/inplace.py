@@ -22,13 +22,19 @@ place removes exactly that:
    of those timed by a distance curve (starts, stops, jumps), or failing those
    a cubic Bezier. The simplest one within tolerance wins; loops may only be
    still, a line or an arc, which repeat.
-4. **Removed.** Each frame the top bone is moved by the inverse of that
-   trajectory, about the vertical: the take stays where it began, facing the
-   way it began, and turns only as much as its path does not (an arc's turn
-   comes out with the arc). Heights are never touched.
+4. **The heading.** Where the body faces (square to its hips, averaged over a
+   stride), not where its path goes: a strafe keeps facing forward, a turn on
+   the spot turns. Only a lasting turn counts; a twist that comes back does not.
+5. **Removed.** Each frame the top bone is moved by the inverse of that
+   trajectory and heading, about the vertical: the take stays where it began,
+   facing the way it began. Heights are never touched. A take that goes nowhere
+   (a jump up) is left as it is, unless it turns on the spot.
 
 Toggling In place off puts the original keys back: they are kept on the action
-until Accept. Numpy only (Blender ships it; not scipy).
+until Accept, and then what was taken out is kept instead (ROOT_MOTION_KEY):
+it is the root motion a game export puts on a ground root bone
+(game_export.py). An edited path (root_edit.py) re-paths the take instead.
+Numpy only (Blender ships it; not scipy).
 """
 
 from __future__ import annotations
@@ -176,6 +182,7 @@ class Body:
 
     def __init__(self, S, fps, loop):
         J = S["joints"]
+        self.J = J
         self.fps, self.loop = fps, loop
         self.com = _com(J)[:, :2]
         self.n = n = len(self.com)
@@ -197,6 +204,52 @@ class Body:
                 if d[i] and not ((i > 0 and d[i - 1]) or (i + 1 < n and d[i + 1])):
                     dd[i] = False                                  # a 1-frame blip
             self.contacts.append((g, p, dd))
+
+    def facing(self):
+        """Which way the body faces, per frame (world, radians, + turns left):
+        square to the line across its hips (the shoulders twist with the arms;
+        they are only read on a rig without hip joints). None without either."""
+        J = self.J
+        for left, right in (("l_leg", "r_leg"), ("l_arm", "r_arm")):
+            if left in J and right in J:
+                lat = J[right][0][:, :2] - J[left][0][:, :2]
+                break
+        else:
+            return None
+        if float(np.linalg.norm(lat, axis=1).min()) < 1e-6:
+            return None
+        return np.unwrap(np.arctan2(lat[:, 0], -lat[:, 1]))          # up x right
+
+    def support_z(self):
+        """How high what it stands on is, per frame, above the take's lowest
+        (stairs, a ledge climbed): the lowest part down, held through the air
+        and averaged over a stride."""
+        n = self.n
+        z = np.full(n, np.nan)
+        for i in range(n):
+            down = [p[i, 2] for g, p, d in self.contacts if d[i]]
+            if down:
+                z[i] = min(down)
+        ok = ~np.isnan(z)
+        if not ok.any():
+            return np.zeros(n)
+        idx = np.where(ok)[0]
+        z = np.interp(np.arange(n), idx, z[idx])
+        z = _box(z, self.window(), False)
+        return z - float(np.percentile(z, 5))
+
+    def touchdowns(self, first: int) -> dict:
+        """The frames each foot comes down on (sync markers for a game)."""
+        out = {}
+        for group, name in (("l foot", "LeftFootDown"), ("r foot", "RightFootDown")):
+            d = np.zeros(self.n, bool)
+            for g, p, dd in self.contacts:
+                if g == group:
+                    d |= dd
+            out[name] = [first + i for i in range(1, self.n) if d[i] and not d[i - 1]]
+            if self.loop and self.n > 2 and d[0] and not d[-2]:
+                out[name].insert(0, first)          # a cycle that starts on it
+        return out
 
     def anchor(self):
         """Support centroid; in flight the COM, offset to join take-off and landing."""
@@ -309,9 +362,9 @@ class Body:
                 j += 1
             runs.append((lab[i], i, j))
             i = j + 1
-        for kind, i, j in runs:                  # on a fixed base: hold still
+        for kind, i, j in runs:                  # on a fixed base: hold still, over the support
             if kind == "base":
-                p[i:j + 1] = avg[i:j + 1].mean(0)
+                p[i:j + 1] = anc[i:j + 1].mean(0)
         for kind, i, j in runs:                  # moving: the averaged COM, joined to its neighbours
             if kind == "move":
                 a = p[i - 1] - avg[i] if i > 0 and not np.isnan(p[i - 1, 0]) else np.zeros(2)
@@ -549,6 +602,49 @@ def trajectory(body: Body):
     return best[:4]
 
 
+# --- the heading ----------------------------------------------------------------------
+
+#: The heading taken out is where the body faces (square to its hips and
+#: shoulders, averaged over a stride), not where its path goes: a strafe keeps
+#: facing forward, a backpedal does not spin round, a turn on the spot turns.
+#: A turn is what lasts: the facing is averaged over a stride (at least
+#: HEADING_WINDOW), and what it ends up turned by counts, not how far it
+#: twists on the way (a landing twists the pelvis 15 degrees and back). Kept
+#: fixed under YAW_STILL of it, a steady turn within YAW_TOL of one, else keyed
+#: like the distance curve, only ever turning one way. A loop turns steadily,
+#: and closes.
+HEADING_WINDOW = 0.5
+YAW_STILL = math.radians(4.0)
+YAW_TOL_RMS, YAW_TOL_MAX = math.radians(2.0), math.radians(5.0)
+#: on the spot, only a turn this large comes out (a turn on the spot): less is
+#: the body settling, and the take is left as it is
+TURN_ON_SPOT = math.radians(15.0)
+
+
+def heading(body, labels, T, tk, on_spot: bool):
+    """The heading change to take out (0 at the start, + turns left), how it
+    was fitted, and the body's facing at the start (world, radians; None when
+    the rig has no hips or shoulders to tell, and the heading is left alone)."""
+    n = body.n
+    raw = body.facing() if n >= 3 else None
+    if raw is None:
+        return np.zeros(n), "fixed", None
+    sm = _box(raw, np.maximum(body.window(), HEADING_WINDOW * body.fps), body.loop)
+    f0 = float(sm[0])
+    sm = sm - sm[0]
+    rate = float(np.dot(T, sm) / max(float(np.dot(T, T)), 1e-12))     # a steady turn from 0
+    steady = rate * T
+    if body.loop:
+        return steady, "steady", f0
+    if abs(float(sm[-1])) < (TURN_ON_SPOT if on_spot else YAW_STILL):
+        return np.zeros(n), "fixed", f0
+    e = np.abs(steady - sm)
+    if float(np.sqrt((e ** 2).mean())) <= YAW_TOL_RMS and float(e.max()) <= YAW_TOL_MAX:
+        return steady, "steady", f0
+    y = _pchip(tk, _monotone_keys(sm, T, tk), T)
+    return y - y[0], "keyed", f0
+
+
 # --- applying it ----------------------------------------------------------------------
 
 def _root_curves(action, bone):
@@ -566,18 +662,32 @@ def is_applied(action) -> bool:
     return action is not None and BACKUP_KEY in action
 
 
+#: kept on an accepted take: its root motion (the travel it has, or had taken
+#: out), for a game export -- see :func:`root_motion`
+ROOT_MOTION_KEY = "animatica_root_motion"
+
+
 def removed(action) -> list:
-    """What In place took out of *action*, per span: the model and its numbers."""
+    """What In place took out of *action* (or, re-pathed, put in), per span:
+    the model, its numbers, the travel path and heading."""
     if not is_applied(action):
         return []
     return json.loads(action[BACKUP_KEY]).get("removed", [])
 
 
-def _backup(action, curves, report):
+def applied_mode(action) -> str | None:
+    """``"in_place"``, ``"repath"`` (moved onto an edited path) or None."""
+    if not is_applied(action):
+        return None
+    return json.loads(action[BACKUP_KEY]).get("mode", "in_place")
+
+
+def _backup(action, curves, report, mode, hold):
     keys = {f"{p}|{i}": [[k.co.x, k.co.y, k.handle_left.x, k.handle_left.y, k.handle_right.x,
                           k.handle_right.y, k.interpolation] for k in fc.keyframe_points]
             for (p, i), fc in curves.items()}
-    action[BACKUP_KEY] = json.dumps({"keys": keys, "removed": report})
+    action[BACKUP_KEY] = json.dumps({"keys": keys, "removed": report, "mode": mode,
+                                     "hold": [float(hold[0]), float(hold[1])]})
 
 
 def restore(arm, action) -> bool:
@@ -607,10 +717,40 @@ def restore(arm, action) -> bool:
     return True
 
 
+def record(action) -> dict | None:
+    """The root motion *action* has: ``{"mode", "hold", "spans"}``, while In
+    place is on or re-pathed, or kept since Accept; None if it was never read."""
+    if action is None:
+        return None
+    if is_applied(action):
+        b = json.loads(action[BACKUP_KEY])
+        return {"mode": b.get("mode", "in_place"), "hold": b.get("hold"), "spans": b.get("removed", [])}
+    raw = action.get(ROOT_MOTION_KEY)
+    try:
+        return json.loads(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+
+
 def forget(action) -> None:
-    """Keep the result: drop the original keys kept for switching back (at Accept)."""
+    """Keep the result (at Accept): drop the original keys kept for switching
+    back, and keep the root motion it had taken out, for a game export."""
     if action is not None and BACKUP_KEY in action:
+        rec = record(action)
+        if rec is not None and rec.get("hold") is not None:
+            action[ROOT_MOTION_KEY] = json.dumps(rec)
         del action[BACKUP_KEY]
+
+
+def carry(src_action, new_actions, blocks) -> None:
+    """Accept, split into blocks: each block's action keeps its share of the root motion."""
+    rec = record(src_action)
+    if rec is None or rec.get("hold") is None:
+        return
+    for act, (fs, fe, *_rest) in zip(new_actions, blocks):
+        spans = [sp for sp in rec["spans"] if fs <= sp["frames"][0] and sp["frames"][1] <= fe]
+        if spans:
+            act[ROOT_MOTION_KEY] = json.dumps({**rec, "spans": spans})
 
 
 SERVER_KEY = "animatica_server_trajectory"
@@ -670,12 +810,63 @@ def _set_key(fc, f, value):
     kp.type = 'GENERATED'            # the take's, not the artist's: Reject strips it
 
 
-def apply(arm, action, scene, spans, fps: float | None = None, *, reuse: bool = False) -> list:
-    """Take the travel out of *action* over each span ``(first, last, loop)``
-    (a prompt block each; a loop's cycle), keeping the original keys so
-    :func:`restore` can put it back. Returns what was taken out, per span.
-    ``reuse`` takes the take as last sampled (an edit to the root trajectory
-    curve changes the path, not the take)."""
+def _rigid(p, yaw) -> Matrix:
+    """A move on the floor: turn by *yaw* about the vertical, then to *p* (x, y)."""
+    c, s = math.cos(yaw), math.sin(yaw)
+    return Matrix(((c, -s, 0, p[0]), (s, c, 0, p[1]), (0, 0, 1, 0), (0, 0, 0, 1)))
+
+
+def _yaw_of(M) -> float:
+    return math.atan2(M[1][0], M[0][0])
+
+
+def _travel(fit) -> list:
+    """Per span, frame by frame: ``R``, the trajectory fitted (what In place
+    takes out), and ``E``, the travel the take gets (the artist's edited path,
+    else ``R``), as moves on the floor. A span carries on from where the one
+    before it ended up, edited or not; a turn carries on too."""
+    turned, carry_m, out = 0.0, Matrix.Identity(4), []
+    for span in fit:
+        ys = turned + np.asarray(span["yaw"], float)
+        R = [_rigid(p, y) for p, y in zip(span["xy"], ys)]
+        ed = span.get("edit")
+        if ed is None:
+            E = [carry_m @ r for r in R]
+        else:
+            E = [carry_m @ _rigid(p, turned + y) for p, y in zip(ed["xy"], ed["yaw"])]
+        carry_m = E[-1] @ R[-1].inverted()
+        turned = float(ys[-1])
+        out.append((R, E))
+    return out
+
+
+def _entry(span, E) -> dict:
+    """What is kept of a span: its model and numbers, and the travel it gets
+    (path, heading), frame by frame, with its markers and support height."""
+    ed = span.get("edit")
+    info = {"model": "edited" if ed else span["model"], **span["prm"], **(ed["prm"] if ed else {})}
+    yaw = np.unwrap([_yaw_of(M) for M in E])
+    return {"frames": [span["first"], span["last"]], "loop": span["loop"], **info,
+            "heading": span.get("heading", "fixed"),
+            "path": [[round(M[0][3], 4), round(M[1][3], 4)] for M in E],
+            "yaw": [round(float(v), 5) for v in yaw],
+            "floor": round(float(span["floor"]), 4),
+            "facing0": span.get("facing0"),
+            "markers": span.get("markers", {}),
+            "support_z": [round(float(v), 4) for v in span.get("support_z", np.zeros(len(E)))]}
+
+
+_BULKY = ("frames", "loop", "model", "path", "yaw", "floor", "facing0", "markers", "support_z")
+
+
+def apply(arm, action, scene, spans, fps: float | None = None, *, reuse: bool = False,
+          mode: str = "in_place") -> list:
+    """Over each span ``(first, last, loop)`` (a prompt block each; a loop's
+    cycle), take the travel out of *action* (``mode="in_place"``), or move the
+    take onto the artist's edited path (``"repath"``, root_edit.py). The
+    original keys are kept so :func:`restore` can put them back. Returns what
+    was done, per span. ``reuse`` takes the take as last sampled (an edit to
+    the path changes the path, not the take)."""
     if arm is None or action is None or not spans:
         return []
     restore(arm, action)
@@ -690,29 +881,20 @@ def apply(arm, action, scene, spans, fps: float | None = None, *, reuse: bool = 
     A = arm.matrix_world.copy()
     Ai = A.inverted()
     Ri = top.bone.matrix_local.inverted()
-    plan, report = {}, []
-    hold = None
-    turned = 0.0                      # heading earlier spans took out: a turn carries on
-    for span in _fit_spans(arm, action, scene, spans, fps, reuse=reuse):
-        first, last, xy, yaw, S = span["first"], span["last"], span["xy"], span["yaw"], span["S"]
-        if hold is None:
-            hold = xy[0].copy()
-        for k, f in enumerate(range(first, last + 1)):
-            y = turned + float(yaw[k])
-            c, s = math.cos(-y), math.sin(-y)
-            # T(hold) Rz(-y) T(-xy): the root back where the take began, facing as it did
-            dx, dy = -xy[k, 0], -xy[k, 1]
-            M = Matrix(((c, -s, 0, hold[0] + c * dx - s * dy), (s, c, 0, hold[1] + s * dx + c * dy),
-                        (0, 0, 1, 0), (0, 0, 0, 1)))
-            plan[f] = (Ri @ (Ai @ M @ A @ S["top"][k]), abs(y) > 1e-5)
-        turned += float(yaw[-1])
-        # the path taken out, where the take went (world, +Z up): the viewport draws it
-        report.append({"frames": [first, last], "loop": span["loop"], "model": span["model"], **span["prm"],
-                       "path": [[round(float(x), 4), round(float(y), 4)] for x, y in xy],
-                       "floor": round(span["floor"], 4)})
-    if not plan:
+    fit = _fit_spans(arm, action, scene, spans, fps, reuse=reuse)
+    if not fit:
         return []
-    _backup(action, curves, report)
+    hold = np.array(fit[0]["xy"][0], float)
+    H = _rigid(hold, 0.0)
+    plan, report = {}, []
+    for span, (R, E) in zip(fit, _travel(fit)):
+        for k, f in enumerate(range(span["first"], span["last"] + 1)):
+            # in place: T(hold) R^-1, the root back where the take began, facing as it did;
+            # re-pathed: E R^-1, the take moved from its own path onto the edited one
+            M = (H if mode == "in_place" else E[k]) @ R[k].inverted()
+            plan[f] = (Ri @ (Ai @ M @ A @ span["S"]["top"][k]), abs(_yaw_of(M)) > 1e-5)
+        report.append(_entry(span, E))
+    _backup(action, curves, report, mode, hold)
     turn = any(r for _, r in plan.values())
     prev_q = None
     for f in sorted(plan):
@@ -733,9 +915,10 @@ def apply(arm, action, scene, spans, fps: float | None = None, *, reuse: bool = 
                     _set_key(fc, f, v)
     for fc in curves.values():
         fc.update()
+    verb = "in place, took out" if mode == "in_place" else "re-pathed onto"
     for r in report:
-        nums = {k: v for k, v in r.items() if k not in ("frames", "loop", "model", "path", "floor")}
-        print(f"[animatica] in place {r['frames'][0]}-{r['frames'][1]}: took out a {r['model']} {json.dumps(nums)}")
+        nums = {k: v for k, v in r.items() if k not in _BULKY}
+        print(f"[animatica] {verb} {r['frames'][0]}-{r['frames'][1]}: a {r['model']} {json.dumps(nums)}")
     return report
 
 
@@ -744,11 +927,12 @@ _last_fit: dict = {"key": None, "spans": []}
 
 
 def _fit_spans(arm, action, scene, spans, fps, *, reuse: bool = False):
-    """The trajectory of each span ``(first, last, loop)``: the artist's edited
-    curve (root_edit.py), the server's, laid onto the take, or one fitted here.
-    Samples the take (moves the playhead, and puts it back) unless ``reuse``
-    finds it sampled already; writes nothing. Call on the take as generated
-    (not in place): apply restores it first."""
+    """The trajectory of each span ``(first, last, loop)``: the server's path,
+    laid onto the take, or one fitted here, and the heading the body faces
+    along it; with the artist's edited path alongside, if there is one
+    (root_edit.py). Samples the take (moves the playhead, and puts it back)
+    unless ``reuse`` finds it sampled already; writes nothing. Call on the take
+    as generated (not in place): apply restores it first."""
     from . import root_edit
     key = (arm.name, action.name, tuple(sorted(spans)), round(fps, 3), tuple(arm.matrix_world.col[3]))
     if reuse and _last_fit["key"] == key:
@@ -760,23 +944,34 @@ def _fit_spans(arm, action, scene, spans, fps, *, reuse: bool = False):
             continue
         S = sample(arm, scene, first, last)
         body = Body(S, fps, loop)
-        got = _from_server(action, body, first, last)
-        xy, yaw, model, prm = got if got is not None else trajectory(body)
+        # a loop is a line or an arc that repeats: the server fitted the whole
+        # take, not this cycle of it
+        got = None if loop else _from_server(action, body, first, last)
+        xy, _path_yaw, model, prm = got if got is not None else trajectory(body)
+        path, labels = body.travel_path()
+        T = np.arange(len(path)) / fps
+        yaw, how, facing0 = heading(body, labels, T, _key_times(labels, T), model == "still")
         if loop:
             # A cycle repeats with its own travel added each time (Cycles,
             # repeat with offset): the trajectory taken out must be exactly that
             # travel, or what is left adds up (1.9 cm a cycle on a walk).
-            # Spread the difference over the cycle; an arc closes its turn too.
+            # Spread the difference over the cycle, and the turn's too, so the
+            # cycle closes facing the way it began (a line's few degrees of drift
+            # were a seam).
             u = np.linspace(0, 1, len(xy))[:, None]
             w0, w1 = A @ S["top"][0], A @ S["top"][-1]
             true = np.array([w1.translation.x - w0.translation.x, w1.translation.y - w0.translation.y])
             xy = xy + (true - (xy[-1] - xy[0])) * u
-            if model == "arc":
+            raw = body.facing()
+            if raw is not None:
+                turn = float(raw[-1] - raw[0])
+            else:
                 f0, f1 = w0.to_3x3() @ _FWD, w1.to_3x3() @ _FWD
                 turn = math.atan2(f0.x * f1.y - f0.y * f1.x, f0.x * f1.x + f0.y * f1.y)
-                yaw = yaw + (turn - yaw[-1]) * u[:, 0]
+            yaw = yaw + (turn - yaw[-1]) * u[:, 0]
         out.append({"first": first, "last": last, "loop": bool(loop), "xy": xy, "yaw": yaw,
-                    "model": model, "prm": prm, "S": S, "floor": body.floor})
+                    "model": model, "prm": prm, "S": S, "floor": body.floor, "heading": how,
+                    "facing0": facing0, "markers": body.touchdowns(first), "support_z": body.support_z()})
     _last_fit["key"], _last_fit["spans"] = key, out
     return root_edit.overlay(action, out, fps)
 
@@ -798,28 +993,83 @@ def describe(span: dict) -> str:
         bits = ["edited", f"{span.get('length_m', 0.0):.2f} m"]
         if span.get("off_fit_cm"):
             bits.append(f"{span['off_fit_cm']:.0f} cm off the fit")
+    yaw = span.get("yaw")
+    if yaw and abs(yaw[-1] - yaw[0]) > math.radians(5.0):
+        bits.append(f"turns {math.degrees(yaw[-1] - yaw[0]):+.0f}°")
     if span.get("source") == "server":
         bits.append("server")
     return " · ".join(bits)
 
 
 def fitted_path(arm, action, scene, *, reuse: bool = False) -> list:
-    """The root trajectory of the take showing, per span, for the viewport:
+    """The travel of the take showing, per span, for the viewport:
     ``[{"frames": [a, b], "path": [[x, y], ...], "floor": z, "label": str}]``
-    (world, +Z up). With In place on it is what was taken out; otherwise it is
-    fitted now, as In place would (samples the take; writes nothing)."""
+    (world, +Z up). With In place on (or re-pathed, or accepted) it is what
+    was kept; otherwise it is fitted now, as In place would (samples the take;
+    writes nothing)."""
     if arm is None or action is None:
         return []
-    if is_applied(action):
-        spans = removed(action)
-        if spans and all("path" in s for s in spans):
-            return [{"frames": s["frames"], "path": s["path"], "floor": s.get("floor", 0.0),
-                     "label": describe(s)} for s in spans]
+    rec = record(action)
+    if rec and rec.get("spans") and all("path" in s for s in rec["spans"]):
+        return [{"frames": s["frames"], "path": s["path"], "floor": s.get("floor", 0.0),
+                 "label": describe(s)} for s in rec["spans"]]
     from . import operators          # noqa: PLC0415 - lazy: operators imports this module
     fps = scene.render.fps / scene.render.fps_base
+    fit = _fit_spans(arm, action, scene, operators._inplace_spans(arm, action), fps, reuse=reuse)
     out = []
-    for span in _fit_spans(arm, action, scene, operators._inplace_spans(arm, action), fps, reuse=reuse):
-        info = {"model": span["model"], **span["prm"]}
-        out.append({"frames": [span["first"], span["last"]], "floor": float(span["floor"]),
-                    "path": [[float(x), float(y)] for x, y in span["xy"]], "label": describe(info)})
+    for span, (_R, E) in zip(fit, _travel(fit)):
+        e = _entry(span, E)
+        out.append({"frames": e["frames"], "floor": e["floor"], "path": e["path"], "label": describe(e)})
     return out
+
+
+def root_motion(arm, action, scene) -> dict | None:
+    """The take's root motion, for a game export, frame by frame over its spans:
+
+    ``travel``     [x, y, heading] of the root (world, +Z up; heading + turns left)
+    ``in_place``   the keys have it taken out (held at ``hold``), else they travel
+    ``facing0``    the way the body faces at the start (world, radians)
+    ``markers``    {"LeftFootDown": [frame, ...], "RightFootDown": [...]}
+    ``support_z``  the height of what it stands on, above its lowest
+    ``spans``      each span's model and numbers
+
+    Read from what In place kept (on, re-pathed or accepted); a take it never
+    touched is fitted now (samples the take). None without a take."""
+    if arm is None or action is None:
+        return None
+    rec = record(action)
+    if rec is None or rec.get("hold") is None or not rec.get("spans"):
+        from . import operators      # noqa: PLC0415
+        fps = scene.render.fps / scene.render.fps_base
+        fit = _fit_spans(arm, action, scene, operators._inplace_spans(arm, action), fps)
+        if not fit:
+            return None
+        rec = {"mode": "travelling", "hold": [float(v) for v in fit[0]["xy"][0]],
+               "spans": [_entry(sp, E) for sp, (_R, E) in zip(fit, _travel(fit))]}
+    frames, travel, sz, markers = [], [], [], {}
+    for sp in rec["spans"]:
+        a, b = sp["frames"]
+        n = b - a + 1
+        yaw = sp.get("yaw") or [0.0] * n
+        zs = sp.get("support_z") or [0.0] * n
+        for k in range(n):
+            f = a + k
+            if frames and f <= frames[-1]:
+                continue                                   # a frame two blocks share
+            frames.append(f)
+            travel.append([sp["path"][k][0], sp["path"][k][1], yaw[k]])
+            sz.append(zs[k])
+        for name, fr in (sp.get("markers") or {}).items():
+            markers.setdefault(name, []).extend(int(x) for x in fr)
+    # blocks that leave a gap between them: the travel between is joined up straight
+    full = list(range(frames[0], frames[-1] + 1))
+    tr = np.asarray(travel, float)
+    tr = np.stack([np.interp(full, frames, tr[:, j]) for j in range(3)], 1)
+    sz = np.interp(full, frames, sz)
+    first = rec["spans"][0]
+    return {"frames": full, "travel": tr.tolist(), "in_place": rec["mode"] == "in_place",
+            "hold": rec["hold"], "loop": len(rec["spans"]) == 1 and bool(first.get("loop")),
+            "facing0": first.get("facing0"), "markers": {k: sorted(set(v)) for k, v in markers.items()},
+            "support_z": sz.tolist(), "floor": first.get("floor", 0.0),
+            "spans": [{k: v for k, v in sp.items() if k not in ("path", "yaw", "support_z", "markers")}
+                      for sp in rec["spans"]]}

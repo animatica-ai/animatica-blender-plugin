@@ -326,10 +326,17 @@ def _apply_inplace_constraint(armature_obj, enabled: bool) -> None:
     action = ad.action if ad is not None else None
     if action is None:
         return
+    from . import root_edit
+    edited = root_edit.find(action) is not None
     if not enabled:
-        inplace.restore(armature_obj, action)
+        if inplace.applied_mode(action) == "in_place":
+            inplace.restore(armature_obj, action)
+        if edited and inplace.applied_mode(action) is None and _is_motion_bake_action(action):
+            # off, with an edited path: the take goes along it
+            inplace.apply(armature_obj, action, bpy.context.scene,
+                          _inplace_spans(armature_obj, action), mode="repath")
         return
-    if inplace.is_applied(action) or not _is_motion_bake_action(action):
+    if inplace.applied_mode(action) == "in_place" or not _is_motion_bake_action(action):
         return
     inplace.apply(armature_obj, action, bpy.context.scene, _inplace_spans(armature_obj, action))
 
@@ -345,13 +352,15 @@ def _keep_inplace(armature_obj, actions) -> None:
 
 
 class ANIMATICA_OT_edit_root_trajectory(Operator):
-    """Turn the take's root trajectory into a curve you can edit"""
+    """Send the take along a new path: its root trajectory as a curve to edit"""
     bl_idname = "animatica.edit_root_trajectory"
     bl_label = "Edit Root Trajectory"
     bl_description = (
-        "Turn the take's root trajectory into a Bezier curve on the floor and "
-        "edit it. In place then takes out the curve instead of the fitted path, "
-        "live as you edit; the timing along it stays the take's"
+        "Turn the take's root trajectory into a Bezier curve on the floor. "
+        "Editing it re-paths the take: with In place off the character moves "
+        "along the curve, live as you edit (the timing along it stays the "
+        "take's); with In place on the pose is unchanged and the curve is the "
+        "root motion a game export gives it. Sharp new bends slide the feet"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -385,7 +394,8 @@ class ANIMATICA_OT_edit_root_trajectory(Operator):
         bpy.ops.object.mode_set(mode='EDIT')
         if created:
             root_edit.refresh(context.scene)
-        self.report({'INFO'}, "Editing the root trajectory: move its points and handles; Tab to finish")
+        self.report({'INFO'}, "Editing the root trajectory: move its points and handles to re-path the take; "
+                              "Tab to finish")
         return {'FINISHED'}
 
 
@@ -1161,6 +1171,9 @@ class ANIMATICA_OT_accept(Operator):
                 actions_to_push = _split_action_into_blocks(
                     preview_action, arm, block_ranges,
                 )
+                # each block keeps its share of the root motion (a game export reads it)
+                from . import inplace
+                inplace.carry(preview_action, actions_to_push, block_ranges)
                 arm.animation_data.action = None
                 bpy.data.actions.remove(preview_action)
             elif (
