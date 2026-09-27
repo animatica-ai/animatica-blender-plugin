@@ -805,12 +805,16 @@ def _artist_edits(action, top, curves) -> tuple:
 
 
 def _put_key(fc, x, value, kind) -> None:
+    """The artist's key at *x*: over the take's key there (which the original
+    keys just put back typed GENERATED), or a new one. Typed *kind* either
+    way, so it goes on reading as theirs."""
     for kp in fc.keyframe_points:
         if abs(kp.co.x - x) < 1e-3:
             d = value - kp.co.y
             kp.co.y = value
             kp.handle_left.y += d
             kp.handle_right.y += d
+            kp.type = kind
             return
     kp = fc.keyframe_points.insert(x, value, options={'FAST'})
     kp.type = kind
@@ -840,6 +844,11 @@ def _fold_edits(top, curves, edits, deleted) -> None:
             rot = ("rotation_euler", list(q.to_euler(top.rotation_mode, was)))
         else:
             rot = (None, [])
+        # The artist's, whatever the key they typed over was: a key set over
+        # one of the take's stays typed GENERATED in Blender, and folded back
+        # as that it read as the take's -- Reject dropped it, and after Accept
+        # the next generation did not follow it.
+        types = {c: ('KEYFRAME' if t == 'GENERATED' else t) for c, t in types.items()}
         kind = next(iter(types.values()), 'KEYFRAME')
         chans = [(("location", i), v) for i, v in enumerate(loc)] + [((rot[0], i), v) for i, v in enumerate(rot[1])]
         for chan, v in chans:

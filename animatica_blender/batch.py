@@ -366,9 +366,10 @@ def _review(context, op_name: str, names: list | None = None) -> int:
             continue
         info = json.loads(arm.get(_PENDING_KEY) or "{}")
         settings.target_armature = arm          # swaps in its blocks, clears the flags
-        settings.source_action_name = info.get("source", "")
-        settings.is_previewing = True
         from . import preview_session
+        kept = preview_session.source_of(arm)
+        settings.source_action_name = kept.name if kept is not None else info.get("source", "")
+        settings.is_previewing = True
         legacy = preview_session.get(arm) is None
         getattr(bpy.ops.animatica, op_name)()
         source = bpy.data.actions.get(info.get("source", ""))

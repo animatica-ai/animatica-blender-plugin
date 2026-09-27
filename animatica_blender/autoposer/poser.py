@@ -303,6 +303,22 @@ def driven_joints(arm, *, fresh: bool = False):
 #: what the artist is told when the Autoposer cannot work on a rig, instead of a traceback
 NO_MODEL = "The Autoposer model isn't downloaded yet — see Preferences > Add-ons > Animatica"
 UNSUPPORTED = "This rig isn't supported by the Autoposer"
+LINKED = ("This rig is linked from another file, so its controls can't be added or removed "
+          "here (make it local first)")
+
+
+def edit_problem(arm):
+    """Why control bones cannot be added to or removed from *arm* here, or None: they need
+    Edit Mode, which a rig linked from another file (or a library override of one) does not
+    allow -- Build Rig stopped with a raw mode_set error half way through."""
+    if arm is None:
+        return None
+    for idb in (arm, arm.data):
+        if idb is None:
+            continue
+        if idb.library is not None or getattr(idb, "override_library", None) is not None:
+            return LINKED
+    return None
 
 
 def rig_problem(arm):
@@ -1108,7 +1124,7 @@ class AP_OT_build_rig(bpy.types.Operator):
             self.report({"ERROR"}, f"cannot read /rig from the sidecar: {e}")
             return {"CANCELLED"}
         # Every check before the first change: a build that stops leaves the rig as it was.
-        problem = rig_problem(arm)
+        problem = edit_problem(arm) or rig_problem(arm)
         if problem is None:
             try:
                 have = joint_names(arm)
@@ -1188,7 +1204,7 @@ class AP_OT_add_control(bpy.types.Operator):
         arm = _armature(context)
         if arm is None or self.control == "NONE":
             return {"CANCELLED"}
-        problem = rig_problem(arm)
+        problem = edit_problem(arm) or rig_problem(arm)
         if problem is not None:
             self.report({"ERROR"}, problem)
             return {"CANCELLED"}
@@ -1223,6 +1239,10 @@ class AP_OT_remove_control(bpy.types.Operator):
     def execute(self, context):
         arm = _armature(context)
         if arm is None:
+            return {"CANCELLED"}
+        problem = edit_problem(arm)
+        if problem is not None:
+            self.report({"ERROR"}, problem)
             return {"CANCELLED"}
         target = self.name or (arm.data.bones.active.name if arm.data.bones.active else "")
         if not target or target not in arm.data.bones or not _is_ctrl(arm.data.bones[target]):
