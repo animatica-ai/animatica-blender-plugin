@@ -331,10 +331,17 @@ class Body:
 
 # --- the simplest trajectory ----------------------------------------------------------
 
-#: a model is accepted within this of the travel path: RMS 1.5 cm + 2.5 % of the
-#: distance, max 4 cm + 5 %. A take's own wobble about a line is a few % of its
-#: length; a real curve is far outside it (a curving walk: 50 cm off a line).
+#: A model is accepted within these of the travel path, split by direction.
+#: Across the path: RMS 1.5 cm + 2.5 % of the distance, max 4 cm + 5 % (a take's
+#: own wobble about a line is a few % of its length; a real curve is far outside
+#: it: a curving walk, 50 cm off a line). Along it: 2 cm RMS, 5 cm max, whatever
+#: the distance -- an error along the path is timing, and in place it is the
+#: body sliding back or forward (a run from standing, fitted with too few keys,
+#: slid 0.5 m back before it ran). Same as motionmcp.trajectory.
 TOL_RMS, TOL_MAX, TOL_REL = 0.015, 0.04, 0.025
+ALONG_RMS, ALONG_MAX = 0.02, 0.05
+#: distance-curve keys at most this far apart (s), besides the take's events
+KEY_GAP = 0.25
 #: on the spot: never strays further than this (or creeps under 8 cm at < 5 cm/s)
 STILL_MAX = 0.06
 
@@ -366,10 +373,36 @@ def _key_times(labels, T, want=6, min_gap=0.15):
         if e - keep[-1] >= min_gap:
             keep.append(e)
     keep[-1] = float(T[-1])
-    while len(keep) < want:
+    while len(keep) < want or (len(keep) > 1 and float(np.max(np.diff(keep))) > KEY_GAP):
         g = int(np.argmax(np.diff(keep)))
         keep.insert(g + 1, (keep[g] + keep[g + 1]) / 2)
     return np.array(keep)
+
+
+def _split_error(xy, path):
+    """Distance from the travel path, split: along its direction (timing) and across it."""
+    tan = np.gradient(path, axis=0)
+    ln = np.linalg.norm(tan, axis=1, keepdims=True)
+    ok = ln[:, 0] > 1e-6
+    if not ok.any():
+        e = np.linalg.norm(xy - path, axis=1)
+        return np.zeros_like(e), e
+    idx = np.where(ok)[0]
+    tan = np.where(ok[:, None], tan / np.maximum(ln, 1e-12), 0)
+    for j in range(2):                        # standing still: the nearest direction
+        tan[:, j] = np.interp(np.arange(len(tan)), idx, tan[idx, j])
+    tan /= np.maximum(np.linalg.norm(tan, axis=1, keepdims=True), 1e-12)
+    d = xy - path
+    along = (d * tan).sum(1)
+    return along, np.abs(d[:, 0] * tan[:, 1] - d[:, 1] * tan[:, 0])
+
+
+def _within(xy, path, dist):
+    """Close enough to the travel path: loosely across it, tightly along it."""
+    along, across = _split_error(xy, path)
+    return (float(np.sqrt((across ** 2).mean())) <= TOL_RMS + TOL_REL * dist
+            and float(across.max()) <= TOL_MAX + 2 * TOL_REL * dist
+            and float(np.sqrt((along ** 2).mean())) <= ALONG_RMS and float(np.abs(along).max()) <= ALONG_MAX)
 
 
 def _monotone_keys(s, T, tk):
@@ -472,7 +505,6 @@ def trajectory(body: Body):
         return path, np.zeros(n), "still", {}
     T = np.arange(n) / fps
     dist = float(np.linalg.norm(np.diff(path, axis=0), axis=1).sum())
-    tol_rms, tol_max = TOL_RMS + TOL_REL * dist, TOL_MAX + 2 * TOL_REL * dist
     tk = _key_times(labels, T)
     best = None
     for m in MODELS:
@@ -488,7 +520,7 @@ def trajectory(body: Body):
             net = float(np.linalg.norm(path[-1] - path[0]))
             ok = mx <= STILL_MAX or (net < 0.08 and dist / max(float(T[-1]), 1e-6) < 0.05)
         else:
-            ok = rms <= tol_rms and mx <= tol_max
+            ok = _within(xy, path, dist)
         prm = {**prm, "off_cm": round(rms * 100, 1)}
         if ok:
             return xy, yaw, m, prm
@@ -601,11 +633,9 @@ def _from_server(action, body, first, last):
         ang = 0.0
     c, s = math.cos(ang), math.sin(ang)
     xy = (A @ np.array([[c, s], [-s, c]])) + ml
-    err = np.linalg.norm(xy - local, axis=1)
     dist = float(np.linalg.norm(np.diff(local, axis=0), axis=1).sum())
-    if float(np.sqrt((err ** 2).mean())) > TOL_RMS + TOL_REL * dist or \
-            float(err.max()) > TOL_MAX + 2 * TOL_REL * dist:
-        return None
+    if not _within(xy, local, dist):
+        return None                  # a server's older, looser fit, or a take edited since
     y = yaw[a:b + 1] - yaw[a]
     prm = dict(t.get("params") or {}, source="server")
     return xy, y, str(t.get("model", "server")), prm
