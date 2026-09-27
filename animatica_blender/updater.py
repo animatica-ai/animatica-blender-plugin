@@ -465,6 +465,10 @@ def check_async(*, force: bool = False) -> bool:
     """
     if _state["checking"]:
         return False
+    # Nothing goes online unless Blender allows it (Preferences > System).
+    from .mmcp_client import online_access
+    if not online_access():
+        return False
     prefs = _prefs()
     if prefs is None:
         return False
@@ -804,6 +808,10 @@ class ANIMATICA_OT_check_update(bpy.types.Operator):
     bl_description = "Ask GitHub whether a newer build of this addon has been released"
 
     def execute(self, context):
+        from .mmcp_client import OFFLINE_MESSAGE, online_access
+        if not online_access():
+            self.report({'ERROR'}, OFFLINE_MESSAGE)
+            return {'CANCELLED'}
         check_async(force=True)
         self.report({'INFO'}, "checking for updates…")
         return {'FINISHED'}
@@ -834,6 +842,10 @@ class ANIMATICA_OT_update(bpy.types.Operator):
         col.label(text="Restart Blender afterwards to finish the update.")
 
     def execute(self, context):
+        from .mmcp_client import OFFLINE_MESSAGE, online_access
+        if not online_access():
+            self.report({'ERROR'}, OFFLINE_MESSAGE)
+            return {'CANCELLED'}
         if generating_anywhere():
             self.report({'ERROR'}, "a generation is running — let it finish first")
             return {'CANCELLED'}
