@@ -344,6 +344,21 @@ ALONG_RMS, ALONG_MAX = 0.02, 0.05
 KEY_GAP = 0.25
 #: on the spot: never strays further than this (or creeps under 8 cm at < 5 cm/s)
 STILL_MAX = 0.06
+#: ...or ends within ON_SPOT_NET of where it began and never strays further than
+#: ON_SPOT_REACH from it: a jump up that lands 10 cm back, a turn, a stumble
+#: caught. That is the body settling, not travel, and In place leaves the take
+#: as it is (a line taken out of a jump up moved it; one sidestep, ~30 cm,
+#: still travels). Same as motionmcp.trajectory.
+ON_SPOT_NET, ON_SPOT_REACH = 0.15, 0.25
+
+
+def on_the_spot(path) -> bool:
+    """Does this travel path go nowhere (see ON_SPOT_NET)?"""
+    path = np.asarray(path, float)
+    if len(path) < 2:
+        return True
+    return (float(np.linalg.norm(path[-1] - path[0])) < ON_SPOT_NET
+            and float(np.linalg.norm(path - path[0], axis=1).max()) < ON_SPOT_REACH)
 
 
 def _pchip(tk, yk, t):
@@ -523,7 +538,7 @@ def trajectory(body: Body):
         rms, mx = float(np.sqrt((err ** 2).mean())), float(err.max())
         if m == "still":
             net = float(np.linalg.norm(path[-1] - path[0]))
-            ok = mx <= STILL_MAX or (net < 0.08 and dist / max(float(T[-1]), 1e-6) < 0.05)
+            ok = mx <= STILL_MAX or (net < 0.08 and dist / max(float(T[-1]), 1e-6) < 0.05) or on_the_spot(path)
         else:
             ok = _within(xy, path, dist)
         prm = {**prm, "off_cm": round(rms * 100, 1)}
@@ -625,8 +640,8 @@ def _from_server(action, body, first, last):
         return None
     srv = np.stack([pos[a:b + 1, 0], -pos[a:b + 1, 1]], 1)        # glTF (x, z) -> +Z up (x, y)
     local, _ = body.travel_path()
-    if len(local) != len(srv):
-        return None
+    if len(local) != len(srv) or on_the_spot(local):
+        return None                  # on the spot: left as it is (a server's older fit may not say so)
     # rigid fit about the vertical (Procrustes, no scale); a path that barely
     # travels only shifts
     ms, ml = srv.mean(0), local.mean(0)
