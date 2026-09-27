@@ -110,6 +110,16 @@ TRAIL_FAR_FACTOR = 0.18
 TRAIL_ALPHA_DROPPED = 0.28        # frames the next generation will not touch
 TRAIL_CURRENT_COLOR = (1.0, 1.0, 1.0, 0.95)
 
+# The root trajectory: the path the take travels along without the sway of its
+# steps (inplace.py), drawn on the floor. Amber: none of the prompt-block
+# colours, and not the white of the playhead, so it never reads as the motion.
+ROOT_PATH_COLOR = (1.0, 0.72, 0.18, 0.95)
+ROOT_PATH_WIDTH = 3.0
+ROOT_PATH_LIFT = 0.004            # m above the floor, so it does not z-fight it
+ROOT_PATH_TICK_EVERY = 6          # frames between the small ticks along it
+ROOT_PATH_TICK_RADIUS = 2.2
+ROOT_PATH_CURRENT_RADIUS = 5.0
+
 LABEL_SIZE         = 11
 LABEL_COLOR        = (0.92, 0.93, 0.96, 0.95)
 LABEL_DROPPED      = (1.00, 0.55, 0.42, 0.95)
@@ -172,6 +182,15 @@ _trail: dict = {
     "bones": [],
     "frames": [],
     "points": {},
+    "signature": None,
+    "dirty": True,
+    "arm": "",
+}
+
+# The root trajectory, fitted in the same bake pass (it samples the take too):
+#   spans      [{"frames": [a, b], "path": [(x, y, z), ...], "label": str}]
+_root_path: dict = {
+    "spans": [],
     "signature": None,
     "dirty": True,
     "arm": "",
@@ -291,6 +310,15 @@ def _trail_signature(arm, action):
     return (arm.name, action.name)
 
 
+def _root_path_signature(arm, action):
+    """What the root trajectory depends on: the take, and whether In place has
+    taken it out (then the removed path is read back, not fitted again)."""
+    if arm is None or action is None:
+        return None
+    from . import inplace
+    return (arm.name, action.name, inplace.is_applied(action))
+
+
 # ---------------------------------------------------------------------------
 # The plan
 # ---------------------------------------------------------------------------
@@ -406,7 +434,8 @@ def overlay_on(settings) -> bool:
     exists.
     """
     return bool(settings is not None and settings.key_pose_overlay
-                and (settings.key_pose_ghosts or settings.key_pose_trail))
+                and (settings.key_pose_ghosts or settings.key_pose_trail
+                     or getattr(settings, "key_pose_root_path", False)))
 
 
 def ghosts_on(settings) -> bool:
@@ -419,6 +448,12 @@ def trail_on(settings) -> bool:
     """Should the motion trail be drawn and baked?"""
     return bool(settings is not None and settings.key_pose_overlay
                 and settings.key_pose_trail)
+
+
+def root_path_on(settings) -> bool:
+    """Should the root trajectory be drawn and fitted?"""
+    return bool(settings is not None and settings.key_pose_overlay
+                and getattr(settings, "key_pose_root_path", False))
 
 
 def timeline_ticks(scene) -> tuple[list[tuple[int, bool]], tuple[int, int]]:
@@ -807,7 +842,15 @@ def rebuild(context=None) -> int:
     need_trail = trail_on(settings) and (
         _trail["dirty"] or _trail["signature"] != trail_sig
     )
+    root_sig = _root_path_signature(arm, action)
+    need_root = root_path_on(settings) and (
+        _root_path["dirty"] or _root_path["signature"] != root_sig
+    )
+    if need_root:
+        _bake_root_path(arm, action, scene, root_sig)
     if not need_ghosts and not need_trail:
+        if need_root:
+            tag_redraw()
         return len(_ghosts["frames"])
 
     key_frames: list[int] = []
@@ -937,8 +980,33 @@ def rebuild(context=None) -> int:
     return len(_ghosts["frames"])
 
 
+def _bake_root_path(arm, action, scene, signature) -> None:
+    """Fit (or read back) the take's root trajectory for the viewport."""
+    global _baking
+    from . import inplace
+    spans = []
+    _baking = True
+    try:
+        for span in inplace.fitted_path(arm, action, scene):
+            z = float(span.get("floor", 0.0)) + ROOT_PATH_LIFT
+            spans.append({"frames": list(span["frames"]), "label": span["label"],
+                          "path": [(float(x), float(y), z) for x, y in span["path"]]})
+    except Exception as exc:                 # noqa: BLE001 — never fail a bake over it
+        print(f"[Animatica] root trajectory: {exc}")
+    finally:
+        _baking = False
+    _root_path["spans"] = spans
+    _root_path["signature"] = signature
+    _root_path["dirty"] = False
+    _root_path["arm"] = arm.name
+
+
 def clear() -> None:
     """Drop everything baked. The plan is cheap and stays."""
+    _root_path["spans"] = []
+    _root_path["signature"] = None
+    _root_path["dirty"] = True
+    _root_path["arm"] = ""
     _ghosts["frames"] = []
     _ghosts["ghosts"] = {}
     _ghosts["roots"] = {}
@@ -988,6 +1056,7 @@ def request_rebuild(*, coalesce: bool = False) -> None:
     # knows that; the caches cannot tell from the rig's name.
     _ghosts["dirty"] = True
     _trail["dirty"] = True
+    _root_path["dirty"] = True
     now = time.monotonic()
     if _rebuild_first_at is None:
         _rebuild_first_at = now
@@ -1200,6 +1269,24 @@ def _ghosts_ready(settings) -> bool:
     invalidate_plan()
     request_rebuild(coalesce=True)
     return _stale_ok(_ghosts, arm)
+
+
+def _root_path_ready(settings) -> bool:
+    """Whether to draw the root trajectory; asks for a refit when it is stale."""
+    if not root_path_on(settings):
+        return False
+    arm = _target(settings)
+    if arm is None:
+        return False
+    fresh = (
+        not _root_path["dirty"]
+        and _root_path["signature"] == _root_path_signature(arm, _action(arm))
+    )
+    if fresh:
+        return bool(_root_path["spans"])
+    request_rebuild(coalesce=True)
+    # the previous fit is worth drawing while the refit waits, if it was this rig's
+    return bool(_root_path["spans"]) and _root_path["arm"] == arm.name
 
 
 def _trail_ready(settings) -> bool:
@@ -1431,7 +1518,8 @@ def _draw_geometry():
 
     trail_ready = _trail_ready(settings)
     ghosts_ready = _ghosts_ready(settings)
-    if not trail_ready and not ghosts_ready:
+    root_ready = _root_path_ready(settings)
+    if not trail_ready and not ghosts_ready and not root_ready:
         return
 
     visible = _visible_poses(context.scene, p) if ghosts_ready else []
@@ -1449,6 +1537,8 @@ def _draw_geometry():
     # mask on for exactly as long as it takes (see _depth_only).
     gpu.state.depth_mask_set(False)
     try:
+        if root_ready:
+            _draw_root_path()
         if trail_ready:
             _draw_trail(settings, p)
 
@@ -1598,6 +1688,59 @@ def _draw_trail_markers(settings, p, region, rv3d, current: int) -> None:
     ).draw(shader)
 
 
+def _draw_root_path() -> None:
+    """The root trajectory, on the floor: one amber line per span."""
+    spans = _root_path["spans"]
+    if not spans:
+        return
+    line = _line_uniform_shader()
+    line.bind()
+    line.uniform_float("viewportSize", _viewport_size())
+    line.uniform_float("lineWidth", ROOT_PATH_WIDTH * _px())
+    line.uniform_float("color", ROOT_PATH_COLOR)
+    for span in spans:
+        if len(span["path"]) >= 2:
+            batch_for_shader(line, 'LINE_STRIP', {"pos": span["path"]}).draw(line)
+
+
+def _draw_root_path_markers(region, rv3d, current: int) -> None:
+    """Ticks along the root trajectory (their spacing is its speed), a marker
+    where it is at the playhead, and what it is, written at its start."""
+    spans = _root_path["spans"]
+    if not spans:
+        return
+    px = _px()
+    verts, indices = [], []
+
+    def diamond(co, r):
+        base = len(verts)
+        verts.extend(_diamond(co.x, co.y, r * px))
+        indices.extend(((base, base + 1, base + 2), (base, base + 2, base + 3)))
+
+    font_id = 0
+    blf.size(font_id, int(LABEL_SIZE * px))
+    for span in spans:
+        first, _last = span["frames"]
+        for i, point in enumerate(span["path"]):
+            f = first + i
+            if f != current and i % ROOT_PATH_TICK_EVERY:
+                continue
+            co = view3d_utils.location_3d_to_region_2d(region, rv3d, point)
+            if co is not None:
+                diamond(co, ROOT_PATH_CURRENT_RADIUS if f == current else ROOT_PATH_TICK_RADIUS)
+        co = view3d_utils.location_3d_to_region_2d(region, rv3d, span["path"][0])
+        if co is not None and span["label"]:
+            text = f"root: {span['label']}"
+            blf.position(font_id, co.x + 8 * px, co.y - (LABEL_SIZE + 6) * px, 0)
+            blf.color(font_id, *ROOT_PATH_COLOR)
+            blf.draw(font_id, text)
+    if verts:
+        shader = _shader()
+        shader.bind()
+        shader.uniform_float("color", ROOT_PATH_COLOR)
+        batch_for_shader(shader, 'TRIS', {"pos": verts}, indices=indices).draw(shader)
+
+
 def _draw_screen():
     """POST_PIXEL callback: the trail's markers and the frame labels.
 
@@ -1618,11 +1761,14 @@ def _draw_screen():
 
     trail_ready = _trail_ready(settings)
     ghosts_ready = _ghosts_ready(settings)
-    if not trail_ready and not ghosts_ready:
+    root_ready = _root_path_ready(settings)
+    if not trail_ready and not ghosts_ready and not root_ready:
         return
 
     gpu.state.blend_set('ALPHA')
     try:
+        if root_ready:
+            _draw_root_path_markers(region, rv3d, context.scene.frame_current)
         if trail_ready:
             _draw_trail_markers(settings, p, region, rv3d, context.scene.frame_current)
 
