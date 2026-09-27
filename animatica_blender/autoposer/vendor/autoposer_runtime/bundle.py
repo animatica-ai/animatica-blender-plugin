@@ -292,9 +292,48 @@ def _origin(url: str):
     return (parts.scheme.lower(), parts.netloc.lower())
 
 
+#: The host application's say on where a request may go, or None to allow everything (the
+#: runtime used on its own). Called with the URL of every request the openers here make — the
+#: first one AND every redirect hop — before anything connects; False refuses it. A Blender
+#: addon points it at "is online access allowed, or is this this machine": checking only the
+#: URL a caller started from let a server on localhost redirect the request anywhere.
+GATE = None
+
+
+class RequestRefused(urllib.error.URLError):
+    """The host's gate said no to this URL. Nothing was sent anywhere."""
+
+
+class Gate(urllib.request.BaseHandler):
+    """Asks `GATE` about each request before it is opened, redirects included.
+
+    A pre-processor rather than a check in the redirect handler: urllib runs it for every
+    request the opener opens, whatever sent it there, and before any socket exists.
+    """
+
+    handler_order = 100             # ahead of every other handler
+
+    def _check(self, req):
+        gate = GATE
+        if gate is not None and not gate(req.full_url):
+            try:
+                host = urllib.parse.urlsplit(req.full_url).hostname or req.host
+            except ValueError:
+                host = req.host
+            raise RequestRefused(f"not allowed to connect to {host}")
+        return req
+
+    http_request = https_request = ftp_request = _check
+
+
+def build_opener(*handlers):
+    """An opener that honours `GATE` and keeps tokens off other hosts."""
+    return urllib.request.build_opener(Gate, _DropAuthOnRedirect, *handlers)
+
+
 #: Every request that may carry a token goes through this: urllib's default handler forwards
 #: `Authorization` to wherever a redirect points.
-_OPENER = urllib.request.build_opener(_DropAuthOnRedirect)
+_OPENER = build_opener()
 
 
 def hf_token(explicit=None) -> str | None:
