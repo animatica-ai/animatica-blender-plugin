@@ -55,13 +55,19 @@ _SIDED = {"arm": ["Arm", "UpperArm"], "forearm": ["ForeArm", "LowerArm"], "hand"
 
 
 def _find(arm, names, side=None):
+    """A bone by its possible names, also under the namespace the whole rig
+    carries (the bundled Animatic character's ``animatica:Hips``): found bare
+    only, the body was just its hips, and no foot ever touched the floor."""
+    from .gltf_to_blender import bone_namespace
     pb = arm.pose.bones
+    ns = bone_namespace(arm.pose)
     for n in names:
         cands = ([f"{side}{n}", f"{side}_{n}", f"{n}.{side[0]}", f"{n}_{side[0]}", f"mixamorig:{side}{n}"]
                  if side else [n, f"mixamorig:{n}"])
         for cand in cands:
-            if cand in pb:
-                return pb[cand]
+            for full in ((cand, ns + cand) if ns else (cand,)):
+                if full in pb:
+                    return pb[full]
     return None
 
 
