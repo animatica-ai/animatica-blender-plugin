@@ -171,10 +171,14 @@ def _block_ranges_for_split(prompt_blocks, gen_start: int, gen_end: int):
     Returns ``[]`` if fewer than 2 enabled blocks are present (caller falls
     back to single-action bake in that case).
     """
-    enabled = sorted(
-        (b for b in prompt_blocks or () if getattr(b, "enabled", True)),
-        key=lambda b: int(b.frame_start),
-    )
+    enabled = [b for b in prompt_blocks or () if getattr(b, "enabled", True)]
+    # As the request has it (request_builder.build_segments): with any block
+    # prompted, an empty one is not part of the take -- the one a new
+    # character's timeline starts with, left there. Counted here it split
+    # the take into two strips, one of them an empty-prompt "Animatica_Motion".
+    if any((b.prompt or "").strip() for b in enabled):
+        enabled = [b for b in enabled if (b.prompt or "").strip()]
+    enabled.sort(key=lambda b: int(b.frame_start))
     if len(enabled) < 2:
         return []
 
