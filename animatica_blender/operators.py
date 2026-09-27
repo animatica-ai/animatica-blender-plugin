@@ -643,12 +643,12 @@ def bake_take(context, settings, arm, result, **bake) -> tuple:
         context, arm, bpy.data.actions.get(src_name) if src_name else None)
     try:
         action, skipped = _bake_take(context, settings, arm, result, **bake)
+        # What the take baked, so Reject can tell the artist's edits from it.
+        preview_session.record_baseline(action)
     except Exception:
         if opened:
             preview_session.abort(context, arm)
         raise
-    # What the take baked, so Reject can tell the artist's edits from it.
-    preview_session.record_baseline(action)
     return action, skipped
 
 

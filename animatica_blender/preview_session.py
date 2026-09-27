@@ -19,9 +19,13 @@ GENERATED.
 
 from __future__ import annotations
 
+import base64
 import json
+import struct
+import zlib
 
 import bpy
+import numpy as np
 from mathutils import Vector
 
 from .constraints_ui import (
@@ -276,24 +280,87 @@ def restore_backup(arm):
 
 
 # --- what the take baked, and what the artist changed -------------------------
+#
+# The record is one compressed blob, not an ID property per curve: a curve's
+# key ("pose.bones[...].rotation_quaternion|3") is longer than the 63
+# characters Blender allows an ID property's name on any rig with long bone
+# names, and a dense take's thousands of per-curve arrays were megabytes of ID
+# properties copied into every undo step.
+
+#: a string (base64): an ID property holding bytes is cut short at a zero byte
+_BLOB_MAGIC = "AMB1:"
+_ROUND = 3
+
 
 def _fc_key(fc) -> str:
     return f"{fc.data_path}|{fc.array_index}"
 
 
-def _keys_of(fc) -> list:
+def _co(fc):
+    """``(frames, values)`` of *fc*'s keys, as float32 arrays (what Blender
+    stores them as, so a comparison is exact)."""
     n = len(fc.keyframe_points)
-    co = [0.0] * (2 * n)
+    co = np.empty(2 * n, dtype=np.float32)
     if n:
         fc.keyframe_points.foreach_get("co", co)
-    return co
+    return co[0::2], co[1::2]
 
 
-def _edit_frames(action) -> dict:
-    mine: dict = {}
-    for path, index, state in edits(action):
-        mine.setdefault(f"{path}|{index}", set()).add(round(state["co"][0], 3))
-    return mine
+def _frames(xs):
+    return np.round(xs.astype(np.float64), _ROUND)
+
+
+def _pack(base: dict) -> str:
+    keys = list(base)
+    counts = [int(len(base[k][0])) for k in keys]
+    head = json.dumps([keys, counts]).encode()
+    xs = np.concatenate([base[k][0] for k in keys]) if keys else np.empty(0, np.float32)
+    ys = np.concatenate([base[k][1] for k in keys]) if keys else np.empty(0, np.float32)
+    body = (struct.pack("<I", len(head)) + head
+            + xs.astype("<f4").tobytes() + ys.astype("<f4").tobytes())
+    return _BLOB_MAGIC + base64.b64encode(zlib.compress(body, 1)).decode("ascii")
+
+
+def _unpack(blob: str) -> dict:
+    body = zlib.decompress(base64.b64decode(blob[len(_BLOB_MAGIC):]))
+    (hn,) = struct.unpack_from("<I", body)
+    keys, counts = json.loads(body[4:4 + hn].decode())
+    total = int(sum(counts))
+    arr = np.frombuffer(body, dtype="<f4", offset=4 + hn, count=2 * total)
+    xs, ys = arr[:total], arr[total:]
+    out, at = {}, 0
+    for k, n in zip(keys, counts):
+        out[k] = (xs[at:at + n], ys[at:at + n])
+        at += n
+    return out
+
+
+def _baseline(action):
+    """What the take baked, ``{"path|index": (frames, values)}`` sorted by
+    frame (frames rounded), or None when there is no record."""
+    raw = action.get(_BASELINE) if action is not None else None
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, str) and raw.startswith(_BLOB_MAGIC):
+            base = _unpack(raw)
+        elif hasattr(raw, "to_dict"):         # a record written as ID properties (0.6.0-preview8)
+            base = {}
+            for k, v in raw.to_dict().items():
+                co = np.asarray(list(v), dtype=np.float32)
+                base[k] = (co[0::2], co[1::2])
+        else:
+            return None
+    except Exception as exc:   # noqa: BLE001 -- a damaged record reads as none
+        print(f"[animatica] preview: the take's key record is unreadable ({exc}); "
+              "reading keys by type")
+        return None
+    out = {}
+    for k, (xs, ys) in base.items():
+        fr = _frames(xs)
+        order = np.argsort(fr, kind="stable")
+        out[k] = (fr[order], ys[order].astype(np.float64))
+    return out
 
 
 def record_baseline(action, *, exclude: dict | None = None) -> None:
@@ -306,14 +373,14 @@ def record_baseline(action, *, exclude: dict | None = None) -> None:
         return
     base = {}
     for fc in iter_action_fcurves(action):
-        co = _keys_of(fc)
+        xs, ys = _co(fc)
         skip = (exclude or {}).get(_fc_key(fc))
-        if skip:
-            co = [v for i in range(0, len(co), 2) if round(co[i], 3) not in skip
-                  for v in (co[i], co[i + 1])]
-        if co:
-            base[_fc_key(fc)] = co
-    action[_BASELINE] = base
+        if skip and len(xs):
+            keep = ~np.isin(_frames(xs), np.fromiter(skip, dtype=np.float64))
+            xs, ys = xs[keep], ys[keep]
+        if len(xs):
+            base[_fc_key(fc)] = (xs, ys)
+    action[_BASELINE] = _pack(base)
 
 
 def forget_baseline(action) -> None:
@@ -321,20 +388,39 @@ def forget_baseline(action) -> None:
         del action[_BASELINE]
 
 
+def _log_failure(what: str) -> None:
+    import traceback
+    print(f"[animatica] preview: could not {what}; carrying on\n" + traceback.format_exc())
+
+
 class keeping_edits:
     """``with keeping_edits(action):`` around addon code that rewrites keys of
     a take on show (In place, the hands, a block regenerated): what it changes
-    is the take's, and what the artist had changed before stays theirs."""
+    is the take's, and what the artist had changed before stays theirs.
+
+    Bookkeeping only: a failure in it is logged, never raised into the change
+    it wraps.
+    """
 
     def __init__(self, action):
         self.action = action
-        self.tracked = action is not None and _BASELINE in action
+        try:
+            self.tracked = action is not None and _BASELINE in action
+        except ReferenceError:
+            self.tracked = False
         self.mine = {}
 
     def __enter__(self):
         if self.tracked:
-            self.mine = _edit_frames(self.action)
-            promote_edits(self.action)
+            try:
+                states = edits(self.action)
+                for path, index, state in states:
+                    self.mine.setdefault(f"{path}|{index}", set()).add(
+                        round(state["co"][0], _ROUND))
+                promote_edits(self.action, states)
+            except Exception:   # noqa: BLE001
+                _log_failure("tell your edits from the take's")
+                self.tracked = False
         return self
 
     def __exit__(self, *exc):
@@ -343,6 +429,8 @@ class keeping_edits:
                 record_baseline(self.action, exclude=self.mine)
             except ReferenceError:
                 pass
+            except Exception:   # noqa: BLE001
+                _log_failure("record the take's keys")
         return False
 
 
@@ -374,48 +462,64 @@ def edits(action) -> list:
     """
     if action is None:
         return []
-    base = action.get(_BASELINE)
+    base = _baseline(action)
     by_path: dict = {}
     changed: set = set()
     for fc in iter_action_fcurves(action):
-        known = None
-        if base is not None:
-            b = base.get(_fc_key(fc))
-            known = {} if b is None else {
-                round(b[i], 3): b[i + 1] for i in range(0, len(b), 2)}
-        by_path.setdefault(fc.data_path, []).append(fc)
-        for kp in fc.keyframe_points:
-            f = round(kp.co.x, 3)
-            if known is None:
-                if kp.type != 'GENERATED':
-                    changed.add((fc.data_path, f))
-                continue
-            was = known.get(f)
-            if was is None:
-                if kp.type != 'GENERATED':
-                    changed.add((fc.data_path, f))
-            elif abs(was - kp.co.y) > _EPS:
-                changed.add((fc.data_path, f))
+        xs, ys = _co(fc)
+        fr = _frames(xs)
+        by_path.setdefault(fc.data_path, []).append((fc, fr))
+        if not len(fr):
+            continue
+        if base is None:
+            new = np.ones(len(fr), dtype=bool)
+        else:
+            bfr, bys = base.get(_fc_key(fc), (None, None))
+            if bfr is None or not len(bfr):
+                new = np.ones(len(fr), dtype=bool)
+            else:
+                at = np.minimum(np.searchsorted(bfr, fr), len(bfr) - 1)
+                found = bfr[at] == fr
+                moved = found & (np.abs(bys[at] - ys.astype(np.float64)) > _EPS)
+                for f in fr[moved]:
+                    changed.add((fc.data_path, float(f)))
+                new = ~found
+        if new.any():
+            kps = fc.keyframe_points
+            for i in np.flatnonzero(new):
+                if kps[int(i)].type != 'GENERATED':
+                    changed.add((fc.data_path, float(fr[i])))
     out = []
     for path, f in sorted(changed):
-        for fc in by_path.get(path, ()):
-            for kp in fc.keyframe_points:
-                if round(kp.co.x, 3) == f:
-                    out.append((path, fc.array_index, _state(kp)))
-                    break
+        for fc, fr in by_path.get(path, ()):
+            hit = np.flatnonzero(fr == f)
+            if len(hit):
+                out.append((path, fc.array_index, _state(fc.keyframe_points[int(hit[0])])))
     return out
 
 
-def promote_edits(action) -> int:
+def promote_edits(action, states=None) -> int:
     """Type the artist's changes on *action* as their keys (KEYFRAME), so the
-    next generation keeps and follows them and nothing strips them."""
-    wanted = {(p, i, round(s["co"][0], 3)) for p, i, s in edits(action)}
+    next generation keeps and follows them and nothing strips them.
+    *states* is what :func:`edits` returned for *action*, if at hand."""
+    if action is None:
+        return 0
+    if states is None:
+        states = edits(action)
+    wanted: dict = {}
+    for p, i, s in states:
+        wanted.setdefault((p, i), set()).add(round(s["co"][0], _ROUND))
     if not wanted:
         return 0
     n = 0
     for fc in iter_action_fcurves(action):
-        for kp in fc.keyframe_points:
-            if kp.type == 'GENERATED' and (fc.data_path, fc.array_index, round(kp.co.x, 3)) in wanted:
+        frames = wanted.get((fc.data_path, fc.array_index))
+        if not frames:
+            continue
+        fr = _frames(_co(fc)[0])
+        for i in np.flatnonzero(np.isin(fr, np.fromiter(frames, dtype=np.float64))):
+            kp = fc.keyframe_points[int(i)]
+            if kp.type == 'GENERATED':
                 kp.type = 'KEYFRAME'
                 n += 1
     return n
