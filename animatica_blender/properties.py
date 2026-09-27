@@ -334,15 +334,13 @@ def _loop_update(self, context):
 
 
 def _inplace_update(self, context):
-    """Live toggle for In-place mode — adds or removes a Limit Location
-    constraint on the target armature's root bone. The constraint pins
-    bone-local X / Z to 0 (Y free), so the character animates in place
-    horizontally while vertical motion (jumps, crouches) still plays.
+    """Live toggle for In-place mode: the take's travel path is taken out of
+    the preview, or put back (see inplace.py). Only the path the character
+    moves along comes out; the body's own sway, surge and height stay.
 
-    Non-destructive: fcurves are untouched, flipping the toggle off
-    restores the original travel without re-generating. The constraint
-    only lives during preview; Accept zeroes the xz keyframes and removes
-    the constraint, baking the in-place result into the final actions.
+    Non-destructive: the original keys are kept on the action, so flipping the
+    toggle off restores the travel without re-generating. Accept keeps
+    whichever the preview shows.
 
     Imports operators lazily to dodge the circular ``properties ->
     operators -> properties`` chain at module load.
@@ -359,9 +357,8 @@ def _inplace_update(self, context):
     if arm is None or arm.type != 'ARMATURE':
         return
     from . import operators  # noqa: PLC0415 — lazy to avoid circular import
-    # Before a generation this is a choice for the bake to act on, not a
-    # constraint to add now: pinning the root would pin keys the artist
-    # authored, and key poses read their root position through it.
+    # Before a generation this is a choice for the bake to act on: the artist's
+    # own keys are never moved.
     operators._apply_inplace_constraint(arm, enabled=bool(self.inplace and self.is_previewing))
 
     # Tag the depsgraph so the viewport reflects the constraint change.
@@ -852,11 +849,12 @@ class AnimaticaSettings(PropertyGroup):
     inplace: BoolProperty(
         name="In place",
         description=(
-            "Keep the character on the spot: the root's travel across the "
-            "ground is muted, jumps and crouches stay. Set it before "
-            "generating, or switch it on a preview without regenerating -- "
-            "the travel is kept, so switching back restores it. For game "
-            "cycles, where a controller moves the character"
+            "Keep the character on the spot: the path it travels along is "
+            "taken out (a straight line, an arc, or one of those eased), and "
+            "everything else stays: the body's sway and bounce, jumps and "
+            "crouches. Set it before generating, or switch it on a preview "
+            "without regenerating -- switching back restores the travel. For "
+            "game cycles, where a controller moves the character"
         ),
         default=False,
         update=_inplace_update,
