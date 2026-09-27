@@ -965,18 +965,20 @@ class AnimaticaSettings(PropertyGroup):
         default=True,
         update=_key_poses_toggle_update,
     )
-    key_pose_trail_joints: EnumProperty(
-        name="Trail Joints",
-        description="Which joints the motion trail follows",
-        items=[
-            ("HIPS", "Hips", "The root: where the body goes, sway and all"),
-            ("HEAD", "Head", "The head"),
-            ("HANDS", "Hands", "Both hands"),
-            ("FEET", "Feet", "Both feet"),
-        ],
-        options={'ENUM_FLAG'},
-        default={"HIPS", "HEAD", "HANDS", "FEET"},
-        update=_key_poses_redraw_update,
+    # Which joints the motion trail shows: one toggle each, so a click turns
+    # that one on or off and leaves the others be.
+    key_pose_trail_hips: BoolProperty(
+        name="Hips", description="Trail the hips: where the body goes, sway and all",
+        default=True, update=_key_poses_redraw_update,
+    )
+    key_pose_trail_head: BoolProperty(
+        name="Head", description="Trail the head", default=True, update=_key_poses_redraw_update,
+    )
+    key_pose_trail_hands: BoolProperty(
+        name="Hands", description="Trail both hands", default=True, update=_key_poses_redraw_update,
+    )
+    key_pose_trail_feet: BoolProperty(
+        name="Feet", description="Trail both feet", default=True, update=_key_poses_redraw_update,
     )
     key_pose_root_path: BoolProperty(
         name="Root Trajectory",

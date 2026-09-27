@@ -915,7 +915,8 @@ class ANIMATICA_PT_settings_viewport(AnimaticaPanelBase, Panel):
         grid.prop(settings, "key_pose_xray", text="X-Ray")
         joints = parts.row(align=True)
         joints.active = settings.key_pose_trail
-        joints.prop(settings, "key_pose_trail_joints")
+        for part in ("hips", "head", "hands", "feet"):
+            joints.prop(settings, f"key_pose_trail_{part}", toggle=True)
         root = parts.row(align=True)
         root.active = settings.key_pose_root_path
         root.operator("animatica.edit_root_trajectory", text="Edit Root Trajectory", icon='CURVE_BEZCURVE')
