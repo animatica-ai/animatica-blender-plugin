@@ -1276,6 +1276,11 @@ class AP_OT_key_pose(bpy.types.Operator):
             return {"CANCELLED"}
         if self.key_controls:
             bones += list(_controls(arm))
+        from .. import inplace
+        why = inplace.read_only(arm.animation_data.action if arm.animation_data else None)
+        if why:
+            self.report({"ERROR"}, why)
+            return {"CANCELLED"}
         f = context.scene.frame_current
         if arm.animation_data is None:
             arm.animation_data_create()

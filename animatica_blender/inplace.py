@@ -1033,6 +1033,17 @@ def _entry(span, E) -> dict:
 _BULKY = ("frames", "loop", "model", "path", "yaw", "floor", "facing0", "markers", "support_z")
 
 
+def read_only(action) -> str | None:
+    """Why *action*'s keys cannot be changed here, or None: one linked from
+    another file (or a library override's) keeps no edit when the file is
+    saved, so In place must not look as if it had worked."""
+    if action is None:
+        return None
+    if action.library is not None or getattr(action, "override_library", None) is not None:
+        return f"“{action.name}” is linked from another file, so its keys can't be changed here (make it local first)"
+    return None
+
+
 def apply(arm, action, scene, spans, fps: float | None = None, *, reuse: bool = False,
           mode: str = "in_place") -> list:
     """Over each span ``(first, last, loop)`` (a prompt block each; a loop's
@@ -1042,6 +1053,10 @@ def apply(arm, action, scene, spans, fps: float | None = None, *, reuse: bool = 
     was done, per span. ``reuse`` takes the take as last sampled (an edit to
     the path changes the path, not the take)."""
     if arm is None or action is None or not spans:
+        return []
+    why = read_only(action)
+    if why:
+        print(f"[Animatica] In place: {why}")
         return []
     restore(arm, action)
     top = next((pb for pb in arm.pose.bones if pb.parent is None), None)
