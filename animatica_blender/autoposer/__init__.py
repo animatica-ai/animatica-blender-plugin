@@ -58,6 +58,7 @@ def _start_runtime_install():
     with a download.
     """
     try:
+        engine.migrate_prefs()      # a saved "main" revision means the pinned one now
         # Opt-in: ~225 MB is not fetched at startup unless the artist said so,
         # and never with Blender's online access switched off.
         if engine.prefs().auto_install_runtime and engine.online():

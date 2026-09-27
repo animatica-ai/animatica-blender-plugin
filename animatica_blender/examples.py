@@ -27,9 +27,14 @@ Three decisions shape this module.
 * **Opened without running anything.** ``wm.open_mainfile(use_scripts=False)``
   loads the example with Python auto-run off for that file — no registered
   text blocks, no scripted drivers — even when the artist has Auto Run on.
-  (``wm.read_homefile`` would have opened it untitled, but it honours Auto Run.)
-  What is opened is a working copy, so saving over it never touches the
-  verified download.
+  (``wm.read_homefile`` would have opened it untitled, but it honours Auto Run —
+  tested: a registered text block runs through it with Auto Run on — and
+  ``bpy.data.filepath`` is read-only, so the file cannot be made untitled
+  after loading it either.) What is opened is a working copy, so saving over
+  it never touches the verified download. That copy lives in Blender's data
+  folder, which is per Blender version, so the artist is told — once, and
+  again in the sidebar when there are changes — to Save As somewhere of their
+  own.
 """
 
 from __future__ import annotations
@@ -143,8 +148,9 @@ def _offline_message() -> str:
 def _get(url: str, accept: str = "application/json", limit: int | None = None) -> bytes:
     if not _online():
         raise OSError(_offline_message())
+    from .mmcp_client import urlopen        # asks may_connect() about every redirect hop
     req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "animatica-blender"})
-    with urllib.request.urlopen(req, timeout=15.0) as resp:
+    with urlopen(req, timeout=15.0) as resp:
         return resp.read(limit) if limit else resp.read()
 
 
@@ -247,8 +253,9 @@ def _fetch_manifest_worker():
     try:
         _fetch_manifest()
     finally:
+        from .mmcp_client import post_to_main
+        post_to_main(_redraw)           # posted before "done", so the pump waits for it
         _state["fetching"] = False
-        bpy.app.timers.register(lambda: (_redraw(), None)[1], first_interval=0.0)
 
 
 def refresh_manifest_async() -> None:
@@ -260,6 +267,7 @@ def refresh_manifest_async() -> None:
     _state["fetching"] = True
     _state["refreshed"] = True
     threading.Thread(target=_fetch_manifest_worker, daemon=True).start()
+    _pump_while_busy()
 
 
 # ---------------------------------------------------------------------------
@@ -277,9 +285,10 @@ def _download_worker(entry: dict, retried: bool = False):
     try:
         if not _online():
             raise OSError(_offline_message())
+        from .mmcp_client import urlopen    # asks may_connect() about every redirect hop
         req = urllib.request.Request(_url(entry), headers={"Accept": "application/octet-stream"})
         digest = hashlib.sha256()
-        with urllib.request.urlopen(req, timeout=60.0) as resp, open(tmp, "wb") as out:
+        with urlopen(req, timeout=60.0) as resp, open(tmp, "wb") as out:
             _state["total"] = int(resp.headers.get("Content-Length") or entry.get("size") or 0)
             while True:
                 chunk = resp.read(1 << 16)
@@ -316,11 +325,13 @@ def _download_worker(entry: dict, retried: bool = False):
         except OSError:
             pass
     finally:
+        from .mmcp_client import post_to_main
+        post_to_main(_after_download)   # posted before "done", so the pump waits for it
         _state["downloading"] = ""
-        bpy.app.timers.register(_after_download, first_interval=0.0)
 
 
 def _after_download():
+    _state["downloading"] = ""
     _redraw()
     pending = _state["pending_open"]
     if pending:
@@ -338,7 +349,18 @@ def download_async(entry: dict, *, then_open: bool) -> bool:
                    "total": int(entry.get("size") or 0), "error": "",
                    "pending_open": entry["id"] if then_open else ""})
     threading.Thread(target=_download_worker, args=(entry,), daemon=True).start()
+    _pump_while_busy()
     return True
+
+
+def _busy() -> bool:
+    return bool(_state["fetching"] or _state["downloading"])
+
+
+def _pump_while_busy() -> None:
+    """The workers post their results; this keeps the main thread collecting them."""
+    from .mmcp_client import pump_while
+    pump_while(_busy)
 
 
 def download_percent() -> float:
@@ -383,6 +405,33 @@ def open_now(entry: dict) -> None:
     # The Animatica tab cannot be chosen when the file is built (there is no
     # window in a background build), so it is chosen here, once the UI exists.
     bpy.app.timers.register(_show_sidebar, first_interval=0.1)
+    if not _state.get("told_save_as"):
+        _state["told_save_as"] = True
+        bpy.app.timers.register(_tell_save_as, first_interval=0.3)
+
+
+SAVE_AS_HINT = "Save As… to keep your work"
+
+
+def is_working_copy(filepath: str | None = None) -> bool:
+    """Is the open file an example's working copy (in Blender's per-version data folder)?"""
+    path = filepath if filepath is not None else bpy.data.filepath
+    if not path:
+        return False
+    try:
+        folder = os.path.realpath(str(cache_dir() / "scenes"))
+        return os.path.commonpath([folder, os.path.realpath(path)]) == folder
+    except (OSError, ValueError):
+        return False
+
+
+def _tell_save_as():
+    """Once a session: Ctrl+S would save into a folder a Blender upgrade leaves behind."""
+    from .mmcp_client import popup
+    popup(SAVE_AS_HINT, ["This example is a copy kept in Blender's own data folder,",
+                         "which a Blender upgrade leaves behind. Use File > Save As",
+                         "to keep your work somewhere of your own."])
+    return None
 
 
 def _show_sidebar():
@@ -481,6 +530,8 @@ class ANIMATICA_MT_examples(bpy.types.Menu):
         if not found:
             if not _online():
                 layout.label(text=_offline_message(), icon='INTERNET_OFFLINE')
+                layout.operator("animatica.open_online_prefs", text="Open Preferences",
+                                icon='PREFERENCES')
                 return
             layout.label(text="Listing examples…" if _state["fetching"]
                          else "Examples need a connection the first time", icon='INFO')
@@ -521,6 +572,10 @@ def draw_credit(layout, scene) -> None:
     CC-BY asks for the credit to be visible where the work is used; the panel
     of the file that uses it is that place.
     """
+    if bpy.data.is_dirty and is_working_copy():
+        row = layout.row(align=True)
+        row.label(text=SAVE_AS_HINT, icon='INFO')
+        row.operator("wm.save_as_mainfile", text="", icon='FILE_TICK')
     credit = scene.get("animatica_example_credit")
     if not credit:
         return

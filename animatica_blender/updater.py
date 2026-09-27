@@ -234,12 +234,20 @@ def _save_config(**changes) -> None:
             data.pop(key, None)
         else:
             data[key] = value
+    # One temp file per process: two Blenders open at once would otherwise
+    # write the same updater.tmp, and one would move the other's half-written
+    # copy into place.
+    tmp = path.with_name(f"{path.stem}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
-        tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data), encoding="utf-8")
         os.replace(tmp, path)
-    except (OSError, TypeError, ValueError):
-        pass                                # remembering is a courtesy, not a requirement
+    except (OSError, TypeError, ValueError) as exc:
+        # Remembering is a courtesy, not a requirement — but say so.
+        print(f"Animatica updater: could not save {path}: {exc!r}")
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 def _num(value, default=0.0) -> float:
@@ -340,14 +348,21 @@ def _friendly(exc: Exception, doing: str) -> str:
     The repr still goes to the console, for whoever reads the bug report.
     """
     print(f"Animatica updater: {doing} failed: {exc!r}")
+    from .mmcp_client import OFFLINE_MESSAGE, refused
+    if refused(exc):
+        return OFFLINE_MESSAGE
     if isinstance(exc, urllib.error.HTTPError):
         if exc.code in (403, 429):
             return "GitHub is limiting update checks right now — try again later"
         if exc.code == 404:
             return "not found on GitHub — try again later"
         return f"GitHub answered with an error ({exc.code}) — try again later"
-    if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, OSError)):
+    if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError)):
         return "could not reach GitHub — check your internet connection"
+    if isinstance(exc, OSError):
+        # A disk problem, not a network one: say which, and where.
+        where = f" ({exc.filename})" if getattr(exc, "filename", None) else ""
+        return f"{doing} failed: {exc.strerror or exc}{where}"
     return f"{doing} failed — try again later"
 
 
@@ -407,7 +422,8 @@ def _check_worker(allow_prerelease: bool):
             headers={"Accept": "application/vnd.github+json",
                      "User-Agent": f"animatica-blender/{'.'.join(map(str, current_version()))}"},
         )
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        from .mmcp_client import urlopen    # asks may_connect() about every redirect hop
+        with urlopen(req, timeout=TIMEOUT) as resp:
             body = resp.read(8 * 1024 * 1024)
         try:
             releases = json.loads(body.decode("utf-8"))
@@ -513,24 +529,31 @@ def is_development_checkout() -> bool:
     ``make install`` links the source tree in; so does anyone who points
     ``scripts/`` or ``addons/`` at a folder of their own. Installing over any
     of those writes into the working tree, or replaces the link with a copy
-    so every later edit silently does nothing. So: refuse if any part of the
-    path is a link, or if the addon really lives inside a git checkout.
+    so every later edit silently does nothing. So: refuse if the addon's
+    folder, ``addons/`` or ``scripts/`` is a link, or if the addon really
+    lives inside a git checkout.
+
+    Only those three are looked at. A link further up — ``/tmp`` is one on a
+    Mac, and a studio may mount home folders through one — is where Blender's
+    resources happen to be, not a checkout, and must not stop an update.
     """
-    candidates = {os.path.dirname(os.path.abspath(__file__))}
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = {here}
     try:
         for base in bpy.utils.script_paths(subdir="addons"):
-            candidates.add(os.path.abspath(os.path.join(base, __package__)))
-        candidates.add(os.path.abspath(os.path.join(
-            bpy.utils.user_resource('SCRIPTS', path="addons"), __package__)))
+            candidates.add(os.path.join(os.path.abspath(base), __package__))
+        candidates.add(os.path.join(os.path.abspath(
+            bpy.utils.user_resource('SCRIPTS', path="addons")), __package__))
     except Exception:                       # noqa: BLE001
         pass
     for path in candidates:
         if not os.path.lexists(path):
             continue
-        real = os.path.realpath(path)
-        if os.path.normcase(real) != os.path.normcase(path):
-            return True                     # a link somewhere along the way
-        if _inside_git(real):
+        addons = os.path.dirname(path)
+        scripts = os.path.dirname(addons)
+        if any(os.path.islink(p) for p in (path, addons, scripts)):
+            return True                     # the addon, addons/ or scripts/ is a link
+        if _inside_git(os.path.realpath(path)):
             return True
     return False
 
@@ -561,7 +584,8 @@ def _download(url: str, dest: pathlib.Path, expected_size: int = 0) -> None:
                  "User-Agent": f"animatica-blender/{'.'.join(map(str, current_version()))}"},
     )
     got = 0
-    with urllib.request.urlopen(req, timeout=60.0) as resp, open(dest, "wb") as out:
+    from .mmcp_client import urlopen        # asks may_connect() about every redirect hop
+    with urlopen(req, timeout=60.0) as resp, open(dest, "wb") as out:
         length = resp.headers.get("Content-Length")
         length = int(length) if length and length.strip().isdigit() else None
         if length is not None and length > MAX_DOWNLOAD:
@@ -624,16 +648,25 @@ def validate_zip(path) -> str:
     return ""
 
 
-def _install_worker(url: str, tag: str, size: int, addons: str):
+def _install_worker(url: str, tag: str, size: int, addons: str, purge_backups: bool = False):
     """Runs on a worker thread: download, validate, unpack beside the install.
 
     Unpacked into a hidden folder in the addons directory itself, so the swap
     on the main thread is two renames on one filesystem. Blender does not
     import a folder with a dot in its name, so it never sees the staging copy.
     No Blender API in here.
+
+    ``purge_backups`` says the running install is healthy (the main thread
+    checked), so a previous version left aside by an earlier attempt is no
+    longer anyone's only copy. Without it, a staging folder holding ``old/``
+    is left exactly where it is.
     """
-    fd, tmp = tempfile.mkstemp(prefix="animatica-", suffix=".zip")
-    os.close(fd)
+    try:
+        fd, tmp = tempfile.mkstemp(prefix="animatica-", suffix=".zip")
+        os.close(fd)
+    except OSError as exc:
+        _results.put(("download_failed", _friendly(exc, "making room for the download")))
+        return
     stage = None
     try:
         try:
@@ -649,10 +682,20 @@ def _install_worker(url: str, tag: str, size: int, addons: str):
             raise _Refused(f"{tag} is not a valid build — nothing was changed")
         addons_dir = pathlib.Path(addons)
         for old in addons_dir.glob(".animatica-update-*"):
-            shutil.rmtree(old, ignore_errors=True)  # from an attempt Blender did not survive
-        stage = pathlib.Path(tempfile.mkdtemp(prefix=".animatica-update-", dir=addons_dir))
-        with zipfile.ZipFile(tmp) as zf:
-            zf.extractall(stage / "new")
+            # From an attempt Blender did not survive. One that still holds
+            # the previous version may be the only copy of it left.
+            if (old / "old").exists() and not purge_backups:
+                print(f"Animatica updater: keeping {old} — it holds a previous version")
+                continue
+            shutil.rmtree(old, ignore_errors=True)
+        try:
+            stage = pathlib.Path(tempfile.mkdtemp(prefix=".animatica-update-", dir=addons_dir))
+            with zipfile.ZipFile(tmp) as zf:
+                zf.extractall(stage / "new")
+        except OSError as exc:
+            print(f"Animatica updater: cannot write to {addons_dir}: {exc!r}")
+            raise _Refused(f"cannot write to the add-ons folder ({exc.strerror or exc}) — "
+                           f"nothing was changed: {addons_dir}") from exc
         _results.put(("downloaded", (str(stage), tag)))
         stage = None                        # the main thread owns it now
     except _Refused as exc:
@@ -748,7 +791,9 @@ def _swap(stage: str, tag: str):
         os.rename(new, target)
     except OSError:
         traceback.print_exc()
-        os.rename(backup, target)
+        if not _put_back(backup, target):
+            _stranded(backup, target, "could not put the new version in place")
+            return None
         _try_enable(module)
         _fail("could not put the new version in place — nothing was changed", stage)
         return None
@@ -769,18 +814,121 @@ def _swap(stage: str, tag: str):
     except Exception:                       # noqa: BLE001
         pass
     _purge_modules(module)
+    # The failed build is moved aside (one rename) rather than deleted first:
+    # a delete that stops halfway leaves neither version where Blender looks.
+    failed = stage / "failed"
     try:
-        shutil.rmtree(target)
-        os.rename(backup, target)
+        _retry(lambda: os.rename(target, failed))
     except OSError:
         traceback.print_exc()
-        _fail(f"{tag} would not load and the previous version could not be put back "
-              f"(it is in {backup}) — restart Blender", None)
+        _stranded(backup, target, f"{tag} would not load")
+        return None
+    if not _put_back(backup, target):
+        _stranded(backup, target, f"{tag} would not load")
         return None
     if not _try_enable(module):
         _fail("the previous version would not load again — restart Blender", stage)
         return None
     shutil.rmtree(stage, ignore_errors=True)
+    return None
+
+
+def _retry(fn, attempts: int = 5, pause: float = 0.2):
+    """Run ``fn``, retrying a few times: on Windows a virus scanner or the
+    search indexer holds a just-written folder for a moment, and a rename
+    that fails now often works a fifth of a second later."""
+    for i in range(attempts):
+        try:
+            return fn()
+        except OSError:
+            if i == attempts - 1:
+                raise
+            time.sleep(pause)
+
+
+def _put_back(backup: pathlib.Path, target: pathlib.Path) -> bool:
+    try:
+        _retry(lambda: os.rename(backup, target))
+        return True
+    except OSError:
+        traceback.print_exc()
+        return False
+
+
+def _stranded(backup: pathlib.Path, target: pathlib.Path, what: str) -> None:
+    """The previous version could not be moved back. Leave it, and say where.
+
+    Nothing here deletes the staging folder: it holds the only copy. The next
+    start (``_recover``) puts it back if Blender's folder is still empty, and
+    the next update leaves it alone.
+    """
+    message = (f"{what}, and the previous version could not be put back. It is safe in "
+               f"{backup} — move that folder to {target} and restart Blender")
+    print(f"Animatica updater: {message}")
+    _save_config(recovery={"backup": str(backup), "target": str(target), "time": time.time()},
+                 outcome={"tag": "", "ok": False, "time": time.time(), "message": message})
+    _state.update({"error": message, "waiting": False})
+    _redraw()
+    # The addon is disabled now, so no panel of ours will say it: a popup does.
+    import textwrap
+    from .mmcp_client import popup
+    popup("Animatica update", textwrap.wrap(message, 70), icon='ERROR')
+
+
+def _recover() -> None:
+    """At startup: put back a previous version an interrupted update left aside.
+
+    An update renames the installed folder to ``.animatica-update-*/old`` and
+    the new build into its place. If Blender died in between, or the rename
+    back failed, the old copy is the only one. When the addon's folder is
+    missing it goes back; when it is there (this copy is running from it),
+    the backup is left for ``_forget_backups`` to clear once this version has
+    shown it loads.
+    """
+    target = pathlib.Path(os.path.dirname(os.path.abspath(__file__)))
+    addons = target.parent
+    for stage in sorted(addons.glob(".animatica-update-*")):
+        old = stage / "old"
+        if not (old / "__init__.py").is_file():
+            continue
+        if target.exists():
+            continue
+        try:
+            _retry(lambda: os.rename(old, target))
+            print(f"Animatica updater: restored the previous version from {old}")
+        except OSError as exc:
+            print(f"Animatica updater: a previous version is in {old}; move it to "
+                  f"{target} to restore it ({exc!r})")
+    data = _load_config()
+    rec = data.get("recovery")
+    if isinstance(rec, dict):
+        backup = _text(rec.get("backup"))
+        if backup and os.path.isdir(backup):
+            _state["error"] = (f"a previous version is still in {backup} — it is not needed "
+                               "now, and the next update clears it")
+        _save_config(recovery=None)
+
+
+def healthy() -> bool:
+    """Is this install importable and enabled — so an old backup is nobody's only copy?"""
+    import addon_utils
+
+    try:
+        _default, loaded = addon_utils.check(__package__)
+    except Exception:                       # noqa: BLE001
+        return False
+    return bool(loaded) and (addon_dir() / "__init__.py").is_file()
+
+
+def _forget_backups():
+    """A while after startup, once this version is known to load: clear old backups."""
+    if _state["downloading"] or _state["waiting"]:
+        return 60.0                         # an update is using its staging folder; later
+    if not healthy():
+        return None
+    for stage in addon_dir().parent.glob(".animatica-update-*"):
+        if (stage / "old").exists() and not (stage / "new").exists():
+            shutil.rmtree(stage, ignore_errors=True)
     return None
 
 
@@ -826,6 +974,12 @@ class ANIMATICA_OT_update(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
+        from .mmcp_client import OFFLINE_MESSAGE, online_access
+        if not online_access():
+            # An offer remembered from updater.json is still an offer, but
+            # not one this session can take up.
+            cls.poll_message_set(OFFLINE_MESSAGE)
+            return False
         return update_available() and not _state["downloading"] and not _state["waiting"]
 
     def invoke(self, context, event):
@@ -858,12 +1012,39 @@ class ANIMATICA_OT_update(bpy.types.Operator):
             self.report({'ERROR'}, "no build to install — check for updates first")
             return {'CANCELLED'}
         addons = str(addon_dir().parent)
+        if not os.access(addons, os.W_OK | os.X_OK):
+            # Said before downloading anything, and said as what it is.
+            self.report({'ERROR'}, f"the add-ons folder is read-only — cannot update: {addons}")
+            return {'CANCELLED'}
         _state.update({"downloading": True, "error": ""})
         threading.Thread(target=_install_worker,
-                         args=(_state["url"], _state["tag"], _state["size"], addons),
+                         args=(_state["url"], _state["tag"], _state["size"], addons,
+                               healthy()),
                          daemon=True).start()
         _start_pump()
         self.report({'INFO'}, f"downloading {_state['tag']}…")
+        return {'FINISHED'}
+
+
+class ANIMATICA_OT_open_online_prefs(bpy.types.Operator):
+    bl_idname = "animatica.open_online_prefs"
+    bl_label = "Open Preferences"
+    bl_description = ("Open Preferences > System, where Allow Online Access is. Nothing the "
+                      "addon does reaches the network until it is on")
+
+    def execute(self, context):
+        try:
+            context.preferences.active_section = 'SYSTEM'
+        except (AttributeError, TypeError):
+            pass
+        try:
+            bpy.ops.screen.userpref_show('INVOKE_DEFAULT', section='SYSTEM')
+        except (RuntimeError, TypeError):
+            try:
+                bpy.ops.screen.userpref_show('INVOKE_DEFAULT')
+            except RuntimeError as exc:
+                self.report({'ERROR'}, f"could not open the preferences: {exc}")
+                return {'CANCELLED'}
         return {'FINISHED'}
 
 
@@ -907,7 +1088,10 @@ def draw_banner(layout, context) -> None:
     # row with a button loses its tail — "v0.6.1-previe…" told nobody which
     # build was on offer.
     col.label(text=f"New version: {_state['tag']}", icon='IMPORT')
-    if _state["downloading"] or _state["waiting"]:
+    from .mmcp_client import draw_offline, online_access
+    if not online_access():
+        draw_offline(col)
+    elif _state["downloading"] or _state["waiting"]:
         sub = col.row()
         sub.active = False
         sub.label(text="downloading…" if _state["downloading"]
@@ -940,8 +1124,12 @@ def draw_preferences(layout, context) -> None:
         # the confirm dialog states the size anyway. The version is the part
         # that must survive being elided.
         col.label(text=f"New version: {_state['tag']}", icon='IMPORT')
+        from .mmcp_client import draw_offline, online_access
         row = col.row(align=True)
-        row.operator("animatica.update", text="Update")
+        if online_access():
+            row.operator("animatica.update", text="Update")
+        else:
+            draw_offline(row)
         row.operator("animatica.open_releases", text="", icon='URL')
         if _state["error"]:
             _draw_error(box)
@@ -969,7 +1157,8 @@ def draw_preferences(layout, context) -> None:
 # Registration
 # ---------------------------------------------------------------------------
 
-_classes = (ANIMATICA_OT_check_update, ANIMATICA_OT_update, ANIMATICA_OT_open_releases)
+_classes = (ANIMATICA_OT_check_update, ANIMATICA_OT_update, ANIMATICA_OT_open_online_prefs,
+            ANIMATICA_OT_open_releases)
 
 
 def register() -> None:
@@ -979,13 +1168,21 @@ def register() -> None:
         _restore()
     except Exception:                       # noqa: BLE001 — never let memory stop the addon loading
         traceback.print_exc()
+    try:
+        _recover()
+        # Old backups go only once this version has shown it loads — not
+        # from register(), which is still running when a swap is testing it.
+        bpy.app.timers.register(_forget_backups, first_interval=30.0)
+    except Exception:                       # noqa: BLE001
+        traceback.print_exc()
 
 
 def unregister() -> None:
-    try:
-        if bpy.app.timers.is_registered(_pump):
-            bpy.app.timers.unregister(_pump)
-    except Exception:                       # noqa: BLE001
-        pass
+    for fn in (_pump, _forget_backups):
+        try:
+            if bpy.app.timers.is_registered(fn):
+                bpy.app.timers.unregister(fn)
+        except Exception:                   # noqa: BLE001
+            pass
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)

@@ -20,13 +20,16 @@ Threading: the addon calls these from a worker thread; nothing here touches
 from __future__ import annotations
 
 import json
+import queue
 import sys
+import threading
 import time
+import traceback
 import uuid
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, build_opener
+from urllib.request import Request
 
 import bpy
 
@@ -125,17 +128,71 @@ def online_access() -> bool:
     return bool(getattr(bpy.app, "online_access", True))
 
 
-def is_loopback(url: str) -> bool:
+def _host_of(url: str) -> str | None:
+    """The host a request to *url* would connect to — or None if that is in doubt.
+
+    Parsed the way urllib will parse it, and refused outright where urllib and
+    ``urlsplit`` could disagree: a backslash (``http://example.com\\@127.0.0.1/``
+    is example.com to one and 127.0.0.1 to the other), userinfo (``user@host``),
+    and whitespace or control characters anywhere in the URL.
+    """
+    if not isinstance(url, str) or "\\" in url:
+        return None
+    if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
+        return None
     try:
-        host = (urlsplit(url).hostname or "").lower()
+        parts = urlsplit(url)
+        if "@" in parts.netloc:
+            return None
+        return (parts.hostname or "").lower() or None
     except ValueError:
-        return False
-    return host in _LOOPBACK_HOSTS or host.endswith(".localhost")
+        return None
+
+
+def is_loopback(url: str) -> bool:
+    host = _host_of(url)
+    return host is not None and (host in _LOOPBACK_HOSTS or host.endswith(".localhost"))
 
 
 def may_connect(url: str) -> bool:
     """True if a request to *url* is allowed right now."""
     return online_access() or is_loopback(url)
+
+
+def popup(title: str, lines, icon: str = 'INFO') -> bool:
+    """Show a small popup from anywhere on the main thread — a timer included.
+
+    ``popup_menu`` needs a window in the context, and a timer has none: called
+    bare there (or in a background Blender) it crashes Blender outright. So it
+    is given the first window explicitly, and skipped when there is none.
+    """
+    if bpy.app.background:
+        return False
+    wm = getattr(bpy.context, "window_manager", None)
+    windows = list(getattr(wm, "windows", ()) or ())
+    if not windows:
+        return False
+    window = bpy.context.window or windows[0]
+
+    def _draw(menu, _context):
+        col = menu.layout.column(align=True)
+        for line in lines:
+            col.label(text=line)
+    try:
+        with bpy.context.temp_override(window=window, screen=window.screen):
+            wm.popup_menu(_draw, title=title, icon=icon)
+        return True
+    except Exception:                                       # noqa: BLE001
+        traceback.print_exc()
+        return False
+
+
+def draw_offline(layout, text: str = OFFLINE_MESSAGE) -> None:
+    """The offline line, with the button that goes where the switch is."""
+    col = layout.column(align=True)
+    col.label(text=text, icon='INTERNET_OFFLINE')
+    # A row of its own: sharing one with a sentence this long elides the sentence.
+    col.operator("animatica.open_online_prefs", text="Open Preferences", icon='PREFERENCES')
 
 
 def _require_online(url: str) -> None:
@@ -170,13 +227,101 @@ def is_cloud_url(url: str) -> bool:
 _OPENER = None
 
 
-def _open(req: Request, timeout: float):
-    """``urlopen`` that drops ``Authorization`` when a redirect leaves the host."""
+def _opener():
+    """The one opener every request of this addon goes through.
+
+    It asks :func:`may_connect` about every request it opens — redirect hops
+    included, so a server on this machine cannot bounce a request off it
+    with online access switched off — and drops ``Authorization`` when a
+    redirect leaves the host.
+    """
     global _OPENER
     if _OPENER is None:
-        from .autoposer.vendor.autoposer_runtime.bundle import _DropAuthOnRedirect
-        _OPENER = build_opener(_DropAuthOnRedirect)
-    return _OPENER.open(req, timeout=timeout)
+        from .autoposer.vendor.autoposer_runtime import bundle
+        bundle.GATE = may_connect
+        _OPENER = bundle.build_opener()
+    return _OPENER
+
+
+def urlopen(req, timeout: float):
+    """``urllib.request.urlopen``, through the gated opener. Any thread."""
+    return _opener().open(req, timeout=timeout)
+
+
+_open = urlopen
+
+
+def refused(exc: BaseException) -> bool:
+    """Was *exc* the gate refusing a request (online access is off)?"""
+    from .autoposer.vendor.autoposer_runtime.bundle import RequestRefused
+    return isinstance(exc, RequestRefused)
+
+
+# ---------------------------------------------------------------------------
+# Handing results to the main thread
+#
+# Workers never call ``bpy`` — not even ``bpy.app.timers.register``, which is
+# not safe off the main thread. They post a callable here, and a timer that
+# the main thread started runs it. The timer stops itself when there is
+# nothing left to do, and whatever next runs on the main thread (a connect, a
+# panel asking whether the session expired) starts it again.
+# ---------------------------------------------------------------------------
+
+_MAIN_QUEUE: "queue.Queue" = queue.Queue()
+
+
+def post_to_main(fn) -> None:
+    """Run *fn* on the main thread, soon. Safe from any thread."""
+    _MAIN_QUEUE.put(fn)
+    if threading.current_thread() is threading.main_thread():
+        _start_pump()
+
+
+def _pump():
+    # Ask what is still in flight BEFORE draining: a worker posts its result
+    # and only then says it is done, so anything that has said so has
+    # already posted, and the drain below picks it up.
+    busy = bool(_CONNECT["running"])
+    for pred in list(_BUSY):
+        try:
+            if pred():
+                busy = True
+            else:
+                _BUSY.discard(pred)
+        except Exception:                                   # noqa: BLE001
+            _BUSY.discard(pred)
+    while True:
+        try:
+            fn = _MAIN_QUEUE.get_nowait()
+        except queue.Empty:
+            break
+        try:
+            fn()
+        except Exception:                                   # noqa: BLE001
+            traceback.print_exc()
+    return 0.2 if (busy or not _MAIN_QUEUE.empty()) else None
+
+
+#: Work in flight elsewhere (a download on a worker) that will post a result:
+#: the pump keeps going while any of these says True.
+_BUSY: set = set()
+
+
+def pump_while(pred) -> None:
+    """Keep handing results over while ``pred()`` is True. Main thread only."""
+    _BUSY.add(pred)
+    _start_pump()
+
+
+def _start_pump() -> None:
+    """Main thread only."""
+    if threading.current_thread() is not threading.main_thread():
+        return
+    try:
+        if not bpy.app.timers.is_registered(_pump):
+            bpy.app.timers.register(_pump, first_interval=0.0)
+    except Exception:                                       # noqa: BLE001
+        traceback.print_exc()
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +360,8 @@ def get_mmcp_url() -> str:
     appends ``/capabilities`` etc. directly.
     """
     from .properties import CLOUD_API_URL
+    if not _MAIN_QUEUE.empty():
+        _start_pump()
     addon = bpy.context.preferences.addons.get(__package__)
     if addon is None:
         return f"{CLOUD_API_URL.rstrip('/')}/mmcp"
@@ -283,6 +430,8 @@ def sign_in(email: str, password: str) -> dict[str, Any]:
     except HTTPError as exc:
         raise MmcpError.from_response(exc.code, exc.read()) from exc
     except URLError as exc:
+        if refused(exc):
+            raise MmcpError(code="offline", message=OFFLINE_MESSAGE) from exc
         raise MmcpError(
             code="model_unavailable",
             message=f"cannot reach {base_url}: {exc.reason}",
@@ -315,6 +464,8 @@ _EXPIRED: dict = {"reason": ""}
 
 
 def session_expired() -> str:
+    if _EXPIRED.get("pending"):
+        _start_pump()               # a worker expired it; the panels asking is our cue
     return _EXPIRED["reason"]
 
 
@@ -337,8 +488,7 @@ def expire_session(reason: str = "your session has expired") -> None:
     if not (get_access_token() or get_refresh_token()):
         return                      # nothing to expire; a self-hosted server, most likely
     _EXPIRED["pending"] = reason
-    if not bpy.app.timers.is_registered(_apply_expiry):
-        bpy.app.timers.register(_apply_expiry, first_interval=0.0)
+    post_to_main(_apply_expiry)
 
 
 def _apply_expiry():
@@ -508,11 +658,12 @@ def connect_async(*, force: bool = False) -> bool:
             caps = MmcpClient(url, timeout=30).capabilities(refresh=True)
         except Exception as exc:                            # noqa: BLE001
             error = str(exc)
+        # Posted before saying "done", so the pump cannot stop in between.
+        post_to_main(lambda: _apply_connection(caps, error, url))
         _CONNECT["running"] = False
-        bpy.app.timers.register(
-            lambda: _apply_connection(caps, error, url), first_interval=0.0)
 
     threading.Thread(target=_work, daemon=True).start()
+    _start_pump()
     return True
 
 
@@ -681,6 +832,8 @@ class MmcpClient:
         except HTTPError as exc:
             raise MmcpError.from_response(exc.code, exc.read()) from exc
         except URLError as exc:
+            if refused(exc):
+                raise MmcpError(code="offline", message=OFFLINE_MESSAGE) from exc
             raise MmcpError(
                 code="model_unavailable",
                 message=f"cannot reach MMCP server at {self.base_url}: {exc.reason}",
@@ -772,6 +925,8 @@ class MmcpClient:
         except HTTPError as exc:
             raise MmcpError.from_response(exc.code, exc.read()) from exc
         except URLError as exc:
+            if refused(exc):
+                raise MmcpError(code="offline", message=OFFLINE_MESSAGE) from exc
             raise MmcpError(
                 code="model_unavailable",
                 message=f"cannot reach MMCP server at {self.base_url}: {exc.reason}",

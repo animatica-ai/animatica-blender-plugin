@@ -235,7 +235,10 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
             err = mmcp_client.last_connection_error()
             if err == mmcp_client.OFFLINE_MESSAGE:
                 box.label(text="Not connected", icon='INTERNET_OFFLINE')
-                box.label(text=err)
+                col = box.column(align=True)
+                col.label(text=err)
+                col.operator("animatica.open_online_prefs", text="Open Preferences",
+                             icon='PREFERENCES')
             elif mmcp_client.connecting() or not err:
                 box.label(text="Connecting…", icon='SORTTIME')
             else:
@@ -704,9 +707,12 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
                 box.label(text="Installing the inference runtime…", icon='SORTTIME')
             elif not engine.online():
                 # Nothing is fetched without Blender's online access.
-                box.label(text="The Autoposer needs a one-off download", icon='INFO')
-                box.label(text=engine.offline_message(), icon='INTERNET_OFFLINE')
+                box.label(text=(status.get("model_note") or
+                                "The Autoposer needs a one-off download")[:60], icon='INFO')
+                mmcp_client.draw_offline(box, engine.offline_message())
             else:
+                if status.get("model_note"):
+                    box.label(text=status["model_note"][:60], icon='INFO')
                 err = fetching["error"] or installing["error"]
                 if err:
                     row = box.row()
