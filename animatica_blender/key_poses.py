@@ -686,9 +686,10 @@ def _trail_bones(arm) -> list[str]:
 def shown_trail_bones(settings) -> list[str]:
     """The traced bones the Trail Joints setting shows. All are baked either
     way, so changing it only redraws."""
-    shown = getattr(settings, "key_pose_trail_joints", None)
-    if shown is None:
+    if settings is None:
         return list(_trail["bones"])
+    shown = {g for g in ("HIPS", "HEAD", "HANDS", "FEET")
+             if getattr(settings, f"key_pose_trail_{g.lower()}", True)}
     return [n for n in _trail["bones"] if _trail_group_of.get(n, "HIPS") in shown]
 
 
