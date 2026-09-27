@@ -233,7 +233,10 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
             mmcp_client.connect_async()
             box = layout.box()
             err = mmcp_client.last_connection_error()
-            if mmcp_client.connecting() or not err:
+            if err == mmcp_client.OFFLINE_MESSAGE:
+                box.label(text="Not connected", icon='INTERNET_OFFLINE')
+                box.label(text=err)
+            elif mmcp_client.connecting() or not err:
                 box.label(text="Connecting…", icon='SORTTIME')
             else:
                 box.label(text="Cannot reach the server", icon='ERROR')
@@ -693,11 +696,26 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
         if not (status["runtime"] and status["model"]):
             box = layout.box()
             fetching = engine.fetch_state()
+            installing = engine.install_state()
             if fetching["running"]:
                 box.label(text=f"Downloading the poser… {engine.fetch_percent():.0f}%",
                           icon='SORTTIME')
+            elif installing["running"]:
+                box.label(text="Installing the inference runtime…", icon='SORTTIME')
+            elif not engine.online():
+                # Nothing is fetched without Blender's online access.
+                box.label(text="The Autoposer needs a one-off download", icon='INFO')
+                box.label(text=engine.offline_message(), icon='INTERNET_OFFLINE')
             else:
-                box.label(text="The poser is setting itself up", icon='SORTTIME')
+                err = fetching["error"] or installing["error"]
+                if err:
+                    row = box.row()
+                    row.alert = True
+                    row.label(text=err[:60], icon='ERROR')
+                row = box.row()
+                row.scale_y = 1.2
+                row.operator("autoposer.download", icon='IMPORT',
+                             text=engine.download_label())
             box.label(text="Preferences → Animatica for detail")
         elif not poser.has_controls(arm):
             row = layout.row()

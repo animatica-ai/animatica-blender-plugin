@@ -613,7 +613,8 @@ class AnimaticaAddonPreferences(AddonPreferences):
         layout = self.layout
 
         # --- This build -------------------------------------------------------
-        updater.check_async()
+        if mmcp_client.online_access():
+            updater.check_async()
         updater.draw_preferences(layout, context)
 
         # --- Account ----------------------------------------------------------
@@ -648,7 +649,10 @@ class AnimaticaAddonPreferences(AddonPreferences):
         if caps is None:
             mmcp_client.connect_async()
             err = mmcp_client.last_connection_error()
-            if mmcp_client.connecting() or not err:
+            if err == mmcp_client.OFFLINE_MESSAGE:
+                row.label(text=err, icon='INTERNET_OFFLINE')
+                row.label(text="")
+            elif mmcp_client.connecting() or not err:
                 row.label(text="Connecting…", icon='SORTTIME')
                 row.label(text="")              # keep the split's second column filled
             else:

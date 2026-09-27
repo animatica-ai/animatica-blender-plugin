@@ -26,6 +26,46 @@ class NotReady(RuntimeError):
     """The engine cannot solve yet, and the message says what to do about it."""
 
 
+#: Rough download sizes, for the button that fetches them: said up front, because
+#: nothing is fetched until someone presses it (unless they opted in to automatic).
+RUNTIME_MB = 75
+MODEL_MB = 150
+
+
+def online() -> bool:
+    """Blender's "Allow Online Access". Nothing here touches the network without it."""
+    from ..mmcp_client import online_access
+    return online_access()
+
+
+def offline_message() -> str:
+    from ..mmcp_client import OFFLINE_MESSAGE
+    return OFFLINE_MESSAGE
+
+
+def runtime_needs_network() -> bool:
+    """False when this build ships the onnxruntime wheels: installing is then an unzip."""
+    return apr.ortsetup.bundled_wheels() is None
+
+
+def auto_setup() -> bool:
+    """Whether the artist opted in to fetching the runtime and model unasked."""
+    try:
+        return bool(prefs().auto_install_runtime)
+    except (AttributeError, KeyError):
+        return False
+
+
+def download_mb() -> int:
+    """What pressing Download Autoposer would fetch right now, in MB."""
+    st = status()
+    return (0 if st["runtime"] else RUNTIME_MB) + (0 if st["model"] else MODEL_MB)
+
+
+def download_label() -> str:
+    return f"Download Autoposer (≈{download_mb() or RUNTIME_MB + MODEL_MB} MB)"
+
+
 #: The addon this package now lives inside. There is one AddonPreferences per
 #: addon, and this is no longer an addon of its own — its settings are fields
 #: on Animatica's preferences (see ``prefs.PROPERTIES``).
@@ -77,8 +117,10 @@ def source():
     if p.model_source == "HF":
         repo = p.hf_repo.strip() or "Animatica-ai/autoposer"
         sub = p.hf_subfolder.strip()
-        rev = p.hf_revision.strip() or "main"
-        src = f"hf://{repo}" + (f"/{sub}" if sub else "") + (f"@{rev}" if rev != "main" else "")
+        # Empty means the revision this build is pinned to (and has the hashes of).
+        pinned = apr.bundle.HF_REVISION
+        rev = p.hf_revision.strip() or pinned
+        src = f"hf://{repo}" + (f"/{sub}" if sub else "") + (f"@{rev}" if rev != pinned else "")
         return src, (p.hf_token.strip() or None)
     return None, None
 
@@ -151,8 +193,10 @@ def load(*, allow_install=True, allow_download=True, on_progress=None):
         src, token = source()
         if not apr.ortsetup.activate(cache_dir=d):
             if not allow_install:
-                raise NotReady("the inference runtime is not installed — open the addon "
-                               "preferences and press Install Runtime")
+                raise NotReady("the inference runtime is not installed — press "
+                               f"{download_label()}")
+            if runtime_needs_network() and not online():
+                raise NotReady(f"the inference runtime is not installed. {offline_message()}")
             try:
                 apr.ortsetup.install(cache_dir=d)
             except Exception as e:                             # noqa: BLE001
@@ -161,8 +205,11 @@ def load(*, allow_install=True, allow_download=True, on_progress=None):
                 raise NotReady("the inference runtime installed but will not import")
         try:
             bundle = apr.resolve(src, cache_dir=d, token=token,
-                                 allow_download=allow_download, on_progress=on_progress)
+                                 allow_download=allow_download and online(),
+                                 on_progress=on_progress)
         except apr.BundleError as e:
+            if allow_download and not online():
+                raise NotReady(f"the poser model is not downloaded. {offline_message()}") from e
             raise NotReady(str(e)) from e
         try:
             _ENGINE = apr.Engine(bundle, threads=prefs().threads)
@@ -218,11 +265,9 @@ def ensure_runtime(*, force: bool = False) -> bool:
     """Start the one-off runtime install if it is missing. Returns True if it
     is already usable.
 
-    Nothing about this needs a decision from the artist: the runtime is a
-    dependency of the addon, not a choice within it, and asking someone to
-    press Install Runtime before the first pose can be solved is a step that
-    exists only because the download has to happen somewhere. It happens
-    here, once, in the background.
+    Called from the Download Autoposer button, and unasked only for someone
+    who opted in to automatic setup. Never without Blender's online access,
+    unless this build ships the wheels (then it is an unzip).
     """
     d = data_dir()
     if apr.ortsetup.activate(cache_dir=d):
@@ -231,6 +276,8 @@ def ensure_runtime(*, force: bool = False) -> bool:
         return False
     if _INSTALL["error"] and not force:
         return False        # said its piece; the preferences button can retry
+    if runtime_needs_network() and not online():
+        return False        # not an error: it starts once online access is allowed
     _INSTALL.update({"running": True, "done": False, "error": ""})
     threading.Thread(target=_install_worker, args=(d,), daemon=True).start()
     return False
@@ -277,11 +324,9 @@ def _after_fetch():
 def ensure_model(*, force: bool = False) -> bool:
     """Start the one-off model download if it is missing. True if it is here.
 
-    This used to be the artist's job, because the weights were account-gated
-    and only they had the token. They are public now, which makes pressing
-    Download Model a step that exists for no reason: the model is what the
-    Autoposer *is*. So it fetches itself, in the background, once — the same
-    deal as the runtime.
+    Called after the runtime install and from the Download Autoposer button;
+    unasked only for someone who opted in to automatic setup, and never
+    without Blender's online access.
 
     A folder the artist pointed at is left alone: LOCAL means they have said
     where it is, and downloading over that would be presumptuous.
@@ -297,6 +342,8 @@ def ensure_model(*, force: bool = False) -> bool:
         return False        # said its piece; the preferences button can retry
     src, token = source()
     if not src:
+        return False
+    if not online():
         return False
     _FETCH.update({"running": True, "error": "", "done": 0, "total": 0})
     threading.Thread(target=_fetch_worker, args=(data_dir(), src, token),
@@ -333,15 +380,35 @@ def preload_async() -> None:
     threading.Thread(target=_work, daemon=True).start()
 
 
+def download_all() -> None:
+    """What the Download Autoposer button does: the runtime, then the model.
+
+    The model follows the runtime on its own (``_after_install``), so this only
+    has to start whichever half is missing, forgiving any earlier failure.
+    """
+    _INSTALL["error"] = ""
+    _FETCH["error"] = ""
+    if ensure_runtime(force=True):
+        ensure_model(force=True)
+
+
 def get():
     """The engine, loading it if it is not up yet.
 
-    Both halves install themselves on first need — runtime, then model. What
-    the caller gets in the meantime is a sentence saying so, not a button to
-    press: there is no decision here to put to anyone.
+    Nothing is downloaded unasked: the runtime and the model come from the
+    Download Autoposer button, or by themselves only for someone who opted in
+    to automatic setup. Until then the caller gets a sentence saying which.
     """
     if _ENGINE is not None:
         return _ENGINE
+    st = status()
+    busy = _INSTALL["running"] or _FETCH["running"]
+    needs_network = (not st["runtime"] and runtime_needs_network()) or not st["model"]
+    if needs_network and not busy:
+        if not online():
+            raise NotReady(f"the Autoposer needs a one-off download. {offline_message()}")
+        if not auto_setup() and not (_INSTALL["error"] or _FETCH["error"]):
+            raise NotReady(f"the Autoposer is not downloaded yet — press {download_label()}")
     if not ensure_runtime():
         if _INSTALL["error"]:
             raise NotReady(f"the inference runtime would not install: {_INSTALL['error']}")

@@ -26,6 +26,9 @@ class AP_OT_install_runtime(bpy.types.Operator):
                       "machine, unless the addon was built with the wheels inside it")
 
     def execute(self, context):
+        if engine.runtime_needs_network() and not engine.online():
+            self.report({"ERROR"}, engine.offline_message())
+            return {"CANCELLED"}
         d = engine.data_dir()
         try:
             apr.ortsetup.install(cache_dir=d)
@@ -48,6 +51,9 @@ class AP_OT_get_model(bpy.types.Operator):
     def execute(self, context):
         d = engine.data_dir()
         src, token = engine.source()
+        if not engine.online() and not (src and not str(src).startswith("hf://")):
+            self.report({"ERROR"}, engine.offline_message())
+            return {"CANCELLED"}
         wm = context.window_manager
         wm.progress_begin(0, 100)
         last = [0.0]
@@ -72,6 +78,26 @@ class AP_OT_get_model(bpy.types.Operator):
         wm.progress_end()
         engine.unload()                       # the next solve picks the new model up
         self.report({"INFO"}, f"model ready ({b.path})")
+        return {"FINISHED"}
+
+
+class AP_OT_download(bpy.types.Operator):
+    bl_idname = "autoposer.download"
+    bl_label = "Download Autoposer"
+    bl_description = ("Download what the Autoposer runs on — the inference runtime (~75 MB) and "
+                      "the model (~150 MB) — once, in the background. Nothing is fetched until "
+                      "you press this")
+
+    @classmethod
+    def poll(cls, context):
+        if not engine.online():
+            cls.poll_message_set(engine.offline_message())
+            return False
+        return True
+
+    def execute(self, context):
+        engine.download_all()
+        self.report({"INFO"}, "downloading the Autoposer…")
         return {"FINISHED"}
 
 
@@ -125,11 +151,11 @@ class AP_OT_forget_model(bpy.types.Operator):
 PROPERTIES = {
     'auto_install_runtime': bpy.props.BoolProperty(
         name="Set the poser up automatically",
-        default=True,
+        default=False,
         description="Fetch what the poser needs — the inference runtime and "
                     "the model — in the background the first time they are "
-                    "missing, instead of waiting to be asked. About 225 MB in "
-                    "total, once per machine"),
+                    "missing, instead of waiting for Download Autoposer. About "
+                    "225 MB in total, once per machine. Needs online access"),
     'model_source': bpy.props.EnumProperty(
         name="Model from",
         items=[("HF", "Hugging Face", "Download from a Hugging Face repo (private repos "
@@ -142,11 +168,17 @@ PROPERTIES = {
         default="HF"),
     'hf_repo': bpy.props.StringProperty(name="Repo", default="Animatica-ai/autoposer"),
     'hf_subfolder': bpy.props.StringProperty(name="Subfolder", default="onnx"),
-    'hf_revision': bpy.props.StringProperty(name="Revision", default="main"),
+    'hf_revision': bpy.props.StringProperty(
+        name="Revision", default="",
+        description="A commit of the repo. Empty = the one this addon build is pinned to and "
+                    "carries the checksums of; anything else is verified only against the "
+                    "repo's own meta.json"),
     'hf_token': bpy.props.StringProperty(
         name="Access token", default="", subtype="PASSWORD",
-        description="A Hugging Face token with read access. Leave empty to use a token you have "
-                    "already set up on this machine ($HF_TOKEN, or huggingface-cli login)"),
+        description="A Hugging Face token with read access, sent to huggingface.co only. Leave "
+                    "empty for the public model; a token already set up on this machine "
+                    "($HF_TOKEN, or huggingface-cli login) is used only if the repo refuses "
+                    "without one"),
     'local_path': bpy.props.StringProperty(
         name="Bundle folder", default="", subtype="DIR_PATH",
         description="A directory holding poser.onnx, ik.onnx and meta.json"),
@@ -185,7 +217,14 @@ def draw(layout, prefs, context):
         row.alert = True
         row.label(text=(installing["error"] or fetching["error"])[:60], icon='ERROR')
     else:
-        row.label(text="Not set up yet", icon='ERROR')
+        row.label(text="Not downloaded yet", icon='INFO')
+    if not (st["runtime"] and st["model"]) and not (fetching["running"] or installing["running"]):
+        if engine.online():
+            box.operator("autoposer.download", icon='IMPORT', text=engine.download_label())
+        else:
+            sub = box.row()
+            sub.active = False
+            sub.label(text=engine.offline_message(), icon='INTERNET_OFFLINE')
     box.prop(prefs, "auto_install_runtime")
 
     header, body = layout.panel("animatica_prefs_poser_advanced", default_closed=True)
@@ -228,4 +267,5 @@ def draw(layout, prefs, context):
     body.prop(prefs, "threads")
 
 
-CLASSES = (AP_OT_install_runtime, AP_OT_get_model, AP_OT_check, AP_OT_forget_model)
+CLASSES = (AP_OT_install_runtime, AP_OT_get_model, AP_OT_download, AP_OT_check,
+           AP_OT_forget_model)

@@ -76,11 +76,25 @@ class Bundle:
     def version(self) -> str:
         return str(self.meta.get("package_version", "?"))
 
-    def verify(self) -> bool:
-        """Check the two graphs against the hashes `meta.json` records."""
-        for name, info in self.meta.get("files", {}).items():
+    def verify(self, expected: dict | None = None) -> bool:
+        """Check the two graphs against the hashes `meta.json` records — and against
+        `expected` ({name: sha256}, the hashes the addon was built with), when given.
+
+        Fails closed: a meta.json that records no hash for a graph does not verify, because
+        "nothing to check against" is not the same as "checked".
+        """
+        files = self.meta.get("files")
+        if not isinstance(files, dict):
+            return False
+        for name in ("poser.onnx", "ik.onnx"):
+            want = (files.get(name) or {}).get("sha256")
+            if not want:
+                return False
+            if expected and expected.get(name) and expected[name] != want:
+                return False
+        for name, info in files.items():
             f = self.path / name
-            if not f.exists() or sha256(f) != info.get("sha256"):
+            if not f.exists() or sha256(f) != (info or {}).get("sha256"):
                 return False
         return True
 
@@ -141,7 +155,7 @@ def _get(url: str, token: str | None, timeout: float = 30.0) -> bytes:
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     req.add_header("User-Agent", "animatica-autoposer-runtime")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with _OPENER.open(req, timeout=timeout) as r:
         return r.read()
 
 
@@ -152,7 +166,7 @@ def _download(url: str, token: str | None, dest: Path, expect_sha: str | None,
         req.add_header("Authorization", f"Bearer {token}")
     req.add_header("User-Agent", "animatica-autoposer-runtime")
     h = hashlib.sha256()
-    open_url = opener.open if opener is not None else urllib.request.urlopen
+    open_url = (opener or _OPENER).open
     with open_url(req, timeout=timeout) as r:
         total = int(r.headers.get("Content-Length") or 0)
         done = 0
@@ -166,7 +180,8 @@ def _download(url: str, token: str | None, dest: Path, expect_sha: str | None,
                 done += len(chunk)
                 if on_progress:
                     on_progress(dest.name, done, total)
-    if expect_sha and h.hexdigest() != expect_sha:
+    if not expect_sha or h.hexdigest() != expect_sha:
+        # no published hash is a refusal too: an unverifiable file is not installed
         dest.unlink(missing_ok=True)
         raise BundleError(f"{dest.name}: downloaded bytes do not match the published sha256")
     return dest
@@ -194,9 +209,10 @@ def download(cache_dir=None, *, api_base=None, token=None, on_progress=None) -> 
         raise BundleError(f"could not reach {base}: {e.reason}") from e
 
     files = manifest.get("files") or {}
-    missing = [n for n in FILES if n not in files]
+    missing = [n for n in FILES if not (files.get(n) or {}).get("sha256")]
     if missing:
-        raise BundleError(f"the server's bundle manifest is missing {', '.join(missing)}")
+        raise BundleError(f"the server's bundle manifest is missing {', '.join(missing)} "
+                          "(or its sha256)")
 
     root = Path(cache_dir or default_cache_dir())
     root.mkdir(parents=True, exist_ok=True)
@@ -210,7 +226,10 @@ def download(cache_dir=None, *, api_base=None, token=None, on_progress=None) -> 
                 # taken as-is -- joining it onto the base would send a mangled request
                 # somewhere real.
                 url = f"{base}/{url.lstrip('/')}"
-            _download(url, token, staging / name, info.get("sha256"), on_progress)
+            # The token is for the API. An absolute URL elsewhere (a pre-signed object-store
+            # link) carries its own credentials and must not be handed ours.
+            file_token = token if _origin(url) == _origin(base) else None
+            _download(url, file_token, staging / name, info.get("sha256"), on_progress)
         bundle = Bundle(staging)
         if not bundle.verify():
             raise BundleError("the downloaded bundle does not match its own meta.json")
@@ -224,6 +243,25 @@ def download(cache_dir=None, *, api_base=None, token=None, on_progress=None) -> 
 # --------------------------------------------------------------------------- Hugging Face
 HF_ENDPOINT = "https://huggingface.co"
 HF_SUBFOLDER = "onnx"
+
+#: The model this build of the addon uses: one Hugging Face commit, and the sha256 of every file
+#: at it. Pinned, not `main`, so a push to the repo cannot change what an installed addon
+#: downloads, and the hashes live HERE rather than only in the repo's own meta.json, so the
+#: repo cannot vouch for itself. Bump the three together (see `pinned_hashes`).
+HF_REPO = "Animatica-ai/autoposer"
+HF_REVISION = "792cc2f0f2ca210b8bb5eaab781c6b0f388d458b"
+HF_PINNED = {
+    (HF_REPO, HF_SUBFOLDER, HF_REVISION): {
+        "meta.json": "2bfc78f04767a6fddad2aee684d67ab76d25d4392dde66d5d2be5e61cc496b68",
+        "poser.onnx": "d75271f71d848e374f53909aee547e90438170e48ae509a9167fa99ea1ede0ed",
+        "ik.onnx": "0ff3815ad7ccaf137302946a5c947b8795c04340174a3578d028bfbd77ea724e",
+    },
+}
+
+
+def pinned_hashes(repo_id: str, subfolder: str, revision: str) -> dict | None:
+    """The hashes this build expects for `repo_id/subfolder@revision`, or None if unpinned."""
+    return HF_PINNED.get((repo_id, subfolder or HF_SUBFOLDER, revision))
 ENV_HF = "ANIMATICA_AUTOPOSER_HF"
 ENV_HF_TOKEN = ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN")
 
@@ -239,15 +277,33 @@ class _DropAuthOnRedirect(urllib.request.HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         new = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new is not None and urllib.parse.urlsplit(newurl).netloc != \
-                urllib.parse.urlsplit(req.full_url).netloc:
+        if new is not None and _origin(newurl) != _origin(req.full_url):
+            # scheme too: an https -> http hop on the same host would put the token on the
+            # wire in the clear
             new.headers = {k: v for k, v in new.headers.items()
                            if k.lower() != "authorization"}
+            new.unredirected_hdrs = {k: v for k, v in new.unredirected_hdrs.items()
+                                     if k.lower() != "authorization"}
         return new
 
 
+def _origin(url: str):
+    parts = urllib.parse.urlsplit(url)
+    return (parts.scheme.lower(), parts.netloc.lower())
+
+
+#: Every request that may carry a token goes through this: urllib's default handler forwards
+#: `Authorization` to wherever a redirect points.
+_OPENER = urllib.request.build_opener(_DropAuthOnRedirect)
+
+
 def hf_token(explicit=None) -> str | None:
-    """A token from the caller, the environment, or the huggingface-cli login file."""
+    """A token from the caller, the environment, or the huggingface-cli login file.
+
+    `download_hf` sends only the caller's token up front; the ambient ones (environment, login
+    file) are tried only after the repo has refused an anonymous request, so a public repo
+    never sees a token the user did not hand to this addon.
+    """
     if explicit:
         return str(explicit).strip()
     for var in ENV_HF_TOKEN:
@@ -272,11 +328,14 @@ def hf_url(repo_id: str, filename: str, revision: str = "main",
 
 
 def parse_hf(source: str):
-    """`hf://Animatica-ai/autoposer[/subfolder][@revision]` -> (repo, subfolder, revision)."""
+    """`hf://Animatica-ai/autoposer[/subfolder][@revision]` -> (repo, subfolder, revision).
+
+    No `@revision` means the revision this build is pinned to, not `main`.
+    """
     s = str(source)
     if s.startswith("hf://"):
         s = s[len("hf://"):]
-    rev = "main"
+    rev = HF_REVISION
     if "@" in s:
         s, rev = s.rsplit("@", 1)
     parts = [p for p in s.strip("/").split("/") if p]
@@ -287,29 +346,51 @@ def parse_hf(source: str):
     return repo, sub, rev
 
 
-def download_hf(repo_id: str, cache_dir=None, *, revision: str = "main",
+def download_hf(repo_id: str, cache_dir=None, *, revision: str = HF_REVISION,
                 subfolder: str = HF_SUBFOLDER, token=None, endpoint: str = HF_ENDPOINT,
                 on_progress=None) -> Bundle:
     """Fetch the bundle from a Hugging Face repo — private ones included, with a token.
 
     `meta.json` comes first and carries the sha256 of the two graphs, so the repo needs no
     manifest of its own: the model describes itself, and every byte is checked against that
-    description before anything is installed.
+    description before anything is installed. For the revision this build is pinned to, every
+    file — meta.json included — must ALSO match the hashes embedded in the addon.
     """
-    tok = hf_token(token)
+    tok = str(token).strip() if token else None
+    pinned = pinned_hashes(repo_id, subfolder, revision) if endpoint == HF_ENDPOINT else None
     root = Path(cache_dir or default_cache_dir())
     root.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix="bundle-", dir=str(root)))
-    opener = urllib.request.build_opener(_DropAuthOnRedirect)
     try:
         for name in FILES:
             url = hf_url(repo_id, name, revision, subfolder, endpoint)
-            expect = None
-            if name != "meta.json":
+            if pinned:
+                expect = pinned[name]
+            elif name == "meta.json":
+                expect = None
+            else:
                 meta = json.loads((staging / "meta.json").read_text())
                 expect = (meta.get("files", {}).get(name) or {}).get("sha256")
+                if not expect:
+                    raise BundleError(f"{repo_id}'s meta.json records no sha256 for {name}; "
+                                      "refusing to install an unverifiable model")
             try:
-                _download(url, tok, staging / name, expect, on_progress, opener=opener)
+                try:
+                    if name == "meta.json" and not pinned:
+                        _download_unverified(url, tok, staging / name, on_progress)
+                    else:
+                        _download(url, tok, staging / name, expect, on_progress)
+                except urllib.error.HTTPError as e:
+                    # A gated repo: only now is a token the user set up for Hugging Face
+                    # itself ($HF_TOKEN, huggingface-cli login) worth offering.
+                    ambient = hf_token() if (tok is None and e.code in (401, 403)) else None
+                    if not ambient:
+                        raise
+                    tok = ambient
+                    if name == "meta.json" and not pinned:
+                        _download_unverified(url, tok, staging / name, on_progress)
+                    else:
+                        _download(url, tok, staging / name, expect, on_progress)
             except urllib.error.HTTPError as e:
                 if e.code in (401, 403):
                     raise BundleError(
@@ -324,13 +405,26 @@ def download_hf(repo_id: str, cache_dir=None, *, revision: str = "main",
             except urllib.error.URLError as e:
                 raise BundleError(f"could not reach {endpoint}: {e.reason}") from e
         bundle = Bundle(staging)
-        if not bundle.verify():
+        if not bundle.verify(pinned):
             raise BundleError("the downloaded bundle does not match its own meta.json")
         _install(staging, root)
         return Bundle(root / "current")
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
+
+
+def _download_unverified(url, token, dest: Path, on_progress=None) -> Path:
+    """meta.json of an UNPINNED revision: it is what carries the hashes, so nothing precedes
+    it to check it against. Everything it describes is then checked against it, and a bundle
+    whose meta.json records no hashes is refused."""
+    req = urllib.request.Request(url)
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("User-Agent", "animatica-autoposer-runtime")
+    with _OPENER.open(req, timeout=60.0) as r:
+        dest.write_bytes(r.read())
+    return dest
 
 
 def _install(staging: Path, root: Path):
@@ -353,13 +447,17 @@ def resolve(source=None, *, cache_dir=None, api_base=None, token=None,
     """
     src = source or os.environ.get(ENV_BUNDLE) or None
     if src and str(src).startswith("hf://"):
-        b = cached_bundle(cache_dir)
-        if b is not None and b.meta.get("source") == str(src):
+        repo, sub, rev = parse_hf(src)
+        pinned = pinned_hashes(repo, sub, rev)
+        b = cached_bundle(cache_dir, verify=False)
+        # A cached bundle serves this source if it came from it, or — for a pinned revision —
+        # if its graphs are byte-for-byte the pinned ones, wherever it came from.
+        if b is not None and (b.meta.get("source") == str(src) or pinned) \
+                and b.verify(pinned):
             return b
         if not allow_download:
             raise BundleError("the model is not in the cache yet, and downloading was "
                               "not allowed")
-        repo, sub, rev = parse_hf(src)
         b = download_hf(repo, cache_dir, revision=rev, subfolder=sub, token=token,
                         on_progress=on_progress)
         _stamp_source(b, str(src))
