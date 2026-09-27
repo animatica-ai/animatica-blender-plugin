@@ -65,12 +65,65 @@ _EE_CHAIN_BONES = frozenset({
 # Action API compatibility
 # ---------------------------------------------------------------------------
 
-def iter_action_fcurves(action):
-    """Yield every F-curve in an Action, regardless of Blender version.
+def rig_slot(action, owner=None):
+    """The slot of *action* whose curves are the rig's, or None (a legacy action).
+
+    An action can hold several slots -- one per object it animates, since
+    Blender 4.4 -- and only one of them is this rig's: reading every slot's
+    curves as the rig's took a prop's or a second character's keys for its
+    own, and wrote the take over them. The slot *owner* (else the addon's
+    target character) is bound to while the action is its active one; else
+    the slot named for it; else the one some object has bound; else the first.
+    """
+    slots = getattr(action, "slots", None)
+    if not slots:
+        return None
+    if len(slots) == 1:
+        return slots[0]
+    owners = [owner] if owner is not None else []
+    try:
+        target = bpy.context.scene.animatica.target_armature
+    except (AttributeError, ReferenceError):
+        target = None
+    if target is not None and target not in owners:
+        owners.append(target)
+    for o in owners:
+        ad = getattr(o, "animation_data", None)
+        if ad is not None and ad.action == action and getattr(ad, "action_slot", None) is not None:
+            return ad.action_slot
+    for o in owners:
+        name = getattr(o, "name", None)
+        for sl in slots:
+            if name and sl.identifier == "OB" + name:
+                return sl
+    for o in bpy.data.objects:
+        ad = o.animation_data
+        if ad is not None and ad.action == action and getattr(ad, "action_slot", None) is not None:
+            return ad.action_slot
+    return slots[0]
+
+
+def _rig_channelbags(action, owner=None, *, ensure: bool = False):
+    """The rig's channelbag in each keyframe strip of a layered *action*."""
+    slot = rig_slot(action, owner)
+    if slot is None:
+        return
+    for layer in getattr(action, "layers", ()):
+        for strip in getattr(layer, "strips", ()):
+            if not hasattr(strip, "channelbag"):
+                continue
+            cb = strip.channelbag(slot, ensure=ensure)
+            if cb is not None:
+                yield cb
+
+
+def iter_action_fcurves(action, owner=None):
+    """Yield every F-curve of the rig in an Action, regardless of Blender version.
 
     Pre-Blender 4.4: ``action.fcurves`` is a flat collection.
     Blender 4.4+ moved to a layered Action with slots/strips/channelbags;
-    the flat ``.fcurves`` attribute was removed in 5.x.
+    the flat ``.fcurves`` attribute was removed in 5.x. Only the rig's slot
+    is read (see :func:`rig_slot`): the others animate something else.
     """
     if action is None:
         return
@@ -78,31 +131,20 @@ def iter_action_fcurves(action):
     if flat is not None:
         yield from flat
         return
-    for layer in getattr(action, "layers", ()):
-        for strip in getattr(layer, "strips", ()):
-            slots = getattr(action, "slots", ())
-            for slot in slots:
-                cb = strip.channelbag(slot, ensure=False) if hasattr(strip, "channelbag") else None
-                if cb is None:
-                    continue
-                yield from cb.fcurves
+    for cb in _rig_channelbags(action, owner):
+        yield from cb.fcurves
 
 
-def _iter_fcurve_collections(action):
-    """Yield each F-curve container on ``action`` (flat or per-channelbag),
-    so callers can mutate (add/remove fcurves) instead of just iterating."""
+def _iter_fcurve_collections(action, owner=None):
+    """Yield each F-curve container of the rig on ``action`` (flat or its
+    slot's channelbags), so callers can mutate (add/remove fcurves) instead
+    of just iterating."""
     flat = getattr(action, "fcurves", None)
     if flat is not None:
         yield flat
         return
-    for layer in getattr(action, "layers", ()):
-        for strip in getattr(layer, "strips", ()):
-            if not hasattr(strip, "channelbag"):
-                continue
-            for slot in getattr(action, "slots", ()):
-                cb = strip.channelbag(slot, ensure=False)
-                if cb is not None:
-                    yield cb.fcurves
+    for cb in _rig_channelbags(action, owner):
+        yield cb.fcurves
 
 
 def strip_generated_keyframe_points(action, *, promote_unauthored: bool = False) -> int:
@@ -155,12 +197,12 @@ def strip_generated_keyframe_points(action, *, promote_unauthored: bool = False)
     return removed
 
 
-def _ensure_fcurve(action, data_path: str, array_index: int):
+def _ensure_fcurve(action, data_path: str, array_index: int, owner=None):
     """Get the F-curve at ``(data_path, array_index)`` on ``action``, or
     create one. Returns ``None`` if neither lookup nor creation succeeds.
 
     Works for both flat (pre-Blender 4.4) and layered (4.4+) actions; on a
-    layered action the new curve goes onto the first existing channelbag,
+    layered action the curve is the rig's slot's (see :func:`rig_slot`),
     which matches how the rest of this module reads fcurves back.
     """
     flat = getattr(action, "fcurves", None)
@@ -173,21 +215,16 @@ def _ensure_fcurve(action, data_path: str, array_index: int):
         except RuntimeError:
             return None
 
-    for layer in getattr(action, "layers", ()):
-        for strip in getattr(layer, "strips", ()):
-            if not hasattr(strip, "channelbag"):
-                continue
-            for slot in getattr(action, "slots", ()):
-                cb = strip.channelbag(slot, ensure=False)
-                if cb is None:
-                    continue
-                fc = cb.fcurves.find(data_path=data_path, index=array_index)
-                if fc is not None:
-                    return fc
-                try:
-                    return cb.fcurves.new(data_path=data_path, index=array_index)
-                except RuntimeError:
-                    continue
+    # The rig's slot only (see rig_slot); its channelbag is made if a strip
+    # has none for it yet.
+    for cb in _rig_channelbags(action, owner, ensure=True):
+        fc = cb.fcurves.find(data_path=data_path, index=array_index)
+        if fc is not None:
+            return fc
+        try:
+            return cb.fcurves.new(data_path=data_path, index=array_index)
+        except RuntimeError:
+            continue
 
     # An action with nothing in it yet has no layer, strip or slot to put a
     # curve in -- a fresh rig's first key pose, or an action made empty -- and
@@ -195,8 +232,9 @@ def _ensure_fcurve(action, data_path: str, array_index: int):
     # to no one. Blender makes the layer, strip and slot, and binds the slot,
     # for the object the action is assigned to.
     ensure = getattr(action, "fcurve_ensure_for_datablock", None)
-    owner = next((o for o in bpy.data.objects
-                  if o.animation_data is not None and o.animation_data.action == action), None)
+    if owner is None or owner.animation_data is None or owner.animation_data.action != action:
+        owner = next((o for o in bpy.data.objects
+                      if o.animation_data is not None and o.animation_data.action == action), None)
     if ensure is not None and owner is not None:
         try:
             return ensure(owner, data_path, index=array_index)

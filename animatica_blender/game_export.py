@@ -237,9 +237,9 @@ def _export_action(arm):
     ad = arm.animation_data
     if ad is not None and ad.action is not None:
         return ad.action
-    if ad is not None:        # accepted: the last strip on the Animatica track
+    if ad is not None:        # accepted: the take on top of the NLA (not a muted stash)
         for track in reversed(ad.nla_tracks):
-            if track.strips:
+            if track.strips and not track.mute:
                 return track.strips[-1].action
     return None
 

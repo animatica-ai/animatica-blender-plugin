@@ -71,11 +71,13 @@ make game-ready loops. The addon also updates itself.
 
 ### Changed
 
-<!-- verify against fix/p8c-nla -->
 - **Accept keeps every take.** Each accepted take is added to the NLA as its
-  own named clip on its own track, and earlier takes stay. The action you had
-  before is kept on a muted NLA track. A take generated into a gap between
-  your own keys is still filled into your action.
+  own named clip on its own track (one per prompt block), and earlier takes
+  stay. The action you had before is kept on a muted *[Action Stash]* track.
+  Kept loops keep cycling to the end of the scene. A take generated into a
+  gap between your own keys is still filled into your action. **Replace
+  Kept** is gone, since nothing is replaced any more.
+- **NLA tweak mode:** Generate, Accept and Reject wait until you leave it.
 - **In place removes only the travel.** It used to pin the root, which also
   took out the body's sway and surge. Now it takes out just the path the
   character moves along (a line, an arc or a curve) and keeps everything the

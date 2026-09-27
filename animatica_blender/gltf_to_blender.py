@@ -405,7 +405,7 @@ def splice_gltf_into_action(
     # the channels the splice leaves with no key on one side (see Step 5).
     from .constraints_ui import _iter_fcurve_collections as _collections
     before_edges: dict[tuple[str, int], tuple] = {}
-    for fcurves in _collections(action):
+    for fcurves in _collections(action, armature_obj):
         for fc in fcurves:
             xs = [kp.co.x for kp in fc.keyframe_points]
             before_edges[(fc.data_path, fc.array_index)] = (
@@ -444,7 +444,7 @@ def splice_gltf_into_action(
     from .constraints_ui import _ensure_fcurve, _iter_fcurve_collections
 
     preserved: dict[tuple[str, int], list[dict[str, Any]]] = {}
-    for fcurves in _iter_fcurve_collections(action):
+    for fcurves in _iter_fcurve_collections(action, armature_obj):
         for fc in fcurves:
             key = (fc.data_path, fc.array_index)
             for kp in fc.keyframe_points:
@@ -466,7 +466,7 @@ def splice_gltf_into_action(
 
     # Step 1b — wipe existing keys in the target range on every fcurve.
     # Neighbours' keys (outside the range) are untouched.
-    for fcurves in _iter_fcurve_collections(action):
+    for fcurves in _iter_fcurve_collections(action, armature_obj):
         for fc in list(fcurves):
             kps = fc.keyframe_points
             for i in range(len(kps) - 1, -1, -1):
@@ -546,7 +546,7 @@ def splice_gltf_into_action(
     # an existing frame updates in-place, so a single insert call is enough.
     user_key_frames: set[int] = set()
     for (data_path, array_index), kps in preserved.items():
-        fc = _ensure_fcurve(action, data_path, array_index)
+        fc = _ensure_fcurve(action, data_path, array_index, armature_obj)
         if fc is None:
             continue
         for state in kps:
@@ -577,16 +577,9 @@ def splice_gltf_into_action(
                     continue
                 kp.type = 'KEYFRAME' if f in anchors else 'GENERATED'
 
-    flat = getattr(action, "fcurves", None)
-    if flat is not None:
-        _tag_in_range(flat)
-    else:
-        for layer in getattr(action, "layers", ()):
-            for strip in getattr(layer, "strips", ()):
-                for slot in getattr(action, "slots", ()):
-                    cb = strip.channelbag(slot, ensure=False) if hasattr(strip, "channelbag") else None
-                    if cb is not None:
-                        _tag_in_range(cb.fcurves)
+    # This rig's curves only: another slot's keys animate something else.
+    for fcurves in _collections(action, armature_obj):
+        _tag_in_range(fcurves)
 
     # Step 5 — hold the pose outside the window. A channel with keys only
     # inside it (a bone the user never keyed gets a new curve here) holds its
@@ -595,7 +588,7 @@ def splice_gltf_into_action(
     # Where a side has no key of its own, a key just outside the window holds
     # what the channel showed there before.
     from .constraints_ui import _bone_name_from_data_path
-    for fcurves in _collections(action):
+    for fcurves in _collections(action, armature_obj):
         for fc in fcurves:
             xs = [kp.co.x for kp in fc.keyframe_points]
             if not xs:
@@ -1771,16 +1764,10 @@ def _tag_keys_at_frame_as_authored(action: bpy.types.Action, frame: int) -> None
                 if int(round(kp.co[0])) == target:
                     kp.type = 'KEYFRAME'
 
-    flat = getattr(action, "fcurves", None)
-    if flat is not None:
-        _tag(flat)
-        return
-    for layer in getattr(action, "layers", ()):
-        for strip in getattr(layer, "strips", ()):
-            for slot in getattr(action, "slots", ()):
-                cb = strip.channelbag(slot, ensure=False) if hasattr(strip, "channelbag") else None
-                if cb is not None:
-                    _tag(cb.fcurves)
+    # The rig's curves only (the action may animate other things too).
+    from .constraints_ui import _iter_fcurve_collections
+    for fcurves in _iter_fcurve_collections(action):
+        _tag(fcurves)
 
 
 # ---------------------------------------------------------------------------

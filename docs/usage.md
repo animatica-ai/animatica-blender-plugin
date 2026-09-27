@@ -95,12 +95,17 @@ Play it in the viewport, then decide.
 
 **Accept** keeps the take.
 
-<!-- verify against fix/p8c-nla -->
 Each accepted take is added to the NLA as its own named clip, on its own
-track, and takes you accepted earlier stay where they are. The action you had
-before you generated is kept too, stashed on a muted NLA track. The one
-exception is a take generated into a gap between your own keys: that one is
-filled into your action instead.
+track (*Animatica: <prompt>*), above the takes you accepted earlier, which stay
+where they are. A take with several prompt blocks becomes one clip per block,
+each on its own track, so every block exports as its own animation. The action
+you had before you generated is kept too, stashed on a muted *[Action Stash]*
+track, and your keys either side of the take keep playing. A kept loop keeps
+cycling to the end of the scene. The one exception is a take generated into a
+gap between your own keys: that one is filled into your action instead.
+
+In NLA tweak mode, Generate, Accept and Reject wait: press **Tab** in the NLA
+editor to leave it first.
 
 **Reject** throws the take away and puts back exactly what you had: your
 action, your pose and the scene's frame range. Keys you added or changed
