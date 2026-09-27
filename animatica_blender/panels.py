@@ -19,6 +19,10 @@ from bpy.types import Panel
 
 from . import constraints_ui, examples, mmcp_client, properties
 
+# Export Game Clip is hidden from the panel until it is ready to ship; the
+# operator stays registered (F3 finds it).
+SHOW_GAME_EXPORT = False
+
 
 class AnimaticaPanelBase:
     bl_space_type = 'VIEW_3D'
@@ -473,7 +477,8 @@ def _draw_take_options(layout, context, settings, model, in_preview) -> None:
         row.prop(settings, "loop")
     if not in_preview:
         col.prop(settings, "inplace")
-        col.operator("animatica.export_game_clip", text="Export Game Clip", icon='EXPORT')
+        if SHOW_GAME_EXPORT:
+            col.operator("animatica.export_game_clip", text="Export Game Clip", icon='EXPORT')
     if can_vary:
         col.prop(settings, "variations")
     if can_loop and settings.loop and not one_block:
@@ -619,7 +624,8 @@ def _draw_review(layout, context, settings, arm) -> None:
     sub.use_property_split = True
     sub.use_property_decorate = False
     sub.prop(settings, "inplace")
-    sub.operator("animatica.export_game_clip", text="Export Game Clip", icon='EXPORT')
+    if SHOW_GAME_EXPORT:
+        sub.operator("animatica.export_game_clip", text="Export Game Clip", icon='EXPORT')
 
     row = box.row(align=True)
     row.scale_y = 1.3
