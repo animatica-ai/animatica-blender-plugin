@@ -1239,6 +1239,12 @@ class ANIMATICA_OT_accept(Operator):
                 # own copy of the action, which has them, instead of stripping
                 # GENERATED keys. Keys the artist typed over them are theirs.
                 preview_session.promote_edits(arm.animation_data.action)
+                # What the take shows is kept, as a normal Accept keeps it: the
+                # travel re-pathed onto an edited trajectory stays in the keys,
+                # the original keys kept for switching back go, and so does the
+                # curve. Left, the curve went on rewriting the accepted action,
+                # and the next take's In place put those old keys back over it.
+                _keep_inplace(arm, [arm.animation_data.action])
                 preview_session.finish(context, arm, accepted=True)
                 s.source_action_name = ""
                 s.is_previewing = False
