@@ -272,85 +272,74 @@ def _animatica_motion_actions() -> list:
 _INPLACE_CONSTRAINT_NAME = "Animatica_InPlace"
 
 
+def _drop_legacy_inplace_constraint(armature_obj) -> None:
+    """Remove the Limit Location constraint In place used to add (files saved
+    with an older version may still carry one)."""
+    if armature_obj is None or armature_obj.type != 'ARMATURE':
+        return
+    for pb in armature_obj.pose.bones:
+        con = pb.constraints.get(_INPLACE_CONSTRAINT_NAME)
+        if con is not None:
+            pb.constraints.remove(con)
+
+
+def _inplace_spans(armature_obj, action) -> list:
+    """What In place reads, per stretch: ``(first, last, loop)``. One per prompt
+    block of the preview, else the loop's cycle, else the whole action."""
+    import json as _json
+    raw = armature_obj.get("animatica_pending_block_ranges")
+    try:
+        blocks = [(int(r[0]), int(r[1])) for r in _json.loads(raw)] if raw else []
+    except (TypeError, ValueError):
+        blocks = []
+    if len(blocks) >= 2:
+        return [(fs, fe, False) for fs, fe in blocks]
+    looped = action.get("animatica_loop")
+    if looped is not None and "start" in looped and "cut" in looped:
+        return [(int(looped["start"]), int(looped["cut"]), True)]
+    lo, hi = action.frame_range
+    return [(int(round(lo)), int(round(hi)), False)]
+
+
 def _apply_inplace_constraint(armature_obj, enabled: bool) -> None:
-    """Add or remove a Limit Location constraint that holds the root bone's
-    head at its rest position on the ground plane, in world space.
+    """In place on the take showing: its travel taken out, or put back.
 
-    World space, not the bone's own axes. It used to pin the root's local X
-    and Z to 0, which is the ground plane only when the root bone rests level.
-    Cesium Man's rests tilted 4.6 degrees, so its "forward" channel also
-    carries height: zeroing it took the travel away and lifted the body up to
-    8 cm, and the feet floated. Pinning world X and Y leaves every bit of
-    height alone.
+    The travel is the path the character moves along, found from its centre of
+    mass with the gait taken out and fitted with the simplest trajectory a game
+    can re-apply (a line, an arc, or one of those eased); see inplace.py. Only
+    that is removed. The pelvis keeps its sway and surge, heights are
+    untouched, and an arc's turn comes out with it. The root used to be pinned
+    on the ground plane instead, which removed the sway and surge too: a game
+    moving the character at the walk's speed then saw the feet slide twice as
+    much.
 
-    Non-destructive: fcurves remain untouched, so flipping the toggle off
-    restores the original travel without re-generating. At Accept the result
-    is baked into the actions by :func:`_zero_root_xz_keyframes` and the
-    constraint removed.
+    Non-destructive: the original keys stay on the action, so switching off
+    puts the travel back exactly. At Accept the result is kept (see
+    :func:`_keep_inplace`). Only a generated take is touched, never an action
+    the artist made.
     """
     if armature_obj is None or armature_obj.type != 'ARMATURE':
         return
-    root_bone = next(
-        (pb for pb in armature_obj.pose.bones if pb.parent is None),
-        None,
-    )
-    if root_bone is None:
+    from . import inplace
+    _drop_legacy_inplace_constraint(armature_obj)
+    ad = armature_obj.animation_data
+    action = ad.action if ad is not None else None
+    if action is None:
         return
-
-    existing = root_bone.constraints.get(_INPLACE_CONSTRAINT_NAME)
-    if enabled:
-        con = existing or root_bone.constraints.new('LIMIT_LOCATION')
-        con.name = _INPLACE_CONSTRAINT_NAME
-        spot = armature_obj.matrix_world @ root_bone.bone.head_local
-        con.owner_space = 'WORLD'
-        con.use_min_x = con.use_max_x = True
-        con.min_x = con.max_x = spot.x
-        con.use_min_y = con.use_max_y = True
-        con.min_y = con.max_y = spot.y
-        # World Z free: every bit of height (jumps, crouches, the bob) stays.
-        con.use_min_z = con.use_max_z = False
-        con.influence = 1.0
-        con.mute = False
-    else:
-        if existing is not None:
-            root_bone.constraints.remove(existing)
+    if not enabled:
+        inplace.restore(armature_obj, action)
+        return
+    if inplace.is_applied(action) or not _is_motion_bake_action(action):
+        return
+    inplace.apply(armature_obj, action, bpy.context.scene, _inplace_spans(armature_obj, action))
 
 
-def _zero_root_xz_keyframes(action, armature_obj) -> int:
-    """Take the root's travel on the ground out of ``action``, keeping its height.
-
-    Used at Accept time when In place is on, so the final actions carry no
-    travel as inert keyframe data. Worked out in world space from all three
-    location channels together, for the same reason as the live constraint:
-    on a root bone that rests tilted, zeroing two of its own channels also
-    changed its height. Returns the number of fcurves modified.
-    """
-    target_path = _root_location_data_path(armature_obj)
-    root = next((pb for pb in armature_obj.pose.bones if pb.parent is None), None)
-    if target_path is None or root is None:
-        return 0
-    curves = {fc.array_index: fc for fc in constraints_ui.iter_action_fcurves(action)
-              if fc.data_path == target_path}
-    if set(curves) != {0, 1, 2}:
-        return 0
-    to_world = armature_obj.matrix_world.to_3x3() @ root.bone.matrix_local.to_3x3()
-    from_world = to_world.inverted()
-    frames = sorted({round(k.co.x) for fc in curves.values() for k in fc.keyframe_points})
-    new = {}
-    for f in frames:
-        offset = to_world @ Vector([curves[i].evaluate(f) for i in range(3)])
-        new[f] = from_world @ Vector((0.0, 0.0, offset.z))
-    for i, fc in curves.items():
-        for kp in fc.keyframe_points:
-            v = new.get(round(kp.co.x))
-            if v is None:
-                continue
-            d = v[i] - kp.co[1]
-            kp.co[1] = v[i]
-            kp.handle_left[1] += d
-            kp.handle_right[1] += d
-        fc.update()
-    return len(curves)
+def _keep_inplace(armature_obj, actions) -> None:
+    """Accept: the take stays in place; the original keys kept for switching back go."""
+    from . import inplace
+    for a in actions:
+        inplace.forget(a)
+    _drop_legacy_inplace_constraint(armature_obj)
 
 
 def _split_action_into_blocks(
@@ -618,6 +607,15 @@ def bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int, 
             anchor_frames=anchor_frames,
         )
     skipped = list(action.get("animatica_skipped_joints") or [])
+    # The server's travel trajectory for this sample, if it sent one (MMCP
+    # supports_trajectory): In place uses it (see inplace.py).
+    samples = gltf_to_blender.read_extension_metadata(result).get("samples") or []
+    traj = samples[sample_index].get("trajectory") if 0 <= sample_index < len(samples) else None
+    if isinstance(traj, dict) and traj.get("position") and not spliced:
+        import json as _json
+        action["animatica_server_trajectory"] = _json.dumps({**traj, "frame_start": int(gen_start)})
+    elif "animatica_server_trajectory" in action:
+        del action["animatica_server_trajectory"]
 
     # Splice, don't replace. The bake covers only the window the prompt blocks
     # asked for, so on its own the preview would be that window and nothing
@@ -658,12 +656,6 @@ def bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int, 
             print(f"[animatica] loop: {cycle} frames, seam {done['seam_deg']:.1f} deg, "
                   f"turned {done['turned_deg']:.1f} deg straight")
 
-    # In-place mode: a Limit Location constraint on the root pins the character
-    # on the ground plane while vertical motion still plays. Toggling the
-    # property afterwards adds/removes it live via its update callback; this is
-    # the "toggle was already on when the bake completed" case.
-    _apply_inplace_constraint(arm, enabled=bool(getattr(settings, "inplace", False)))
-
     if block_ranges:
         # Stash split metadata for Accept. Blender's ID-property arrays are
         # homogeneous numerics-only, which rules out a list-of-(int, int, str)
@@ -677,6 +669,11 @@ def bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int, 
         # Single-block / control-rig path: drop any stale stash from a prior
         # multi-block preview that is being overwritten in place.
         del arm["animatica_pending_block_ranges"]
+
+    # In place, if it was on when the bake completed: the travel comes out now,
+    # block by block (hence after the stash above). Toggling it afterwards does
+    # the same live via its update callback.
+    _apply_inplace_constraint(arm, enabled=bool(getattr(settings, "inplace", False)))
     return action, skipped
 
 
@@ -1049,7 +1046,7 @@ class ANIMATICA_OT_accept(Operator):
                 # it. Pushing to NLA here would detach the action they are
                 # working in and hand back a strip instead.
                 del arm["animatica_spliced_in_place"]
-                _apply_inplace_constraint(arm, enabled=False)
+                _drop_legacy_inplace_constraint(arm)
                 if "animatica_pending_block_ranges" in arm:
                     del arm["animatica_pending_block_ranges"]
                 s.source_action_name = ""
@@ -1078,6 +1075,11 @@ class ANIMATICA_OT_accept(Operator):
 
             actions_to_push: list = []
 
+            # In place: the take is already in place if the toggle was on
+            # while it showed; make sure of it before it is split into blocks.
+            if bool(getattr(s, "inplace", False)) and preview_action is not None:
+                _apply_inplace_constraint(arm, enabled=True)
+
             if len(block_ranges) >= 2 and preview_action is not None:
                 # Multi-block: build the per-block actions from the preview's
                 # fcurves, drop the preview, push the splits.
@@ -1101,20 +1103,11 @@ class ANIMATICA_OT_accept(Operator):
                 arm.animation_data.action = None
 
             if actions_to_push:
-                # If In place was on during preview, bake it: zero the X /
-                # Z keyframes on every per-block action's root-bone
-                # location fcurves, then remove the constraint. End state
-                # is travel-free fcurve data on disk — survives across
-                # regenerations, exports, and constraint stack edits.
-                if bool(getattr(s, "inplace", False)):
-                    for a in actions_to_push:
-                        _zero_root_xz_keyframes(a, arm)
-
                 _push_actions_to_nla(arm, actions_to_push)
 
-            # Always pull the constraint after Accept — its job is done
-            # (either we baked the in-place state or the toggle was off).
-            _apply_inplace_constraint(arm, enabled=False)
+            # The accepted actions keep what they show: in place or travelling.
+            # The original keys kept for switching back are dropped.
+            _keep_inplace(arm, actions_to_push)
 
             if "animatica_pending_block_ranges" in arm:
                 del arm["animatica_pending_block_ranges"]
@@ -1168,8 +1161,9 @@ class ANIMATICA_OT_reject(Operator):
         # cleared every Animatica track: accept a wave, reject a walk, and
         # the wave was gone too.)
 
-        # Drop any in-place constraint left over from preview state.
-        _apply_inplace_constraint(arm, enabled=False)
+        # The take goes, and its in-place state with it; only a constraint
+        # left by an older version needs removing.
+        _drop_legacy_inplace_constraint(arm)
 
         # Pending-block-ranges stash is only meaningful for Accept.
         if "animatica_pending_block_ranges" in arm:
