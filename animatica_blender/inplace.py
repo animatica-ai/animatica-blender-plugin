@@ -391,6 +391,11 @@ def _split_error(xy, path):
     tan = np.where(ok[:, None], tan / np.maximum(ln, 1e-12), 0)
     for j in range(2):                        # standing still: the nearest direction
         tan[:, j] = np.interp(np.arange(len(tan)), idx, tan[idx, j])
+    # where it stops and turns back, the two sides cancel: take the nearest real one
+    weak = np.linalg.norm(tan, axis=1) < 0.5
+    if weak.any():
+        near = idx[np.abs(np.arange(len(tan))[weak, None] - idx[None, :]).argmin(1)]
+        tan[weak] = tan[near]
     tan /= np.maximum(np.linalg.norm(tan, axis=1, keepdims=True), 1e-12)
     d = xy - path
     along = (d * tan).sum(1)
