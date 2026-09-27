@@ -749,7 +749,9 @@ def _bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int,
     # back in so Generate reads as "this stretch changed" rather than
     # "everything else was thrown away". Reject is unaffected: these keep their
     # original type, and it strips only GENERATED ones.
-    src_action = bpy.data.actions.get(source_action_name) if source_action_name else None
+    from . import preview_session
+    src_action = (preview_session.source_of(arm) if preview_session.get(arm) is not None
+                  else bpy.data.actions.get(source_action_name) if source_action_name else None)
     if not spliced and src_action is not None and src_action is not action:
         carried = constraints_ui.carry_keyframes_outside_range(
             src_action, action, (gen_start, gen_end),
@@ -872,9 +874,23 @@ class ANIMATICA_OT_generate(Operator):
         self._regen_preview = None
         self._regen_edits = []
 
+        # The user's action, as the take's preview session keeps it (by
+        # reference: renamed meanwhile, it is still the one); by name for a
+        # take from an older version. A session that no longer holds is
+        # dropped first (see preview_session.stale).
+        from . import preview_session
+        if preview_session.get(arm) is not None:
+            why = preview_session.stale(context, arm)
+            if why:
+                preview_session.drop(arm, why)
         src_name = settings.source_action_name
+        if preview_session.get(arm) is not None:
+            src = preview_session.source_of(arm)
+            src_name = src.name if src is not None else ""
+            settings.source_action_name = src_name
+        else:
+            src = bpy.data.actions.get(src_name) if src_name else None
         if src_name:
-            src = bpy.data.actions.get(src_name)
             if src is not None and _is_motion_bake_action(src):
                 settings.source_action_name = ""
                 src = None

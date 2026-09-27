@@ -323,10 +323,15 @@ def _target_armature_update(self, context):
     # review when that rig is picked again. Clearing it stranded the take:
     # no Reject, and the user's action lost on the next save.
     from . import preview_session
+    if preview_session._copied_from(new_arm, preview_session.get(new_arm) or {}):
+        # A duplicate of a character whose take waits: that take is not this one's.
+        preview_session.drop(new_arm, "a copy of another character's")
     waiting = preview_session.get(new_arm)
     if waiting is not None and not new_arm.get("animatica_batch_take"):
+        preview_session.owner_name(new_arm)
+        src = preview_session.source_of(new_arm)
         settings.is_previewing = True
-        settings.source_action_name = waiting.get("source", "")
+        settings.source_action_name = src.name if src is not None else ""
     else:
         settings.is_previewing = False
         settings.source_action_name = ""

@@ -35,6 +35,8 @@ from .constraints_ui import (
 )
 
 _KEY = "animatica_preview_session"
+#: the session's actions, by reference: ``{"source": Action, ...}``
+_IDS = "animatica_preview_actions"
 _BASELINE = "animatica_baked"
 #: A splice's copy of the user's action. The leading dot keeps it out of
 #: Blender's action pickers.
@@ -107,6 +109,110 @@ def _restore_pose(arm, pose: dict) -> None:
             continue
 
 
+# --- the actions it keeps ------------------------------------------------------
+#
+# By reference (ID properties pointing at the actions), not by name: the
+# artist renaming their own action while the take waited made Reject find
+# nothing to go back to. The names stay in the session too, for a session
+# written by 0.6.0-preview8, which had only those.
+
+_ROLES = ("source", "active", "backup", "spliced")
+
+
+def _ids(arm):
+    try:
+        return arm.get(_IDS)
+    except ReferenceError:
+        return None
+
+
+def _action(arm, data, role):
+    """The session's *role* action (see _ROLES), or None."""
+    ids = _ids(arm)
+    if ids is not None:
+        a = ids.get(role)
+        return a if isinstance(a, bpy.types.Action) else None
+    name = (data or {}).get(role) or ""
+    return bpy.data.actions.get(name) if name else None
+
+
+def _set_action(arm, data, role, action) -> None:
+    data[role] = action.name if action is not None else ""
+    if _ids(arm) is None:
+        arm[_IDS] = {}
+    ids = arm[_IDS]
+    if action is None:
+        if role in ids:
+            del ids[role]
+    else:
+        ids[role] = action
+
+
+# --- whether it still holds -----------------------------------------------------
+
+def _copied_from(arm, data) -> bool:
+    """True when *arm* only carries a copy of another character's session: a
+    duplicate (Shift+D copies custom properties) of a character whose take
+    is waiting. The session is the original's; the copy's take is not one."""
+    token = data.get("token")
+    owner = data.get("owner")
+    if not token or not owner or owner == arm.name:
+        return False
+    other = bpy.data.objects.get(owner)
+    if other is None or other == arm:
+        return False
+    theirs = get(other)
+    return theirs is not None and theirs.get("token") == token
+
+
+def stale(context, arm) -> str:
+    """Why the session on *arm* is not one to carry on with, or ``""``.
+
+    It is carried on by a regenerate or a variation -- also when the take was
+    left waiting while another character was picked, or came in with the
+    character from another file: it holds its own actions, so Reject still
+    goes back to the right one. It is not carried on when the character only
+    carries a copy of another's (a duplicate), or when the user's action it
+    would restore has been deleted since. Letting either go puts nothing at
+    risk: a copy holds nothing of its own, and a deleted action is gone."""
+    data = get(arm)
+    if data is None:
+        return ""
+    if _copied_from(arm, data):
+        return "a copy of another character's"
+    if data.get("source") and _action(arm, data, "source") is None:
+        return "the action it would restore is gone"
+    return ""
+
+
+def drop(arm, why: str = "") -> None:
+    """Forget the session on *arm* without putting anything back: the take
+    showing stays as it is. What it kept alive (the user's action's fake user,
+    the splice copy) is let go, unless another character's session holds it."""
+    data = get(arm)
+    if data is None:
+        return
+    if why:
+        print(f"[animatica] preview: dropped the waiting take's session on {arm.name!r} ({why})")
+    if not _copied_from(arm, data):
+        _release(arm, data)
+    _clear(arm)
+
+
+def _clear(arm) -> None:
+    for k in (_KEY, _IDS):
+        if k in arm:
+            del arm[k]
+
+
+def owner_name(arm) -> None:
+    """Keep the recorded owner in step with a renamed character."""
+    data = get(arm)
+    if data is not None and data.get("owner") != arm.name and not _copied_from(arm, data):
+        data["owner"] = arm.name
+        _put(arm, data)
+
+
 # --- opening and closing ------------------------------------------------------
 
 def begin(context, arm, source) -> bool:
@@ -117,20 +223,33 @@ def begin(context, arm, source) -> bool:
     while a fresh take previews, which leaves it with no users: a save then
     dropped it and Reject had nothing to go back to. It gets a fake user for
     as long as the take waits, and its own flag back afterwards.
+
+    A session found that no longer holds (see :func:`stale`) is dropped and a
+    new one opened: carried on, the new take would be rejected back to
+    another character's action, or to one the user deleted.
     """
     if get(arm) is not None:
-        return False
+        why = stale(context, arm)
+        if not why:
+            owner_name(arm)
+            return False
+        drop(arm, why)
+    import uuid
     ad = arm.animation_data
     active = ad.action if ad is not None else None
     scene = context.scene
     data = {
-        "source": source.name if source is not None else "",
+        "version": 2,
+        "token": uuid.uuid4().hex,
+        "owner": arm.name,
         "source_fake": bool(source.use_fake_user) if source is not None else False,
-        "active": active.name if active is not None else "",
         "pose": _pose_snapshot(arm),
         "frame_range": [int(scene.frame_start), int(scene.frame_end)],
-        "backup": "",
     }
+    _clear(arm)
+    _set_action(arm, data, "source", source)
+    _set_action(arm, data, "active", active)
+    data["backup"] = ""
     if source is not None:
         source.use_fake_user = True
     _put(arm, data)
@@ -143,36 +262,52 @@ def backup_before_splice(arm, action) -> None:
     data = get(arm)
     if data is None:
         return
-    if data.get("backup") and bpy.data.actions.get(data["backup"]) is not None:
+    if _action(arm, data, "backup") is not None:
         return
     copy = action.copy()
     copy.name = (_BACKUP_PREFIX + action.name)[:63]
     copy.use_fake_user = True
     if _BASELINE in copy:
         del copy[_BASELINE]
-    data["backup"] = copy.name
-    data["spliced"] = action.name
+    _set_action(arm, data, "backup", copy)
+    _set_action(arm, data, "spliced", action)
     _put(arm, data)
 
 
 def backup_of(arm):
     data = get(arm)
-    name = (data or {}).get("backup")
-    return bpy.data.actions.get(name) if name else None
+    return _action(arm, data, "backup") if data is not None else None
 
 
 def source_of(arm):
     data = get(arm)
-    name = (data or {}).get("source")
-    return bpy.data.actions.get(name) if name else None
+    return _action(arm, data, "source") if data is not None else None
 
 
-def _release(data: dict) -> None:
-    source = bpy.data.actions.get(data.get("source") or "")
-    if source is not None:
+def spliced_of(arm):
+    data = get(arm)
+    return _action(arm, data, "spliced") if data is not None else None
+
+
+def _held_elsewhere(arm, action) -> bool:
+    """Whether another character's session keeps *action* too."""
+    for obj in bpy.data.objects:
+        if obj == arm or obj.type != 'ARMATURE':
+            continue
+        data = get(obj)
+        if data is None or _copied_from(obj, data):
+            continue
+        if any(_action(obj, data, r) == action for r in ("source", "backup")):
+            return True
+    return False
+
+
+def _release(arm, data: dict) -> None:
+    source = _action(arm, data, "source")
+    if source is not None and not _held_elsewhere(arm, source):
         source.use_fake_user = bool(data.get("source_fake"))
-    backup = bpy.data.actions.get(data.get("backup") or "")
-    if backup is not None:
+    backup = _action(arm, data, "backup")
+    if backup is not None and not _held_elsewhere(arm, backup):
         bpy.data.actions.remove(backup)
 
 
@@ -183,6 +318,11 @@ def finish(context, arm, *, accepted: bool) -> None:
     data = get(arm)
     if data is None:
         return
+    if _copied_from(arm, data):
+        # A duplicate's copy of another character's session: that one is
+        # still waiting, and keeps what it holds.
+        _clear(arm)
+        return
     if not accepted:
         _restore_pose(arm, data.get("pose") or {})
         loop_range = data.get("loop_range")
@@ -190,11 +330,11 @@ def finish(context, arm, *, accepted: bool) -> None:
         if loop_range and [scene.frame_start, scene.frame_end] == list(loop_range):
             # The loop set the range to its cycle; the take is gone, so is that.
             scene.frame_start, scene.frame_end = data["frame_range"]
-    _release(data)
+    _release(arm, data)
     ad = arm.animation_data
     if ad is not None and ad.action is not None and _BASELINE in ad.action:
         del ad.action[_BASELINE]
-    del arm[_KEY]
+    _clear(arm)
 
 
 def abort(context, arm) -> None:
@@ -205,9 +345,9 @@ def abort(context, arm) -> None:
     if data is None:
         return
     ad = arm.animation_data
-    before = bpy.data.actions.get(data.get("active") or "")
+    before = _action(arm, data, "active")
     made = ad.action if ad is not None else None
-    if backup_of(arm) is not None and made is not None and made.name == data.get("spliced"):
+    if backup_of(arm) is not None and made is not None and made == _action(arm, data, "spliced"):
         before = restore_backup(arm) or before
         made = None
     if ad is not None:
@@ -216,6 +356,35 @@ def abort(context, arm) -> None:
             and not made.use_fake_user):
         bpy.data.actions.remove(made)
     finish(context, arm, accepted=False)
+
+
+def sweep() -> int:
+    """After a file loads: drop the sessions only copied from another
+    character's, and the splice copies no session refers to any more (a
+    character deleted mid-preview; a take whose Reject never ran). Returns
+    how many things went."""
+    n = 0
+    held = set()
+    for obj in bpy.data.objects:
+        if obj.type != 'ARMATURE' or obj.library is not None:
+            continue
+        data = get(obj)
+        if data is None:
+            continue
+        if _copied_from(obj, data):
+            _clear(obj)
+            n += 1
+            continue
+        bk = _action(obj, data, "backup")
+        if bk is not None:
+            held.add(bk.name)
+    for a in [a for a in bpy.data.actions
+              if a.name.startswith(_BACKUP_PREFIX) and a.library is None and a.name not in held]:
+        users = a.users - (1 if a.use_fake_user else 0)
+        if users <= 0:
+            bpy.data.actions.remove(a)
+            n += 1
+    return n
 
 
 def _copy_keys(src_fc, dst_fc) -> None:
@@ -249,7 +418,7 @@ def restore_backup(arm):
     backup = backup_of(arm)
     if data is None or backup is None:
         return None
-    action = bpy.data.actions.get(data.get("spliced") or "")
+    action = _action(arm, data, "spliced")
     if action is None:
         return None
     saved = {(fc.data_path, fc.array_index): fc for fc in iter_action_fcurves(backup)}
@@ -274,7 +443,7 @@ def restore_backup(arm):
         v = backup[k]
         action[k] = v.to_dict() if hasattr(v, "to_dict") else v.to_list() if hasattr(v, "to_list") else v
     bpy.data.actions.remove(backup)
-    data["backup"] = ""
+    _set_action(arm, data, "backup", None)
     _put(arm, data)
     return action
 
@@ -597,12 +766,11 @@ def fold_edits(arm, preview, states=None) -> int:
     if not states:
         return 0
     promote_edits(preview)
-    data = get(arm) or {}
     backup = backup_of(arm)
-    if backup is not None and preview is not None and preview.name == data.get("spliced"):
+    if backup is not None and preview is not None and preview == spliced_of(arm):
         target = backup
     else:
-        target = bpy.data.actions.get(data.get("source") or "")
+        target = source_of(arm)
     if target is None or target is preview:
         return 0
     return apply_edits(states, target)

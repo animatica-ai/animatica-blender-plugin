@@ -1286,7 +1286,8 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             self.report({'ERROR'}, "Active action isn't a Animatica preview — generate first")
             return {'CANCELLED'}
 
-        source_action = (
+        from . import preview_session
+        source_action = preview_session.source_of(arm) or (
             bpy.data.actions.get(s.source_action_name)
             if s.source_action_name
             else None

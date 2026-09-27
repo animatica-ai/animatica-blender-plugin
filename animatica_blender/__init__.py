@@ -105,6 +105,15 @@ def _animatica_load_post(dummy):
     key_poses._rebuild_first_at = None
     root_edit._pending["at"] = None
 
+    # Sessions only copied onto a duplicate, and splice copies of the user's
+    # action that no waiting take refers to any more (each pinned with a fake
+    # user, so they would stay in the file for good).
+    from . import preview_session
+    try:
+        preview_session.sweep()
+    except Exception as exc:  # noqa: BLE001 -- never break a file load
+        print(f"[animatica] preview: could not tidy waiting takes: {exc}")
+
     from . import mmcp_client
     mmcp_client.connect_async()
 
