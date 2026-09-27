@@ -45,6 +45,7 @@ from . import autopose_sync
 from . import curve_edit
 from . import key_poses
 from . import root_edit
+from . import game_export
 from . import pose_edit
 from . import path_follow
 from . import timeline_overlay
@@ -165,6 +166,7 @@ def register():
     autopose_sync.register()
     key_poses.register()
     root_edit.register()
+    game_export.register()
     pose_edit.register()
     curve_edit.register()
     timeline_operators.register()
@@ -209,6 +211,7 @@ def unregister():
     timeline_operators.unregister()
     curve_edit.unregister()
     pose_edit.unregister()
+    game_export.unregister()
     root_edit.unregister()
     key_poses.unregister()
     autopose_sync.unregister()

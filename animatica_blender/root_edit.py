@@ -1,15 +1,20 @@
-"""The root trajectory, as a curve the artist can edit.
+"""The root trajectory, as a curve the artist can edit: a new path for the take.
 
-In place takes out the take's root trajectory, fitted from its centre of mass
-(see inplace.py). When the fit is not what the artist wants, *Edit Root
-Trajectory* turns it into a Bezier curve on the floor. From then on the curve
-is the trajectory: In place takes out the curve instead of the fit, live as
-it is edited, and the viewport's Root Trajectory line follows it.
+*Edit Root Trajectory* turns the take's root trajectory (fitted from its
+centre of mass, see inplace.py) into a Bezier curve on the floor. Editing it
+moves the character: with In place off the take is re-pathed onto the curve,
+live as it is edited -- its own trajectory taken out and the curve's put in,
+so the body, its steps and its sway ride along the new path. With In place on
+nothing changes in the pose (the take's own trajectory is what comes out,
+whatever path it is sent along), but the curve is the root motion a game
+export gives it.
 
-Only the shape comes from the curve. The timing stays the fit's: each frame
+Only the shape comes from the curve. The timing stays the take's: each frame
 keeps how far along the path it was (as a fraction of the length), so a
 character that eased into a run still does, along the new path. The heading
-changes by as much as the curve's direction does from the fit's.
+changes by as much as the curve's direction does from the fit's. The feet are
+not re-solved: a sharp new bend slides them in proportion (keep bends gentle,
+or clean up with the post-processing pass).
 
 The curve belongs to one action (an ID property pointing at it). Reset
 removes it, and Accept removes it too, since by then the edit is in the keys.
@@ -176,8 +181,9 @@ def _polyline(obj, spline) -> np.ndarray | None:
 
 
 def overlay(action, spans: list, fps: float) -> list:
-    """*spans* (from inplace's fit) with each edited one's path replaced by the
-    curve's, at the same place along it each frame. The rest pass through."""
+    """*spans* (from inplace's fit), each edited one with the curve's path
+    alongside as ``"edit"`` (``xy``, ``yaw``, ``prm``), at the same place
+    along it each frame. The fit itself is left as it is."""
     obj = find(action)
     if obj is None:
         return spans
@@ -201,9 +207,10 @@ def overlay(action, spans: list, fps: float) -> list:
         at = np.asarray(got[0]["e"], float) * L
         xy = np.stack([np.interp(at, cum, poly[:, j]) for j in range(2)], 1)
         yaw = span["yaw"] + inplace._tangent_yaw(xy, fps) - inplace._tangent_yaw(span["xy"], fps)
-        out.append({**span, "xy": xy, "yaw": yaw, "model": "edited",
-                    "prm": {"source": "edited", "length_m": round(L, 3),
-                            "off_fit_cm": round(float(np.linalg.norm(xy - span["xy"], axis=1).max()) * 100, 1)}})
+        out.append({**span, "edit": {
+            "xy": xy, "yaw": yaw,
+            "prm": {"source": "edited", "length_m": round(L, 3),
+                    "off_fit_cm": round(float(np.linalg.norm(xy - span["xy"], axis=1).max()) * 100, 1)}}})
     return out
 
 
@@ -246,8 +253,9 @@ def _timer():
 
 
 def refresh(scene, *, reuse: bool = True) -> None:
-    """The take showing, with its (edited) trajectory taken out again if In
-    place is on, and the viewport's line redrawn."""
+    """The take showing, after its path was edited (or reset): re-pathed onto
+    the curve with In place off, the root motion kept with it on; the
+    viewport's line redrawn."""
     from . import inplace, key_poses, operators
     settings = getattr(scene, "animatica", None)
     arm = getattr(settings, "target_armature", None)
@@ -255,15 +263,22 @@ def refresh(scene, *, reuse: bool = True) -> None:
     action = ad.action if ad is not None else None
     if action is None:
         return
-    if inplace.is_applied(action):
-        key_poses._baking = True
-        try:
-            inplace.apply(arm, action, scene, operators._inplace_spans(arm, action), reuse=reuse)
-        finally:
-            key_poses._baking = False
-        key_poses.request_rebuild()
-    else:
+    mode = inplace.applied_mode(action)
+    edited = find(action) is not None
+    if mode is None and not edited:
         key_poses.request_root_refresh()
+        return
+    key_poses._baking = True
+    try:
+        if mode == "in_place":
+            inplace.apply(arm, action, scene, operators._inplace_spans(arm, action), reuse=reuse)
+        elif edited:
+            inplace.apply(arm, action, scene, operators._inplace_spans(arm, action), reuse=reuse, mode="repath")
+        else:
+            inplace.restore(arm, action)              # re-pathed, and the curve is gone
+    finally:
+        key_poses._baking = False
+    key_poses.request_rebuild()
 
 
 def register() -> None:

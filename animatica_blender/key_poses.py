@@ -322,7 +322,7 @@ def _root_path_signature(arm, action):
     if arm is None or action is None:
         return None
     from . import inplace
-    return (arm.name, action.name, inplace.is_applied(action))
+    return (arm.name, action.name, inplace.applied_mode(action))
 
 
 # ---------------------------------------------------------------------------
