@@ -516,12 +516,14 @@ def _shape(model, path, T, tk):
     order along it), and the shape's numbers; None if it does not apply."""
     n = len(path)
     if model == "still":
-        return np.repeat(path.mean(0)[None], n, 0), {}
+        return np.repeat(path.mean(0)[None], n, 0), {}, None
     if model == "line":
         m = path.mean(0)
         _, _, vt = np.linalg.svd(path - m, full_matrices=False)
         u = vt[0] if vt[0] @ (path[-1] - path[0]) >= 0 else -vt[0]
-        return m + ((path - m) @ u)[:, None] * u, {"heading_deg": round(math.degrees(math.atan2(u[0], -u[1])), 1)}
+        t = (path - m) @ u
+        guide = m + np.linspace(t.min() - _EXTEND, t.max() + _EXTEND, 400)[:, None] * u
+        return m + t[:, None] * u, {"heading_deg": round(math.degrees(math.atan2(u[0], -u[1])), 1)}, guide
     if model == "arc":
         circ = _circle(path)
         if circ is None:
@@ -532,7 +534,12 @@ def _shape(model, path, T, tk):
         if float(ln.min()) < 1e-6:
             return None
         phi = np.unwrap(np.arctan2(d[:, 1], d[:, 0]))
-        return c + r * d / ln, {"radius_m": round(r, 2), "turned_deg": round(math.degrees(phi[-1] - phi[0]), 1)}
+        ext = min(math.pi / 2, _EXTEND / r)            # round on past both ends
+        a = np.linspace(phi.min() - ext, phi.max() + ext, 720)
+        if phi[-1] < phi[0]:
+            a = a[::-1]
+        guide = c + r * np.stack([np.cos(a), np.sin(a)], 1)
+        return c + r * d / ln, {"radius_m": round(r, 2)}, guide
     if model == "bezier":
         seg = np.linalg.norm(np.diff(path, axis=0), axis=1)
         L = seg.sum()
@@ -542,7 +549,7 @@ def _shape(model, path, T, tk):
         e = np.clip(_pchip(tk, _monotone_keys(e_raw, T, tk), T), 0, 1)
         Bm = np.stack([(1 - e) ** 3, 3 * (1 - e) ** 2 * e, 3 * (1 - e) * e ** 2, e ** 3], 1)
         Pc, *_ = np.linalg.lstsq(Bm, path, rcond=None)
-        return Bm @ Pc, {"control_points": [[round(float(a), 3) for a in p] for p in Pc]}
+        return Bm @ Pc, {"control_points": [[round(float(a), 3) for a in p] for p in Pc]}, _extend(_bezier(Pc))
     return None
 
 
@@ -560,42 +567,51 @@ TIMING_SMOOTH = 0.1
 _EXTEND = 3.0
 
 
-def _retime(xy, com, fps, loop):
-    """*xy*, a shape's points in order along it, re-timed: each frame where
-    the body (*com*, per frame) is along the shape."""
-    keep = np.concatenate([[True], np.linalg.norm(np.diff(xy, axis=0), axis=1) > 1e-6])
-    P = xy[keep]
+def _bezier(Pc, n=400):
+    e = np.linspace(0.0, 1.0, n)[:, None]
+    return (1 - e) ** 3 * Pc[0] + 3 * (1 - e) ** 2 * e * Pc[1] + 3 * (1 - e) * e ** 2 * Pc[2] + e ** 3 * Pc[3]
+
+
+def _extend(P):
+    """A path's points in order, run straight on past both ends (_EXTEND m)."""
+    keep = np.concatenate([[True], np.linalg.norm(np.diff(P, axis=0), axis=1) > 1e-6])
+    P = P[keep]
     if len(P) < 2:
-        return xy
-    seg = np.linalg.norm(np.diff(P, axis=0), axis=1)
-    if float(seg.sum()) < 1e-3:
-        return xy
+        return P
 
     def tangent(a, b):
         d = b - a
         return d / max(float(np.linalg.norm(d)), 1e-9)
     k = max(1, len(P) // 20)
-    P = np.vstack([P[0] - tangent(P[0], P[k]) * _EXTEND, P, P[-1] + tangent(P[-1 - k], P[-1]) * _EXTEND])
-    D = np.diff(P, axis=0)
+    return np.vstack([P[0] - tangent(P[0], P[k]) * _EXTEND, P, P[-1] + tangent(P[-1 - k], P[-1]) * _EXTEND])
+
+
+def _retime(guide, com, fps, loop):
+    """Each frame where the body (*com*, per frame) is along a shape: its
+    *guide* (the shape's points in order, run on past its ends), at the
+    nearest point to the body's COM."""
+    if guide is None or len(guide) < 2 or float(np.linalg.norm(np.diff(guide, axis=0), axis=1).sum()) < 1e-3:
+        return None
+    D = np.diff(guide, axis=0)
     L = np.linalg.norm(D, axis=1)
     cum = np.concatenate([[0.0], np.cumsum(L)])
     c = np.stack([_box(com[:, j], np.full(len(com), TIMING_SMOOTH * fps), loop) for j in range(2)], 1)
-    A = P[:-1]
+    A = guide[:-1]
     u = np.clip(((c[:, None, :] - A[None]) * D[None]).sum(-1) / np.maximum(L ** 2, 1e-12)[None], 0.0, 1.0)
     d2 = ((c[:, None, :] - (A[None] + u[..., None] * D[None])) ** 2).sum(-1)
     near = d2.argmin(1)
     at = cum[near] + u[np.arange(len(c)), near] * L[near]
-    return np.stack([np.interp(at, cum, P[:, j]) for j in range(2)], 1)
+    return np.stack([np.interp(at, cum, guide[:, j]) for j in range(2)], 1)
 
 
 def trajectory(body: Body):
     """The simplest shape within tolerance of the travel path, its points
     along it (timed by the travel path; _fit_spans times them by the body).
-    Returns (xy (n, 2), model name, its numbers)."""
+    Returns (xy (n, 2), model name, its numbers, its guide for _retime)."""
     path, labels = body.travel_path()
     n, fps = len(path), body.fps
     if n < 3:
-        return path, "still", {}
+        return path, "still", {}, None
     T = np.arange(n) / fps
     dist = float(np.linalg.norm(np.diff(path, axis=0), axis=1).sum())
     tk = _key_times(labels, T)
@@ -606,7 +622,7 @@ def trajectory(body: Body):
         got = _shape(m, path, T, tk)
         if got is None:
             continue
-        xy, prm = got
+        xy, prm, guide = got
         err = np.linalg.norm(xy - path, axis=1)
         rms, mx = float(np.sqrt((err ** 2).mean())), float(err.max())
         if m == "still":
@@ -616,10 +632,10 @@ def trajectory(body: Body):
             ok = _within(xy, path, dist)
         prm = {**prm, "off_cm": round(float(np.sqrt((_split_error(xy, path)[1] ** 2).mean())) * 100, 1)}
         if ok:
-            return xy, m, prm
-        if best is None or rms < best[3]:
-            best = (xy, m, prm, rms)
-    return best[:3]
+            return xy, m, prm, guide
+        if best is None or rms < best[4]:
+            best = (xy, m, prm, guide, rms)
+    return best[:4]
 
 
 # --- the heading ----------------------------------------------------------------------
@@ -820,7 +836,7 @@ def _from_server(action, body, first, last):
     for k in ("speed", "turn_deg_s", "distance_keys_m", "key_times_s"):
         prm.pop(k, None)                 # an older server's timing: the body times it here
     model = str(t.get("model", "server")).replace(" + distance curve", "")
-    return xy, model, prm
+    return xy, model, prm, _extend(xy)
 
 
 def _set_key(fc, f, value):
@@ -969,9 +985,10 @@ def _fit_spans(arm, action, scene, spans, fps, *, reuse: bool = False):
         # a loop is a line or an arc that repeats: the server fitted the whole
         # take, not this cycle of it
         got = None if loop else _from_server(action, body, first, last)
-        xy, model, prm = got if got is not None else trajectory(body)
-        if model != "still":
-            xy = _retime(xy, body.com, fps, loop)
+        xy, model, prm, guide = got if got is not None else trajectory(body)
+        timed = _retime(guide, body.com, fps, loop) if model != "still" else None
+        if timed is not None:
+            xy = timed
         path, labels = body.travel_path()
         T = np.arange(len(path)) / fps
         yaw, how, facing0 = heading(body, labels, T, _key_times(labels, T), model == "still")
@@ -997,8 +1014,10 @@ def _fit_spans(arm, action, scene, spans, fps, *, reuse: bool = False):
             v = np.linalg.norm(np.gradient(xy, axis=0), axis=1) * fps
             prm = {**prm, "speed": round(float(v.mean()), 3),
                    "speed_range": [round(float(v.min()), 3), round(float(v.max()), 3)]}
-            if model == "arc":
-                prm["turn_deg_s"] = round(float(prm.get("turned_deg", 0.0)) / max(float(T[-1]), 1e-6), 2)
+            if model == "arc":         # the path's own turn (its direction's), not the body's facing
+                turned = math.degrees(float(_tangent_yaw(xy, fps)[-1]))
+                prm["turned_deg"] = round(turned, 1)
+                prm["turn_deg_s"] = round(turned / max(float(T[-1]), 1e-6), 2)
         out.append({"first": first, "last": last, "loop": bool(loop), "xy": xy, "yaw": yaw,
                     "model": model, "prm": prm, "S": S, "floor": body.floor, "heading": how,
                     "facing0": facing0, "markers": body.touchdowns(first), "support_z": body.support_z()})
