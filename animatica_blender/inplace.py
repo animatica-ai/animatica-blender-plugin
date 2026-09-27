@@ -41,6 +41,7 @@ Numpy only (Blender ships it; not scipy).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -964,6 +965,37 @@ def apply(arm, action, scene, spans, fps: float | None = None, *, reuse: bool = 
 _last_fit: dict = {"key": None, "spans": []}
 
 
+def clear_cache() -> None:
+    """Forget the last fit (a file load: the take it sampled is gone)."""
+    _last_fit["key"], _last_fit["spans"] = None, []
+
+
+def _digest(action) -> str:
+    """A hash of every key on *action* (where, and its handles): a fit is only
+    reused on the very take it sampled, not on another with the same names
+    (a file opened since, keys set or changed since)."""
+    h = hashlib.blake2b(digest_size=16)
+    from . import constraints_ui
+    for fc in constraints_ui.iter_action_fcurves(action):
+        kps = fc.keyframe_points
+        h.update(f"{fc.data_path}|{fc.array_index}|{len(kps)}|{int(fc.mute)}".encode())
+        if len(kps):
+            buf = np.empty(len(kps) * 2, np.float32)
+            for attr in ("co", "handle_left", "handle_right"):
+                kps.foreach_get(attr, buf)
+                h.update(buf.tobytes())
+    return h.hexdigest()
+
+
+def _fit_key(arm, action, spans, fps) -> tuple:
+    """What a fit was made from: which rig and action (this session's, not just
+    their names), where the rig is, and the keys themselves."""
+    uid = getattr(action, "session_uid", None) or action.as_pointer()
+    auid = getattr(arm, "session_uid", None) or arm.as_pointer()
+    return (auid, uid, arm.name, action.name, tuple(sorted(spans)), round(fps, 3),
+            tuple(round(v, 6) for row in arm.matrix_world for v in row), _digest(action))
+
+
 def _fit_spans(arm, action, scene, spans, fps, *, reuse: bool = False):
     """The trajectory of each span ``(first, last, loop)``: the server's path,
     laid onto the take, or one fitted here, and the heading the body faces
@@ -972,7 +1004,7 @@ def _fit_spans(arm, action, scene, spans, fps, *, reuse: bool = False):
     unless ``reuse`` finds it sampled already; writes nothing. Call on the take
     as generated (not in place): apply restores it first."""
     from . import root_edit
-    key = (arm.name, action.name, tuple(sorted(spans)), round(fps, 3), tuple(arm.matrix_world.col[3]))
+    key = _fit_key(arm, action, spans, fps)
     if reuse and _last_fit["key"] == key:
         return root_edit.overlay(action, _last_fit["spans"], fps)
     A = arm.matrix_world.copy()
