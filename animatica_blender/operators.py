@@ -817,6 +817,9 @@ class ANIMATICA_OT_generate(Operator):
         "Make motion from the prompts on the Timeline and the poses you keyed. "
         "Each run is a new take unless you lock a seed in Settings"
     )
+    # One undo step for the take, pushed when the bake finishes: Ctrl+Z after
+    # a generation goes back to before it, not one step further.
+    bl_options = {'REGISTER', 'UNDO'}
 
     _timer = None
     _thread: threading.Thread | None = None
@@ -1187,6 +1190,12 @@ class ANIMATICA_OT_accept(Operator):
         "Keep this take. It moves to the NLA track 'Animatica: Motion', "
         "replacing the take kept before; your own keys stay"
     )
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        s = context.scene.animatica
+        return s.is_previewing and not s.is_generating
 
     def execute(self, context):
         s = context.scene.animatica
@@ -1293,6 +1302,14 @@ class ANIMATICA_OT_reject(Operator):
         "Throw this take away and go back to what you had. Your own keys, "
         "including any you added while previewing, stay"
     )
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        # Nothing previewing, nothing to throw away: run anyway (F3, a
+        # script) it detached the user's own action.
+        s = context.scene.animatica
+        return s.is_previewing and not s.is_generating
 
     def execute(self, context):
         s   = context.scene.animatica
