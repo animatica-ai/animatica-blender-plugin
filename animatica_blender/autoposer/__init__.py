@@ -50,14 +50,17 @@ def _start_runtime_install():
 
     Both halves: the inference runtime and the model. Deferred a moment past
     registration because preferences are not readable while Blender is still
-    starting up, and skipped entirely when the artist has said not to.
+    starting up, and skipped unless the artist opted in (``auto_install_runtime``
+    is off by default) — otherwise the Download Autoposer button does it.
 
     Doing it now rather than on the first drag is the difference between a
     poser that is ready when reached for and one that answers the first grab
     with a download.
     """
     try:
-        if engine.prefs().auto_install_runtime:
+        # Opt-in: ~225 MB is not fetched at startup unless the artist said so,
+        # and never with Blender's online access switched off.
+        if engine.prefs().auto_install_runtime and engine.online():
             engine.ensure_runtime()
             engine.ensure_model()
         engine.preload_async()
