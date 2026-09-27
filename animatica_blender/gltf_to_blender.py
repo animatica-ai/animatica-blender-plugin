@@ -412,9 +412,14 @@ def splice_gltf_into_action(
                 fc.evaluate(fs_target - 1), fc.evaluate(fe_target + 1),
                 any(x < fs_target - 0.5 for x in xs), any(x > fe_target + 0.5 for x in xs),
             )
+    # The rotation a bone shows, whatever channels it uses: the splice turns
+    # every bone to quaternions, and a bone posed in Euler (or axis-angle)
+    # has a stale rotation_quaternion -- held from it, the bone snapped to
+    # that old rotation either side of the window.
     rest_values = {
         pb.name: {"location": tuple(pb.location),
-                  "rotation_quaternion": tuple(pb.rotation_quaternion)}
+                  "rotation_quaternion": tuple(pb.matrix_basis.to_quaternion())
+                  if pb.rotation_mode != 'QUATERNION' else tuple(pb.rotation_quaternion)}
         for pb in pose.bones
     }
 
