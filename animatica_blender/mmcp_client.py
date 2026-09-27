@@ -25,7 +25,8 @@ import time
 import uuid
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import Request, build_opener
 
 import bpy
 
@@ -105,6 +106,80 @@ def client_headers() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Online access
+#
+# Blender's "Allow Online Access" (Preferences > System) is the artist's say
+# on whether anything may reach the network. Every request the addon makes
+# asks here first. A self-hosted server on this machine (localhost) is not
+# "online", so it keeps working with the switch off; anything else waits.
+# ---------------------------------------------------------------------------
+
+#: What to show wherever a feature needs the network and is not allowed it.
+OFFLINE_MESSAGE = "Online access is disabled in Preferences > System"
+
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def online_access() -> bool:
+    """True when Blender allows online access (always, on a Blender without the switch)."""
+    return bool(getattr(bpy.app, "online_access", True))
+
+
+def is_loopback(url: str) -> bool:
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return host in _LOOPBACK_HOSTS or host.endswith(".localhost")
+
+
+def may_connect(url: str) -> bool:
+    """True if a request to *url* is allowed right now."""
+    return online_access() or is_loopback(url)
+
+
+def _require_online(url: str) -> None:
+    if not may_connect(url):
+        raise MmcpError(code="offline", message=OFFLINE_MESSAGE)
+
+
+# ---------------------------------------------------------------------------
+# Where the session token may go
+#
+# The Animatica session belongs to Animatica Cloud and to nothing else: not a
+# self-hosted server (which may be anyone's, and is often plain http), not a
+# host a redirect points at. Toggling self-hosted keeps the session — it just
+# stays home.
+# ---------------------------------------------------------------------------
+
+def _origin(url: str) -> tuple[str, str]:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return ("", "")
+    return (parts.scheme.lower(), parts.netloc.lower())
+
+
+def is_cloud_url(url: str) -> bool:
+    """True if *url* is on Animatica Cloud, over https — the only place a token goes."""
+    from .properties import CLOUD_API_URL
+    scheme, netloc = _origin(url)
+    return scheme == "https" and (scheme, netloc) == _origin(CLOUD_API_URL)
+
+
+_OPENER = None
+
+
+def _open(req: Request, timeout: float):
+    """``urlopen`` that drops ``Authorization`` when a redirect leaves the host."""
+    global _OPENER
+    if _OPENER is None:
+        from .autoposer.vendor.autoposer_runtime.bundle import _DropAuthOnRedirect
+        _OPENER = build_opener(_DropAuthOnRedirect)
+    return _OPENER.open(req, timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
 # Preferences plumbing
 # ---------------------------------------------------------------------------
 
@@ -151,10 +226,11 @@ def get_mmcp_url() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Auth — Animatica Cloud only. Self-hosted servers ignore the Authorization
-# header. Auth is NOT part of the MMCP protocol; the cloud's proxy in front
-# of /generate is what consumes the token. The plugin treats it as
-# "attach if present, prompt to sign in on 401".
+# Auth — Animatica Cloud only. The token is attached only to requests for
+# the cloud host over https (see ``is_cloud_url``); a self-hosted server never
+# receives it. Auth is NOT part of the MMCP protocol; the cloud's proxy in
+# front of /generate is what consumes the token. The plugin treats it as
+# "attach if present, prompt to sign in on the cloud's 401".
 # ---------------------------------------------------------------------------
 
 def _addon_prefs():
@@ -172,13 +248,14 @@ def get_refresh_token() -> str:
     return ((getattr(p, "refresh_token", "") or "").strip()) if p else ""
 
 
-def _auth_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Standard request headers + Bearer token if signed in."""
+def _auth_headers(url: str, extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Standard request headers, plus the Bearer token when signed in AND *url* is
+    Animatica Cloud over https. A self-hosted server never sees the token."""
     hdrs: dict[str, str] = {}
     if extra:
         hdrs.update(extra)
     token = get_access_token()
-    if token:
+    if token and is_cloud_url(url):
         hdrs["Authorization"] = f"Bearer {token}"
     return hdrs
 
@@ -188,9 +265,12 @@ def sign_in(email: str, password: str) -> dict[str, Any]:
 
     The /auth/* endpoints live at the bare host (``api.animatica.ai/auth/login``),
     not under ``/mmcp/``, so this always uses ``get_server_url()`` rather
-    than the MMCP base. Self-hosted setups don't sign in at all.
+    than the MMCP base. Self-hosted setups don't sign in at all — and the
+    password goes to Animatica Cloud whatever the server setting says.
     """
-    base_url = get_server_url()
+    from .properties import CLOUD_API_URL
+    base_url = CLOUD_API_URL.rstrip("/")
+    _require_online(base_url)
     body = json.dumps({"email": email, "password": password, "client": "blender"}).encode()
     req = Request(
         f"{base_url}/auth/login",
@@ -198,7 +278,7 @@ def sign_in(email: str, password: str) -> dict[str, Any]:
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urlopen(req, timeout=30) as resp:
+        with _open(req, timeout=30) as resp:
             data = json.loads(resp.read().decode())
     except HTTPError as exc:
         raise MmcpError.from_response(exc.code, exc.read()) from exc
@@ -278,20 +358,23 @@ def _apply_expiry():
 def refresh_access_token() -> bool:
     """POST /auth/refresh. Returns True on success and updates prefs.
 
-    Always hits the bare cloud auth host (``get_server_url()``), not the
-    MMCP base — ``/auth/refresh`` lives outside the ``/mmcp/`` namespace.
+    Always hits the cloud auth host (``CLOUD_API_URL``) — never the
+    self-hosted URL — and ``/auth/refresh`` lives outside ``/mmcp/``.
     """
+    from .properties import CLOUD_API_URL
     rt = get_refresh_token()
     if not rt:
         return False
-    base_url = get_server_url()
+    base_url = CLOUD_API_URL.rstrip("/")
+    if not is_cloud_url(base_url) or not may_connect(base_url):
+        return False
     req = Request(
         f"{base_url}/auth/refresh",
         data=json.dumps({"refresh_token": rt}).encode(),
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urlopen(req, timeout=15) as resp:
+        with _open(req, timeout=15) as resp:
             data = json.loads(resp.read().decode())
     except Exception:
         return False
@@ -411,9 +494,13 @@ def connect_async(*, force: bool = False) -> bool:
         return False
     if not force and _time.monotonic() - _CONNECT["at"] < CONNECT_RETRY_SECONDS:
         return False        # tried recently and it did not work
+    url = get_mmcp_url()
+    if not may_connect(url):
+        # Said, not attempted: the panels show this line instead of "Connecting…".
+        clear_capabilities(error=OFFLINE_MESSAGE)
+        return False
     _CONNECT["running"] = True
     _CONNECT["at"] = _time.monotonic()
-    url = get_mmcp_url()
 
     def _work():
         caps, error = None, ""
@@ -546,12 +633,15 @@ class MmcpClient:
         refresh + retry before raising.
         """
         body = json.dumps(request_body).encode("utf-8")
+        url = f"{self.base_url}/generate"
+        _require_online(url)
+        cloud = is_cloud_url(url)
 
         def _post():
             req = Request(
-                f"{self.base_url}/generate",
+                url,
                 data=body,
-                headers=_auth_headers({
+                headers=_auth_headers(url, {
                     "Content-Type": "application/json; charset=utf-8",
                     "Accept":       "model/gltf+json",
                     # This is the request that starts a generation — the one
@@ -559,14 +649,16 @@ class MmcpClient:
                     **client_headers(),
                 }),
             )
-            return urlopen(req, timeout=self.timeout)
+            return _open(req, timeout=self.timeout)
 
         try:
             try:
                 resp = _post()
             except HTTPError as exc:
                 # Refresh-and-retry once on 401 (auth-proxy session expired).
-                if exc.code != 401:
+                # Only the cloud's 401 is about the cloud session: a
+                # self-hosted server saying no must not sign anyone out.
+                if exc.code != 401 or not cloud:
                     raise
                 if refresh_access_token():
                     try:
@@ -626,12 +718,14 @@ class MmcpClient:
             # to the path so we still hit our base_url.
             location = "/" + location.split("/", 3)[-1]
         url = f"{self.base_url}{location}"
+        cloud = is_cloud_url(url)
         deadline = time.time() + self.timeout
         while time.time() < deadline:
             time.sleep(max(retry_after, 0.5))
+            _require_online(url)
             try:
-                req = Request(url, headers=_auth_headers())
-                with urlopen(req, timeout=self.timeout) as resp:
+                req = Request(url, headers=_auth_headers(url))
+                with _open(req, timeout=self.timeout) as resp:
                     if resp.status == 200:
                         return json.loads(resp.read())
                     if resp.status == 202:
@@ -639,7 +733,7 @@ class MmcpClient:
                         continue
                     raise MmcpError.from_response(resp.status, resp.read())
             except HTTPError as exc:
-                if exc.code == 401 and not refresh_access_token():
+                if exc.code == 401 and cloud and not refresh_access_token():
                     expire_session("your session expired — sign in again")
                 raise MmcpError.from_response(exc.code, exc.read()) from exc
         raise MmcpError(code="timeout", message=f"async job at {url} did not complete in {self.timeout}s")
@@ -648,16 +742,18 @@ class MmcpClient:
 
     def _get_json(self, path: str) -> dict[str, Any]:
         url = f"{self.base_url}{path}"
+        _require_online(url)
+        cloud = is_cloud_url(url)
 
         def _get():
-            req = Request(url, headers=_auth_headers())
-            return urlopen(req, timeout=self.timeout)
+            req = Request(url, headers=_auth_headers(url))
+            return _open(req, timeout=self.timeout)
 
         try:
             try:
                 resp = _get()
             except HTTPError as exc:
-                if exc.code != 401:
+                if exc.code != 401 or not cloud:
                     raise
                 if refresh_access_token():
                     try:

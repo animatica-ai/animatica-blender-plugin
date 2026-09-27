@@ -136,6 +136,10 @@ def download(progress=None, is_cancelled=None) -> Path:
     if is_cached():
         return target
 
+    from .mmcp_client import OFFLINE_MESSAGE, online_access
+    if not online_access():
+        raise DownloadError(f"The Animatic character needs a one-off download. {OFFLINE_MESSAGE}.")
+
     tmp = target.with_suffix(".part")
     digest = hashlib.sha256()
     received = 0

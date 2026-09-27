@@ -1707,7 +1707,10 @@ class ANIMATICA_OT_signin(Operator):
     )
 
     email: StringProperty(name="Email", default="")
-    password: StringProperty(name="Password", default="", subtype='PASSWORD')
+    # SKIP_SAVE: an operator property otherwise remembers its last value and
+    # pre-fills it next time — the password must not outlive the dialog.
+    password: StringProperty(name="Password", default="", subtype='PASSWORD',
+                             options={'SKIP_SAVE', 'HIDDEN'})
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self, width=340)

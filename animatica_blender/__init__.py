@@ -186,8 +186,10 @@ def register():
         from . import mmcp_client
         mmcp_client.connect_async()
         # ...and ask, quietly, whether there is a newer build. Once a day, on a
-        # worker thread; it changes nothing until someone presses Update.
-        updater.check_async()
+        # worker thread; it changes nothing until someone presses Update. Not
+        # at all without Blender's online access.
+        if mmcp_client.online_access():
+            updater.check_async()
         return None
 
     bpy.app.timers.register(_connect_when_ready, first_interval=1.0)
