@@ -6,8 +6,9 @@ Animatica for Blender — AI Motion Generation Addon
 Select an armature with a few keyframes, click Generate, and the server
 fills in the motion using a backend MMCP-compatible motion model.
 
-The addon is ML-free: all generation, retargeting, and keyframe
-optimisation runs on the backend server.
+Generation, retargeting and keyframe optimisation run on the backend
+server. The one model that runs in Blender is the Autoposer (autoposer/),
+which poses the body from dragged hands, feet or hips.
 """
 
 bl_info = {
@@ -17,10 +18,6 @@ bl_info = {
     "blender": (5, 0, 0),
     "location": "View3D > Sidebar > Animatica",
     "description": "AI motion generation — select armature, set keyframes, generate",
-    # Blender shows this beside the addon in Preferences, with a warning icon.
-    # An early preview should say so where it is installed, not only in the
-    # name of the file it came in.
-    "warning": "Early preview — things will change; please report what breaks",
     "category": "Animation",
 }
 
@@ -88,6 +85,10 @@ def _animatica_load_post(dummy):
     # under the old keys. Migrate first: the hydration below reads the new
     # ones, so it would find nothing on an unmigrated file.
     migrate.run()
+
+    # No generation survives a file load: one saved (or autosaved) mid-run
+    # would otherwise reopen showing "Working…" with nothing to finish it.
+    _reset_runtime_flags()
 
     # Ghosts baked from the previous file's rig would otherwise hang in the
     # viewport until something else invalidated them.

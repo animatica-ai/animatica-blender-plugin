@@ -41,6 +41,7 @@ import time
 
 import blf
 import bpy
+from bpy.app.handlers import persistent
 import gpu
 import numpy as np
 from bpy_extras import view3d_utils
@@ -1211,6 +1212,7 @@ def on_redraw_setting(_settings=None) -> None:
 # Change detection
 # ---------------------------------------------------------------------------
 
+@persistent
 def _on_depsgraph(scene, depsgraph) -> None:
     """React to the two edits that change the plan.
 
@@ -1259,6 +1261,7 @@ def _on_depsgraph(scene, depsgraph) -> None:
         return
 
 
+@persistent
 def _on_undo(scene, _depsgraph=None) -> None:
     """Undo / redo rewrites keyframes without the signals above, so the plan
     would otherwise outlive the change it was built from."""
