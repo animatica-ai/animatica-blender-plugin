@@ -125,8 +125,8 @@ GENERATED_ACTION_NAME = MOTION_ACTION_PREFIX
 
 _NLA_TRACK_PREFIX = "Animatica: "
 # Tracks written before the Proscenium -> Animatica rename carry the old
-# prefix. Match on the tuple so Reject and re-bake still find them in files
-# saved by earlier versions; new tracks are always written with the new one.
+# prefix. Match on the tuple to find the kept takes in files saved by earlier
+# versions; new tracks are always written with the new one.
 _NLA_TRACK_PREFIXES = (_NLA_TRACK_PREFIX, "Proscenium: ")
 
 
@@ -203,58 +203,173 @@ def _block_ranges_for_split(prompt_blocks, gen_start: int, gen_end: int):
     return ranges
 
 
-def _push_actions_to_nla(armature_obj, actions) -> None:
-    """Place every per-block action on a SINGLE shared NLA track named
-    ``Animatica: Motion``, in start-frame order.
+#: Blender's own name for the muted track an action is stashed on (the Action
+#: editor's Stash, and what it does when an action is swapped out).
+_STASH_TRACK_NAME = "[Action Stash]"
+#: on an action Accept put on the NLA: a take the artist kept
+_KEPT_KEY = "animatica_kept"
+_TWEAK_MODE_MESSAGE = "Exit NLA tweak mode (Tab in the NLA editor) first"
 
-    Strips share one track (instead of one track per strip) so playback is
-    sequential: one block ends, the next plays. Putting each strip on its
-    own track would stack them layered and play them simultaneously, which
-    is the wrong default for a "play the timeline back end-to-end" workflow.
-    Half-gap expansion in ``_block_ranges_for_split`` guarantees the strips
-    don't overlap on the shared track.
 
-    Wipes any prior ``Animatica: ``-prefixed tracks first so a regenerate
-    doesn't pile up duplicates.
+def _in_tweak_mode(arm) -> bool:
+    ad = getattr(arm, "animation_data", None) if arm is not None else None
+    return bool(ad is not None and getattr(ad, "use_tweak_mode", False))
+
+
+def _refuse_in_tweak_mode(op, arms) -> bool:
+    """True (and says so) when any of *arms* is in NLA tweak mode.
+
+    In tweak mode the rig's action is the strip being tweaked, and Blender
+    refuses to have it replaced: a take baked, kept or thrown away then either
+    failed half way or went into an accepted take's action instead."""
+    for arm in arms:
+        if _in_tweak_mode(arm):
+            op.report({'ERROR'}, f"{arm.name}: {_TWEAK_MODE_MESSAGE}"
+                      if len(arms) > 1 else _TWEAK_MODE_MESSAGE)
+            return True
+    return False
+
+
+def _clip_label(action) -> str:
+    """What a take is called on the NLA: its prompt (the action's name
+    without the addon's prefix or Blender's ``.001``)."""
+    import re as _re
+    name = action.name
+    for prefix in request_builder._GENERATED_ACTION_PREFIXES:
+        if name.startswith(prefix):
+            name = name[len(prefix):].lstrip(":").strip()
+            break
+    name = _re.sub(r"\.\d{3}$", "", name).strip()
+    return name or "Motion"
+
+
+def _unique_track_name(nla, base: str) -> str:
+    base = base[:59]
+    taken = {t.name for t in nla}
+    if base not in taken:
+        return base
+    n = 1
+    while f"{base}.{n:03d}" in taken:
+        n += 1
+    return f"{base}.{n:03d}"
+
+
+def _new_strip(track, name, action, arm, start: float):
+    """One strip of *action* on *track*, starting at frame *start* exactly
+    (``strips.new`` takes a whole frame), playing the rig's slot."""
+    strip = track.strips.new(name=name[:63], start=int(start // 1), action=action)
+    if abs(strip.frame_start - start) > 1e-6:
+        strip.frame_start_ui = float(start)
+    slot = constraints_ui.rig_slot(action, arm)
+    if slot is not None and hasattr(strip, "action_slot"):
+        try:
+            strip.action_slot = slot
+        except (TypeError, RuntimeError, AttributeError):
+            pass
+    return strip
+
+
+def _stash_action(armature_obj, action):
+    """Keep *action* on the rig's NLA the way Blender keeps an action it takes
+    off a rig: a strip on a muted ``[Action Stash]`` track, stashes kept
+    together below the rest. It plays nothing, and a save keeps it: Accept
+    takes the artist's own action off the rig, and with no user of its own it
+    was gone the next time the file was saved. Nothing is added for an action
+    already on the NLA. Returns the track, or None."""
+    if action is None:
+        return None
+    ad = armature_obj.animation_data or armature_obj.animation_data_create()
+    nla = ad.nla_tracks
+    for t in nla:
+        if any(st.action == action for st in t.strips):
+            return None
+    stashes = [t for t in nla if t.name.startswith(_STASH_TRACK_NAME)]
+    # Python can only add a track above another one: with no stash yet, the
+    # first stash is at the bottom only when the NLA is empty. Muted, where
+    # it sits changes nothing that plays.
+    track = nla.new(prev=stashes[-1]) if stashes else nla.new()
+    track.name = _unique_track_name(nla, _STASH_TRACK_NAME)
+    try:
+        start = float(action.frame_range[0])
+        _new_strip(track, action.name, action, armature_obj, start)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        # an action Blender will not make a strip of (nothing in it): kept by
+        # a fake user instead
+        nla.remove(track)
+        action.use_fake_user = True
+        print(f"[animatica] kept {action.name!r} with a fake user: no strip of it ({exc})")
+        return None
+    track.mute = True
+    return track
+
+
+def _push_actions_to_nla(armature_obj, actions, *, fill_end=None) -> list:
+    """Put an accepted take on the NLA. Returns the new tracks.
+
+    Each action gets a track of its own, named after its clip
+    (``Animatica: <prompt>``), stacked above what is there: a take kept
+    earlier stays where it is, and plays where the new one does not. A take
+    split into blocks is one track per block, in timeline order, so each
+    block is a clip of its own: glTF's Actions export skips a track with more
+    than one strip, and an FBX export names each strip.
+
+    Each strip sits at the frames its action was made for (the action's own
+    frame range, manual for a block or a loop), replaces what is under it at
+    full influence, and holds its last pose forward but not its first pose
+    back: HOLD, Blender's default for a track's first strip, played the take's
+    first pose over every frame before it and hid the take below.
+
+    A loop plays on to *fill_end*: the strip runs the action past its cycle,
+    and the curves' Cycles modifiers repeat it -- with offset on the root, so
+    a walk keeps walking forward (a strip's own Repeat starts the action over
+    each time, and the root with it).
     """
     if armature_obj.animation_data is None:
         armature_obj.animation_data_create()
     nla = armature_obj.animation_data.nla_tracks
-
-    for track in list(nla):
-        if track.name.startswith(_NLA_TRACK_PREFIXES):
-            nla.remove(track)
-
     if not actions:
-        return
+        return []
 
-    track = nla.new()
-    track.name = f"{_NLA_TRACK_PREFIX}Motion"
-
-    # Sort by action.frame_range[0] so strips are added in timeline order;
-    # NLA refuses out-of-order or overlapping strip insertions on the same
-    # track, and an in-order pass is the safest contract.
     def _sort_key(a):
         try:
             return float(a.frame_range[0])
         except Exception:
             return 0.0
 
+    tracks = []
     for action in sorted(actions, key=_sort_key):
+        label = _clip_label(action)
+        track = nla.new(prev=tracks[-1]) if tracks else nla.new()
+        track.name = _unique_track_name(nla, f"{_NLA_TRACK_PREFIX}{label}")
+        loop = action.get("animatica_loop")
+        if loop is not None and "start" in loop and "cut" in loop:
+            action.use_frame_range = True
+            action.frame_start = float(loop["start"])
+            action.frame_end = float(loop["cut"])
+            action.use_cyclic = True
         try:
-            start = int(action.frame_range[0])
+            start = float(action.frame_range[0])
         except Exception:
-            start = 1
-        strip = track.strips.new(name=action.name, start=start, action=action)
+            start = 1.0
+        strip = _new_strip(track, label, action, armature_obj, start)
         # Blender 5.x ``strips.new`` returns a strip with ``influence=0`` by
         # default in some configurations — that's "the strip exists but
         # contributes nothing to the pose", which silently kills playback.
         # Force full influence so the strip drives the pose at 100%.
         strip.influence = 1.0
-        # Disable blend-in/out ramps too — half-gap expansion already
-        # places strips so they abut, no soft fade needed.
+        strip.blend_type = 'REPLACE'
+        strip.extrapolation = 'HOLD_FORWARD'
+        # Disable blend-in/out ramps too — blocks abut, no soft fade needed.
         strip.blend_in = 0.0
         strip.blend_out = 0.0
+        if loop is not None and fill_end is not None and fill_end > strip.action_frame_end:
+            # Past the cycle: kept when the action is next edited in tweak mode.
+            strip.use_sync_length = False
+            strip.action_frame_end = float(fill_end) - strip.frame_start + strip.action_frame_start
+        action.use_fake_user = True
+        action[_KEPT_KEY] = True
+        tracks.append(track)
+    return tracks
 
 
 def _root_location_data_path(armature_obj) -> str | None:
@@ -328,6 +443,9 @@ def _apply_inplace_constraint(armature_obj, enabled: bool) -> None:
     the artist made.
     """
     if armature_obj is None or armature_obj.type != 'ARMATURE':
+        return
+    if _in_tweak_mode(armature_obj):
+        # the action showing is a kept take's, being tweaked: not the take's
         return
     from . import inplace
     _drop_legacy_inplace_constraint(armature_obj)
@@ -438,6 +556,57 @@ class ANIMATICA_OT_reset_root_trajectory(Operator):
         return {'FINISHED'}
 
 
+#: per-key properties the split carries over besides the frame and value
+_KEY_FLOATS = (("co", 2), ("handle_left", 2), ("handle_right", 2),
+               ("back", 1), ("amplitude", 1), ("period", 1))
+_KEY_ENUMS = ("interpolation", "easing", "handle_left_type", "handle_right_type", "type")
+
+
+def _read_keys(fc) -> dict:
+    import numpy as np
+    kps = fc.keyframe_points
+    n = len(kps)
+    out = {}
+    for name, width in _KEY_FLOATS:
+        a = np.empty(n * width, dtype=np.float32)
+        kps.foreach_get(name, a)
+        out[name] = a.reshape(n, width) if width > 1 else a
+    for name in _KEY_ENUMS:
+        out[name] = [getattr(k, name) for k in kps]
+    return out
+
+
+def _write_keys(fc, keys: dict, index) -> None:
+    import numpy as np
+    kps = fc.keyframe_points
+    n = len(index)
+    kps.add(n)
+    # the handle types first: setting a handle's type moves it
+    for name in ("handle_left_type", "handle_right_type", "interpolation", "easing", "type"):
+        vals = keys[name]
+        for k, i in zip(kps, index):
+            setattr(k, name, vals[i])
+    for name, width in _KEY_FLOATS:
+        kps.foreach_set(name, np.ascontiguousarray(keys[name][index]).ravel())
+
+
+def _copy_fcurve_modifiers(src_fc, dst_fc) -> None:
+    for m in src_fc.modifiers:
+        try:
+            d = dst_fc.modifiers.new(m.type)
+        except (RuntimeError, TypeError):
+            continue
+        for _ in range(2):   # twice: a range clamps against the other end
+            for prop in m.bl_rna.properties:
+                ident = prop.identifier
+                if prop.is_readonly or ident in ("rna_type", "type", "active"):
+                    continue
+                try:
+                    setattr(d, ident, getattr(m, ident))
+                except (AttributeError, TypeError, ValueError, RuntimeError):
+                    pass
+
+
 def _split_action_into_blocks(
     source_action,
     armature_obj,
@@ -447,10 +616,17 @@ def _split_action_into_blocks(
 
     For each ``(frame_start, frame_end, action_name)`` in ``blocks``, builds
     a fresh action via the layered-Action API (mirrors the structure of the
-    multi-block bake helper) and copies in only the source's keyframes that
-    fall within ``[frame_start, frame_end]``. Keyframe ``type`` is preserved
-    so previously-tagged ``KEYFRAME`` anchors keep their dopesheet styling
-    after the split.
+    multi-block bake helper) holding the source's keys from that block. The
+    keys go over whole -- handles and their types, interpolation, easing, key
+    type -- with each curve's modifiers, extrapolation, mute flag and group.
+
+    Each block plays the stretch from its start to the next block's; the first
+    also everything before (the artist's keys before the take, carried into
+    it), the last everything after. A block's action also holds, for every
+    curve, the two keys either side of that stretch, and its manual frame
+    range is the stretch: inside it the curves evaluate exactly as the take
+    did as one action -- a curve running on across a block's edge, a bone
+    only the artist keyed -- and its strip covers only its own frames.
 
     Layered-API construction (instead of ``source_action.copy()`` + trim) is
     deliberate: it sidesteps the NLA-state corruption Blender 5.x exhibits
@@ -459,45 +635,55 @@ def _split_action_into_blocks(
 
     Returns the list of new actions in input order.
     """
+    import numpy as np
     new_actions = []
+    curves = []
+    for src_fc in constraints_ui.iter_action_fcurves(source_action, armature_obj):
+        if not len(src_fc.keyframe_points):
+            continue
+        keys = _read_keys(src_fc)
+        grp = src_fc.group.name if getattr(src_fc, "group", None) is not None else ""
+        curves.append((src_fc, keys, np.round(keys["co"][:, 0].astype(np.float64), 4), grp))
+    if not curves:
+        return new_actions
+    first = min(float(fr[0]) for _fc, _k, fr, _g in curves)
+    last = max(float(fr[-1]) for _fc, _k, fr, _g in curves)
+    starts = [float(b[0]) for b in blocks]
 
-    for fs, fe, action_name in blocks:
+    for n, (fs, fe, action_name) in enumerate(blocks):
+        lo = min(first, float(fs)) if n == 0 else float(fs)
+        hi = max(last, float(fe)) if n == len(blocks) - 1 else starts[n + 1]
         new_a = bpy.data.actions.new(name=action_name)
         layer = new_a.layers.new(name="Layer")
         strip = layer.strips.new(type='KEYFRAME')
         slot = new_a.slots.new(id_type='OBJECT', name=armature_obj.name)
         cb = strip.channelbag(slot, ensure=True)
 
-        for src_fc in constraints_ui.iter_action_fcurves(source_action):
-            in_range = [
-                (kp.co[0], kp.co[1], kp.type)
-                for kp in src_fc.keyframe_points
-                if fs <= kp.co[0] <= fe
-            ]
-            if not in_range:
+        for src_fc, keys, fr, grp in curves:
+            # keys in [lo, hi), and two either side: what a key's automatic
+            # handles are worked out from
+            a = int(np.searchsorted(fr, lo, side="left"))
+            b = int(np.searchsorted(fr, hi, side="left" if n < len(blocks) - 1 else "right"))
+            index = np.arange(max(0, a - 2), min(len(fr), b + 2))
+            if not len(index):
                 continue
-
-            new_fc = cb.fcurves.new(
-                data_path=src_fc.data_path,
-                index=src_fc.array_index,
-            )
+            new_fc = cb.fcurves.new(data_path=src_fc.data_path, index=src_fc.array_index)
+            if grp:
+                g = cb.groups.get(grp) or cb.groups.new(grp)
+                new_fc.group = g
             # Carry the mute flag — without this the In-place toggle's live
-            # effect is lost the moment the user clicks Push to NLA (the
-            # split would create fresh fcurves with mute=False, defeating
-            # the user's intent).
+            # effect is lost the moment the user clicks Accept (the split
+            # would create fresh fcurves with mute=False, defeating the
+            # user's intent).
             new_fc.mute = src_fc.mute
-            n = len(in_range)
-            new_fc.keyframe_points.add(n)
-            flat = [0.0] * (2 * n)
-            for i, (f, v, _t) in enumerate(in_range):
-                flat[2 * i]     = float(f)
-                flat[2 * i + 1] = float(v)
-            new_fc.keyframe_points.foreach_set("co", flat)
-            for kp_obj, (_, _, kp_type) in zip(new_fc.keyframe_points[:n], in_range):
-                kp_obj.type = kp_type
+            new_fc.extrapolation = src_fc.extrapolation
+            _write_keys(new_fc, keys, index)
+            _copy_fcurve_modifiers(src_fc, new_fc)
             new_fc.update()
 
-        new_a.use_fake_user = True
+        new_a.use_frame_range = True
+        new_a.frame_start = lo
+        new_a.frame_end = max(hi, lo + 1.0)
         new_actions.append(new_a)
 
     return new_actions
@@ -863,6 +1049,8 @@ class ANIMATICA_OT_generate(Operator):
                 "Set a target armature first (or the previous rig was deleted)",
             )
             return {'CANCELLED'}
+        if _refuse_in_tweak_mode(self, [arm]):
+            return {'CANCELLED'}
 
         model_caps = mmcp_client.cached_model(settings.model_id)
         if model_caps is None:
@@ -1207,12 +1395,32 @@ class ANIMATICA_OT_cancel_generation(Operator):
 # Preview: Accept / Reject
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _remove_orphan_takes(*, past_fake_user: bool = False) -> int:
+    """Drop the takes nothing uses: one thrown away, a version not chosen, a
+    take regenerated over. Left, they went into an FBX export of all actions.
+    A take the artist kept (Accept marks it) stays even with nothing using it
+    -- its NLA track deleted, say -- and so does a pose-generator action,
+    which is the artist's. ``past_fake_user``: a fake user alone does not
+    keep one either (Reject: older versions gave takes on show one). Returns
+    how many went."""
+    def _is_orphan(a):
+        real_users = a.users - (1 if a.use_fake_user and past_fake_user else 0)
+        return real_users <= 0
+
+    gone = [a for a in bpy.data.actions
+            if a.name.startswith(request_builder._GENERATED_ACTION_PREFIXES)
+            and a.library is None and not a.get(_KEPT_KEY) and _is_orphan(a)]
+    for a in gone:
+        bpy.data.actions.remove(a)
+    return len(gone)
+
+
 class ANIMATICA_OT_accept(Operator):
     bl_idname = "animatica.accept"
     bl_label = "Accept"
     bl_description = (
-        "Keep this take. It moves to the NLA track 'Animatica: Motion', "
-        "replacing the take kept before; your own keys stay"
+        "Keep this take. It goes onto the NLA as a track of its own, above "
+        "the takes kept before, which stay; your own action is stashed there too"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -1224,8 +1432,11 @@ class ANIMATICA_OT_accept(Operator):
     def execute(self, context):
         s = context.scene.animatica
         arm = _live_target_armature_or_clear(s)
+        if arm is not None and _refuse_in_tweak_mode(self, [arm]):
+            return {'CANCELLED'}
         from . import preview_session, variations
         variations.forget(arm)
+        tracks = []
 
         if arm is not None:
             import json as _json
@@ -1275,6 +1486,14 @@ class ANIMATICA_OT_accept(Operator):
             )
 
             actions_to_push: list = []
+            # The artist's own action, which the take showed in place of.
+            source = preview_session.source_of(arm) or (
+                bpy.data.actions.get(s.source_action_name) if s.source_action_name else None)
+            if source is not None and (source == preview_action or _is_motion_bake_action(source)):
+                source = None
+            session = preview_session.get(arm) or {}
+            fill_end = max([int(context.scene.frame_end)]
+                           + [int(f) for f in (session.get("frame_range") or [])[1:2]])
             preview_session.promote_edits(preview_action)
             preview_session.forget_baseline(preview_action)
 
@@ -1304,12 +1523,16 @@ class ANIMATICA_OT_accept(Operator):
                 # final, prompt-named motion action). Detach from the
                 # armature so NLA evaluation isn't shadowed by an active
                 # action of the same content.
-                preview_action.use_fake_user = True
                 actions_to_push = [preview_action]
                 arm.animation_data.action = None
 
             if actions_to_push:
-                _push_actions_to_nla(arm, actions_to_push)
+                # Taken off the rig, the artist's action is kept where Blender
+                # keeps one: stashed on the NLA (it had no user left, and the
+                # next save dropped it). The keys it had outside the take play
+                # on in the take, which carries them.
+                _stash_action(arm, source)
+                tracks = _push_actions_to_nla(arm, actions_to_push, fill_end=fill_end)
 
             # The accepted actions keep what they show: in place or travelling.
             # The original keys kept for switching back are dropped.
@@ -1321,7 +1544,10 @@ class ANIMATICA_OT_accept(Operator):
 
         s.source_action_name = ""
         s.is_previewing = False
-        self.report({'INFO'}, "Take kept: it plays from the NLA track 'Animatica: Motion'")
+        _remove_orphan_takes()
+        names = ", ".join(f"'{t.name}'" for t in tracks)
+        self.report({'INFO'}, f"Take kept: it plays from the NLA ({names})" if tracks
+                    else "Take kept")
         return {'FINISHED'}
 
 
@@ -1344,6 +1570,8 @@ class ANIMATICA_OT_reject(Operator):
     def execute(self, context):
         s   = context.scene.animatica
         arm = _live_target_armature_or_clear(s)
+        if arm is not None and _refuse_in_tweak_mode(self, [arm]):
+            return {'CANCELLED'}
         from . import preview_session, root_edit, variations
         variations.forget(arm)
         root_edit.discard_all()
@@ -1433,7 +1661,11 @@ class ANIMATICA_OT_reject(Operator):
                 n_rm = constraints_ui.strip_generated_keyframe_points(
                     preview, promote_unauthored=True,
                 )
-                arm.animation_data.action = preview
+                # With nothing of the artist's left in it, it is not theirs to
+                # keep: the rig goes back to having no action, as it had.
+                has_keys = any(len(fc.keyframe_points)
+                               for fc in constraints_ui.iter_action_fcurves(preview, arm))
+                arm.animation_data.action = preview if has_keys else None
         else:
             # Unexpected: preview isn't a motion bake. Fall back to assigning
             # whatever ``source`` we have (or detach if none).
@@ -1443,19 +1675,7 @@ class ANIMATICA_OT_reject(Operator):
         # source's own fake-user flag: back as they were before Generate.
         preview_session.finish(context, arm, accepted=False)
 
-        # Drop motion-bake orphans. Multi-block bakes mark each per-block
-        # action with ``use_fake_user`` so Blender doesn't purge them while
-        # the user iterates; we look past that fake user when deciding
-        # what's truly orphaned. Pose-generator actions are user-authored
-        # anchors and stay regardless of whether they're assigned.
-        def _is_orphan(a):
-            real_users = a.users - (1 if a.use_fake_user else 0)
-            return real_users <= 0
-
-        for ac in [a for a in bpy.data.actions
-                   if a.name.startswith(request_builder._GENERATED_ACTION_PREFIXES)
-                   and _is_orphan(a)]:
-            bpy.data.actions.remove(ac)
+        _remove_orphan_takes(past_fake_user=True)
 
         s.source_action_name = ""
         s.is_previewing = False

@@ -131,6 +131,9 @@ class ANIMATICA_OT_show_variation(Operator):
         if not targets:
             self.report({'WARNING'}, "No variations to switch between")
             return {'CANCELLED'}
+        from . import operators
+        if operators._refuse_in_tweak_mode(self, targets):
+            return {'CANCELLED'}
         for arm in targets:
             try:
                 show(context, arm, take_of(arm).index + self.step)

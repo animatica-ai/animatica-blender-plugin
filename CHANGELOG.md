@@ -202,6 +202,39 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Fixed
 
+- **Accept adds the take to the NLA; nothing kept before is lost.** Accept
+  used to delete every Animatica track and put the new take on a single
+  "Animatica: Motion" track, so keeping a wave and then a walk lost the wave.
+  Now each accepted take gets a track of its own named after its prompt
+  ("Animatica: a person walks"), stacked above the takes kept before, which
+  stay and play where the new one does not; a take made of several blocks is
+  a track per block, so each exports as a clip of its own (glTF Actions, FBX
+  NLA strips). Each strip sits at the frames it was made for and holds its
+  last pose forward only: the first take's first pose no longer covers every
+  frame before it. The button always reads **Accept** (it used to read
+  **Replace Kept**).
+- **Your own action survives Accept.** Taking it off the rig left it with no
+  user, and the next save dropped it. It is now stashed where Blender stashes
+  an action: a muted **[Action Stash]** track on the NLA.
+- **A take split into blocks keeps everything.** Your keys before and after
+  the take were dropped from the blocks, and each key lost its handles,
+  interpolation and easing, and each curve its modifiers. The blocks now play
+  exactly as the take did in the preview, every frame.
+- **A loop keeps looping once accepted.** The strip played the cycle once. It
+  now plays on to the end of the scene (the scene's own end, not only the
+  cycle's), walking forward cycle after cycle, or on the spot with In place;
+  the action's Manual Frame Range is the cycle, marked cyclic.
+- **NLA tweak mode:** Generate, Accept, Reject, the batch review and
+  Variations say "Exit NLA tweak mode (Tab in the NLA editor) first" instead
+  of failing half way, and In place no longer rewrites the take being tweaked.
+- **An action shared with other objects** (Blender 4.4+ slots): generating
+  into a gap wiped the other objects' keys in that stretch, and every
+  read of the rig's keys took theirs for its own. Only the rig's slot is read
+  and written now, and every strip Accept makes plays the rig's slot.
+- **Thrown-away takes are removed.** A take rejected, regenerated over or not
+  chosen among variations no longer lingers (it went into an FBX export of
+  all actions); a take you kept stays, even with its track deleted.
+
 - **In place redraws the trail.** Toggling In place on a take left the trail
   and ghosts showing the travel it had just taken away; they are rebaked now.
 
@@ -409,7 +442,7 @@ Proscenium, and keep the identifiers those releases actually shipped.
   - **Opening an example scene always asks first**, and says your current
     scene closes.
   - **Plain language:** Accept says where the take goes ("Take kept: it plays
-    from the NLA track…"), and the panel says so afterwards; the tooltips of
+    from the NLA…"), and the panel says so afterwards; the tooltips of
     Generate, Accept and Reject say what they do, not how; quality is Best /
     Faster / Draft; guidance and block blending moved to Settings → Advanced;
     the poser's Tightness is Slack, which is what its number is; the next
@@ -424,8 +457,7 @@ Proscenium, and keep the identifiers those releases actually shipped.
   under it); **Generate Motion** with **Loop** and **In place** right under it;
   and a grey line saying how long the take is and how many key poses it will
   hit. While a take is previewing, its box comes first: a loop's length, what
-  the blue trail is for, the seed it used with **Lock**, In place, and Accept —
-  which reads **Replace Kept** when a take is already kept. Examples and help
+  the blue trail is for, the seed it used with **Lock**, In place, and Accept. Examples and help
   are header icons. The **Pose** panel is open by default and starts with the
   **Autoposer** ("Drag hands, feet or hips; the body follows", and **Start the
   Autoposer** on a rig without handles), then Generate Pose at Frame, Set

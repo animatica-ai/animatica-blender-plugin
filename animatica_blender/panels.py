@@ -529,12 +529,15 @@ def _draw_next_take(layout, context) -> None:
 def _draw_kept(layout, arm) -> None:
     """Where an accepted take went. Accept moves it off the rig onto the NLA,
     and without a word the keyframes vanishing reads as the take lost."""
+    from .operators import _NLA_TRACK_PREFIXES
     ad = arm.animation_data if arm is not None else None
-    if ad is None or not any(t.name.startswith("Animatica: ") for t in ad.nla_tracks):
+    n = sum(1 for t in ad.nla_tracks if t.name.startswith(_NLA_TRACK_PREFIXES)) if ad is not None else 0
+    if not n:
         return
     row = layout.row()
     row.active = False
-    row.label(text="Kept take is on the NLA", icon='NLA')
+    row.label(text="Kept take is on the NLA" if n == 1 else "Kept takes are on the NLA",
+              icon='NLA')
 
 
 def _draw_review(layout, context, settings, arm) -> None:
@@ -636,12 +639,9 @@ def _draw_review(layout, context, settings, arm) -> None:
     row = box.row(align=True)
     row.scale_y = 1.3
     if single:
-        # Accept replaces a take kept before; say so on the button, not only
-        # in its tooltip.
-        ad = arm.animation_data if arm is not None else None
-        kept = ad is not None and any(t.name.startswith("Animatica: ") for t in ad.nla_tracks)
-        row.operator("animatica.accept", icon='CHECKMARK',
-                     text="Replace Kept" if kept else "Accept")
+        # Accept adds the take to the NLA, above any kept before; nothing is
+        # replaced, so the button says only that.
+        row.operator("animatica.accept", icon='CHECKMARK', text="Accept")
         row.operator("animatica.reject", icon='X')
         # Re-roll just the active block (keeping its neighbours) — otherwise
         # only reachable by right-clicking a timeline strip. With a single

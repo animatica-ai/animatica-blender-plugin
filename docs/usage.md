@@ -164,14 +164,18 @@ until it finishes you keep seeing the last one, and the panel says so.
 2. Click **Generate Motion** — usually under 30 seconds; the first run after
    a while can take a minute
 3. Play the result in the viewport
-4. **Accept** — keeps the take: it moves to the NLA track *Animatica: Motion*
-   (replacing a take kept before), and your own keys stay  
+4. **Accept** — keeps the take: it goes onto the NLA as a track of its own,
+   *Animatica: <prompt>*, above the takes you kept before (they stay, and play
+   where the new one does not). Your own action is stashed on a muted
+   *[Action Stash]* track, and your keys either side of the take play on  
    **Reject** — throws the take away and goes back to what you had; takes
    you kept earlier stay on the NLA
 
 Not happy? **Generate Again** — every run is a new take. The take box shows
-the seed a take used; **Lock** it to keep getting that one. While a kept take
-exists, Accept reads **Replace Kept**.
+the seed a take used; **Lock** it to keep getting that one.
+
+In NLA tweak mode Generate, Accept and Reject wait: press Tab in the NLA
+editor to leave it first.
 
 Want to choose from a few? Set **Variations** under Generate Motion and one
 Generate makes that many versions of the take — the same prompts and poses,

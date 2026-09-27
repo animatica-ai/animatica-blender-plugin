@@ -457,12 +457,16 @@ class ANIMATICA_OT_give_back_rig(Operator):
             # stash would replace it — the generated take, or the poses keyed
             # since — so let go without touching what is bound.
             kept = arm.animation_data.action.name
+            # Only the tracks the take-over muted: a stashed action's track
+            # is muted to play nothing, and a track the artist muted is theirs.
+            muted = set(arm.get("ap_muted_nla", []))
             for key in ("ap_stashed_action", "ap_stashed_slot",
                         "ap_stashed_slot_id", "ap_muted_nla"):
                 if key in arm:
                     del arm[key]
             for track in arm.animation_data.nla_tracks:
-                track.mute = False
+                if track.name in muted:
+                    track.mute = False
             self.report({'INFO'}, f"Autoposer let go — {kept} kept")
         else:
             try:
