@@ -273,7 +273,10 @@ handles.
 **Advanced:** **Guidance** with its **Text Weight** (how literally the motion
 follows the prompt) and **Constraint Weight** (how tightly it sticks to your
 poses, waypoints and pins), and **Blend Between Blocks** (frames blended where
-one prompt block meets the next; 0 is a hard cut).
+one prompt block meets the next; 0 is a hard cut). The same number of frames
+blends a take into your own keys where they carry on past the first or last
+block; with no keys of yours there, the take starts and ends exactly at the
+blocks.
 
 ## Prompt blocks on the timeline
 

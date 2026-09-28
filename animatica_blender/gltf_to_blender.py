@@ -586,7 +586,12 @@ def splice_gltf_into_action(
     # first and last key forever, so the gap's pose leaked over the whole
     # action: a foot the user never touched moved on every frame either side.
     # Where a side has no key of its own, a key just outside the window holds
-    # what the channel showed there before.
+    # what the channel showed there before -- on a side where the action has
+    # animation at all. Past its last key there is nothing to keep: a key
+    # there only made a frame nobody asked for (a block at the end of the
+    # take regenerated gained one after it, and the take grew by a frame).
+    any_left = any(e[2] for e in before_edges.values())
+    any_right = any(e[3] for e in before_edges.values())
     from .constraints_ui import _bone_name_from_data_path
     for fcurves in _collections(action, armature_obj):
         for fc in fcurves:
@@ -604,11 +609,11 @@ def splice_gltf_into_action(
                 edge = (v, v, False, False)
             left, right, had_left, had_right = edge
             added = False
-            if not had_left and not any(x < fs_target - 0.5 for x in xs):
+            if any_left and not had_left and not any(x < fs_target - 0.5 for x in xs):
                 kp = fc.keyframe_points.insert(fs_target - 1, left, options={'FAST'})
                 kp.type = 'GENERATED'
                 added = True
-            if not had_right and not any(x > fe_target + 0.5 for x in xs):
+            if any_right and not had_right and not any(x > fe_target + 0.5 for x in xs):
                 kp = fc.keyframe_points.insert(fe_target + 1, right, options={'FAST'})
                 kp.type = 'GENERATED'
                 added = True
