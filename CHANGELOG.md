@@ -9,6 +9,14 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A take is exactly your blocks.** Generate made about five frames of motion
+  after the last block, and up to five before the first, that nobody asked
+  for. The blend margin is now added only on a side where your animation
+  carries on beyond the blocks, so the take has something to blend into; with
+  nothing there, the take starts and ends where your blocks do.
+
 ## [0.6.0] — 2026-09-28
 
 You can now pose the character by dragging it, see the plan in the viewport,
