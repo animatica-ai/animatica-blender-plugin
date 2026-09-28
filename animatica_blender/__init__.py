@@ -14,7 +14,7 @@ which poses the body from dragged hands, feet or hips.
 bl_info = {
     "name": "Animatica — AI Motion Generation",
     "author": "Animatica",
-    "version": (0, 6, 0),
+    "version": (0, 6, 1),
     "blender": (5, 0, 0),
     "location": "View3D > Sidebar > Animatica",
     "description": "AI motion generation — select armature, set keyframes, generate",
@@ -26,7 +26,7 @@ bl_info = {
 #: comparing two builds that both call themselves 0.6.0 would never offer the
 #: newer one. The zip target rewrites this line; a source checkout is the
 #: final release of its number, which is the conservative reading.
-VERSION_TAG = "v0.6.0"
+VERSION_TAG = "v0.6.1"
 
 import bpy
 from bpy.app.handlers import persistent

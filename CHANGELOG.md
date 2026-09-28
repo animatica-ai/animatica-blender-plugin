@@ -9,13 +9,15 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-09-28
+
 ### Fixed
 
-- **A take is exactly your blocks.** Generate made about five frames of motion
-  after the last block, and up to five before the first, that nobody asked
-  for. The blend margin is now added only on a side where your animation
-  carries on beyond the blocks, so the take has something to blend into; with
-  nothing there, the take starts and ends where your blocks do.
+- **No extra frames after your blocks.** A take covers exactly your prompt
+  blocks: it no longer adds about five frames of motion after (and before)
+  them unless there is animation of yours there to blend into.
+- **Regenerate Block keeps the take's length.** Regenerating the last block
+  grew the take by one frame; it now ends where it did.
 
 ## [0.6.0] — 2026-09-28
 
@@ -531,7 +533,8 @@ make game-ready loops. The addon also updates itself.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/animatica-ai/animatica-blender-plugin/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/animatica-ai/animatica-blender-plugin/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.1
 [0.6.0]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.0
 [0.5.3]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.5.3
 [0.5.2]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.5.2
