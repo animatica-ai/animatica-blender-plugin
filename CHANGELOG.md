@@ -9,6 +9,18 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-09-29
+
+### Changed
+
+- **The Autoposer works on any humanoid rig.** It finds the hips, spine,
+  arms, legs and head from the skeleton's shape instead of its bone names, so
+  Mixamo, Unreal and other humanoid rigs get handles without renaming
+  anything. A-pose rigs, rigs exported Y-up or in centimetres, and rigs with
+  extra spine or twist bones are posed correctly. **Skeleton** in the **Pose**
+  panel shows which bone plays each joint and lets you change it. On a control
+  rig the Autoposer now says why it can't start instead of posing nothing.
+
 ## [0.6.1] — 2026-09-28
 
 ### Fixed
@@ -533,7 +545,8 @@ make game-ready loops. The addon also updates itself.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/animatica-ai/animatica-blender-plugin/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/animatica-ai/animatica-blender-plugin/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.2
 [0.6.1]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.1
 [0.6.0]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.0
 [0.5.3]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.5.3

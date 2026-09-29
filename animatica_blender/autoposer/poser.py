@@ -27,7 +27,9 @@ the keys over it. Measured on a rig carrying an action: 746 cm of drift on a fra
 unkeyed, 0.165 cm once keyed. `Take Over Rig` detaches the action instead, for free posing.
 
 Geometry, both verified exactly against the poser on the canonical SOMA armature:
-  * frames - Blender is Z-up, the poser Y-up: poser = (x, z, -y). M = R_x(-90 deg).
+  * frames - Blender is Z-up, the poser Y-up: poser = (x, z, -y). M = R_x(-90 deg). On any other
+             rig M is extended by that rig's up axis, facing and unit (`_frame`), and each bone's
+             rest by its turn onto the canonical rest pose (`_rest_fix`) — both identity here.
   * pose   - the poser returns rotations in ARMATURE space, which is what PoseBone.matrix is:
                  M_bone = T(p) @ (M^T . R_global . M) @ bone.matrix_local.to_3x3()
              At rest the poser emits identity rotations, so this collapses to matrix_local.
@@ -43,7 +45,7 @@ import time
 import bpy
 import mathutils
 
-from . import engine
+from . import engine, joint_map
 
 # poser = M @ blender
 M = mathutils.Matrix(((1, 0, 0), (0, 0, 1), (0, -1, 0)))
@@ -195,27 +197,6 @@ def _is_ctrl(b):
     return bool(getattr(b, "ap_joint", ""))
 
 
-def joint_prefix(arm) -> str:
-    """The prefix this rig puts in front of the canonical joint names, or "".
-
-    Real characters rarely use bare SOMA names: the Animatica rig calls its hips
-    `animatica:Hips`, a Mixamo export calls it `mixamorig:Hips`, and both are the SAME
-    skeleton with a namespace in front. Detecting it costs one scan and makes the addon work
-    on the rig the animator already has instead of demanding a renamed copy. Stamped on the
-    object at Build Rig time so later lookups are stable even if bones are added.
-    """
-    got = arm.get("ap_prefix")
-    if got is not None:
-        return got
-    names = {b.name for b in arm.data.bones}
-    if "Hips" in names:
-        return ""
-    for n in names:
-        if n.endswith(":Hips") or n.endswith("_Hips"):
-            return n[:-len("Hips")]
-    return ""
-
-
 def joint_pose_bone(arm, joint: str):
     """The PoseBone driving a canonical joint, or None."""
     b = joint_bone(arm, joint)
@@ -223,21 +204,246 @@ def joint_pose_bone(arm, joint: str):
 
 
 def joint_bone(arm, joint: str):
-    """The armature bone driving a canonical joint, or None. Accepts a namespaced rig."""
-    b = arm.data.bones.get(joint)
-    if b is not None:
-        return b
-    return arm.data.bones.get(joint_prefix(arm) + joint)
+    """The armature bone driving a canonical joint, or None — through the rig's joint map, so
+    ``LeftShin`` is ``mixamorig:LeftLeg`` on a Mixamo rig and ``calf_l`` on an Unreal one."""
+    name = joint_map_of(arm).get(joint)
+    return arm.data.bones.get(name) if name else None
+
+
+def canonical_joint(arm, bone_name: str) -> str:
+    """The canonical joint a bone of this rig plays, or the bone's own bare name."""
+    for j, bn in joint_map_of(arm).items():
+        if bn == bone_name:
+            return j
+    return bone_name.rsplit(":", 1)[-1]
 
 
 def joint_names(arm):
     """The canonical joints this rig has a bone for, in SOMA order — the poser's own order,
     which is what the descriptor and the returned pose are indexed by. A rig with MORE bones
     (fingers, toe ends, a head end) is fine: the extra ones are simply not driven."""
-    names = engine.meta().get("joint_names") or []
-    pre = joint_prefix(arm)
-    return [(n, pre + n if (pre + n) in arm.data.bones else n) for n in names
-            if joint_bone(arm, n) is not None]
+    names = engine.meta().get("joint_names") or joint_map.CANON
+    jm = joint_map_of(arm)
+    return [(n, jm[n]) for n in names if n in jm and jm[n] in arm.data.bones]
+
+
+# --------------------------------------------------------------------------- any skeleton
+#
+# Three things differ between the canonical rig and whatever the artist brought, and each is
+# settled once per rig and cached:
+#   * WHICH BONE is which joint — ``joint_map`` finds it from the skeleton's structure, and the
+#     artist can correct it (``Object.ap_joints``);
+#   * WHICH WAY IS UP, how big a unit is, and which way the rig faces — an FBX import is often
+#     Y-up in centimetres, with the conversion held in an object or parent transform the poser
+#     never sees. ``_frame`` folds all three into the armature -> poser matrix;
+#   * the REST POSE — the poser's rotations are relative to its own T-pose, and an A-pose arm
+#     given those rotations points 45 degrees off. ``_rest_fix`` is, per joint, the rotation
+#     that turns the rig's rest bone onto the canonical one.
+# On the canonical rig all three are the identity, so nothing it was verified on moves.
+
+#: detected maps and frames, keyed by armature — detection walks every bone, a solve must not
+_MAP_CACHE = {}
+_STORING = False
+#: A rest bone within this of the canonical direction is taken as the same: no correction, so a
+#: canonical rig is posed exactly as it always was.
+REST_FIX_MIN_DEG = 1.0
+#: The main child each joint points at, where it is not simply its first canonical child. The
+#: head has no child along it; a hand's only children are SOMA's finger markers, which a real
+#: rig either lacks or has as the ends of whole finger chains. Both take the correction of the
+#: joint above: an A-pose hand is turned exactly as far as its forearm.
+_PRIMARY_CHILD = {"Head": None, "LeftHand": None, "RightHand": None}
+
+
+def _cache_key(arm):
+    try:
+        return (arm.as_pointer(), arm.data.name, len(arm.data.bones))
+    except ReferenceError:
+        return None
+
+
+def forget_map(arm=None) -> None:
+    """Drop what was worked out about a rig (all rigs, with no argument) — after the map is
+    edited, or bones are added or removed."""
+    if arm is None:
+        _MAP_CACHE.clear()
+        return
+    key = _cache_key(arm)
+    for k in [k for k in _MAP_CACHE if k[1:4] == key]:
+        del _MAP_CACHE[k]
+    try:
+        if "ap_driven" in arm:
+            del arm["ap_driven"]
+    except (ReferenceError, TypeError):
+        pass
+
+
+def _detected(arm):
+    """``(map, up)`` as detection finds them, cached."""
+    key = _cache_key(arm)
+    hit = _MAP_CACHE.get(("detect",) + key)
+    if hit is None:
+        hit = joint_map.detect_frame(joint_map.from_armature(arm))
+        _MAP_CACHE[("detect",) + key] = hit
+    return hit
+
+
+def joint_map_of(arm) -> dict:
+    """``{canonical joint: bone name}`` for this rig — the stored map if the rig has one (Build
+    Rig stores it, and the artist may have corrected it), else what detection finds."""
+    if arm is None:
+        return {}
+    stored = getattr(arm, "ap_joints", None)
+    if stored is not None and len(stored):
+        return {it.joint: it.bone for it in stored if it.bone and it.bone in arm.data.bones}
+    return _detected(arm)[0]
+
+
+def store_map(arm, mapping=None) -> None:
+    """Write a map onto the rig, where the artist can see and correct it."""
+    global _STORING
+    mapping = _detected(arm)[0] if mapping is None else mapping
+    up = _detected(arm)[1]
+    _STORING = True                 # one invalidation for the whole map, not one per row
+    try:
+        arm.ap_joints.clear()
+        for j in joint_map.CANON:          # markers too: kept, just not shown
+            it = arm.ap_joints.add()
+            it.joint = j
+            it.bone = mapping.get(j, "")
+    finally:
+        _STORING = False
+    arm["ap_up"] = joint_map.UPS.index(up) if up in joint_map.UPS else 0
+    forget_map(arm)
+
+
+def _up(arm):
+    idx = arm.get("ap_up")
+    if idx is not None and 0 <= int(idx) < len(joint_map.UPS):
+        return joint_map.UPS[int(idx)]
+    return _detected(arm)[1]
+
+
+#: A character outside this height (metres) is taken to be in other units: an FBX in
+#: centimetres at scale 1 reads as a 170 m giant, and is measured as a 1.7 m person instead.
+PLAUSIBLE_HEIGHT = (0.4, 3.0)
+DEFAULT_HEIGHT = 1.7
+
+
+def _frame(arm):
+    """``(A, A_inv, R)``: armature space -> the poser's frame, for positions (A, which carries
+    the unit scale) and for rotations (R, orthonormal). ``M`` on the canonical rig."""
+    try:
+        sw = sum(arm.matrix_world.to_scale()) / 3.0
+    except (AttributeError, ReferenceError):
+        sw = 1.0
+    key = ("frame",) + (_cache_key(arm) or ()) + (round(sw, 6), arm.get("ap_up"))
+    hit = _MAP_CACHE.get(key)
+    if hit is not None:
+        return hit
+    U = mathutils.Matrix(_up(arm))
+    heads = [U @ b.head_local for b in arm.data.bones if not _is_ctrl(b)]
+    # facing: the rig's left must be on +X once it is stood up, or the poser poses it backwards
+    yaw = mathutils.Matrix.Identity(3)
+    jm = joint_map_of(arm)
+    for left, right in (("LeftArm", "RightArm"), ("LeftLeg", "RightLeg")):
+        lb, rb = arm.data.bones.get(jm.get(left, "")), arm.data.bones.get(jm.get(right, ""))
+        if lb is None or rb is None:
+            continue
+        lat = U @ (lb.head_local - rb.head_local)
+        ang = math.atan2(lat.y, lat.x)
+        if abs(math.degrees(ang)) > REST_FIX_MIN_DEG:
+            yaw = mathutils.Matrix.Rotation(-ang, 3, "Z")
+        break
+    F = yaw @ U
+    s = sw
+    if heads:
+        tall = max(h.z for h in heads) - min(h.z for h in heads)
+        if tall > 1e-6 and not (PLAUSIBLE_HEIGHT[0] <= tall * sw <= PLAUSIBLE_HEIGHT[1]):
+            s = DEFAULT_HEIGHT / tall
+    R = M @ F
+    A = R * s
+    hit = (A, A.inverted(), R)
+    _MAP_CACHE[key] = hit
+    return hit
+
+
+def unit_scale(arm) -> float:
+    """Metres per armature unit, as the poser reads this rig."""
+    A = _frame(arm)[0]
+    return A.col[0].length
+
+
+def to_poser(arm, v):
+    """An armature-space point (or offset) in the poser's frame."""
+    return _frame(arm)[0] @ mathutils.Vector(v)
+
+
+def from_poser(arm, p):
+    """A poser-frame point in armature space."""
+    return _frame(arm)[1] @ mathutils.Vector(tuple(float(x) for x in p))
+
+
+def rot_to_poser(arm, R3):
+    """An armature-space rotation in the poser's frame."""
+    R = _frame(arm)[2]
+    return R @ R3 @ R.transposed()
+
+
+def rot_from_poser(arm, R3):
+    R = _frame(arm)[2]
+    return R.transposed() @ R3 @ R
+
+
+def _rest_fix(arm):
+    """``{joint: 3x3}``: the rotation (armature space) that turns each mapped bone's REST onto
+    the poser's canonical rest. Identity where they already agree."""
+    key = ("restfix",) + (_cache_key(arm) or ())
+    hit = _MAP_CACHE.get(key)
+    if hit is not None:
+        return hit
+    meta = engine.meta()
+    names = meta.get("joint_names") or list(joint_map.CANON)
+    parents = meta.get("parents") or []
+    neutral = meta.get("neutral_joints") or []
+    jm = joint_map_of(arm)
+    R = _frame(arm)[2]
+    RT = R.transposed()
+    kids = {n: [] for n in names}
+    for i, n in enumerate(names):
+        p = parents[i] if i < len(parents) else -1
+        if 0 <= p != i:
+            kids[names[p]].append(n)
+    heads = {j: arm.data.bones[bn].head_local for j, bn in jm.items() if bn in arm.data.bones}
+    out = {}
+    I3 = mathutils.Matrix.Identity(3)
+    for i, j in enumerate(names):
+        p = parents[i] if i < len(parents) else -1
+        inherit = out.get(names[p], I3) if 0 <= p != i else I3
+        if j not in heads or not neutral:
+            out[j] = inherit
+            continue
+        c = _PRIMARY_CHILD.get(j, kids[j][0] if kids[j] else None)
+        rig_dir = heads[c] - heads[j] if c is not None and c in heads else None
+        if rig_dir is None or rig_dir.length < 1e-8:
+            out[j] = inherit
+            continue
+        ci = names.index(c)
+        canon = RT @ mathutils.Vector([neutral[ci][k] - neutral[i][k] for k in range(3)])
+        if canon.length < 1e-8:
+            out[j] = inherit
+            continue
+        q = rig_dir.rotation_difference(canon)
+        out[j] = q.to_matrix() if math.degrees(q.angle) > REST_FIX_MIN_DEG else I3
+    _MAP_CACHE[key] = out
+    return out
+
+
+def _rest3(arm, joint, bone=None):
+    """The joint's rest orientation as the poser means it: the bone's own rest, turned onto the
+    canonical rest pose. What every rotation to or from the poser is taken relative to."""
+    b = bone if bone is not None else joint_bone(arm, joint)
+    rest = b.matrix_local.to_3x3() if b is not None else mathutils.Matrix.Identity(3)
+    return _rest_fix(arm).get(joint, mathutils.Matrix.Identity(3)) @ rest
 
 
 #: SOMA carries four MARKERS in the hand (thumb tip, middle-finger tip) that exist to give the
@@ -258,20 +464,27 @@ MAX_REST_ANGLE = 50.0        # degrees
 
 def driven_joints(arm, *, fresh: bool = False):
     """The joints this rig lets us WRITE, in joint order: mapped, anatomically the same joint,
-    and hanging directly off the joint above them.
+    and hanging below the joint above them.
 
-    A name match is not enough. Three things disqualify a joint, and each of them showed up on
+    A mapped bone is not enough. Three things disqualify a joint, and each of them showed up on
     a real rig before this existed: it is one of SOMA's hand markers (see `MARKER_JOINTS`); its
-    bone does not hang off the bone driving its canonical parent, so bones we do not control
-    sit in between and the chain visibly tears at them; or its rest offset disagrees with the
-    poser's by more than a build difference could explain.
+    bone does not hang below the bone driving its canonical parent, so writing it detaches it
+    from the chain; or its rest offset, once the rest pose is corrected, disagrees with the
+    poser's by more than a build difference could explain — a joint mapped to the wrong bone.
+
+    Bones BETWEEN two driven joints are fine: a rig with four spine bones, or a twist bone
+    inside the chain, has them held at rest while the joints either side are posed (see
+    `chain_bones`).
     """
-    cached = None if fresh else arm.get("ap_driven")
+    # only trusted alongside a stored map: a rig built before maps were stored cached the
+    # joints its bone NAMES allowed, which on a Mixamo rig was seven of them
+    cached = None if fresh or not len(arm.ap_joints) else arm.get("ap_driven")
     if cached:
         return [(j, bn) for j, bn in joint_names(arm) if j in set(cached)]
     meta = engine.meta()
     names, parents = meta.get("joint_names") or [], meta.get("parents") or []
     rest = engine.skeleton().rest_joints(_bone_lengths(arm))
+    fix = _rest_fix(arm)
     out, index = [], {n: i for i, n in enumerate(names)}
     for j, bn in joint_names(arm):
         i = index[j]
@@ -281,12 +494,19 @@ def driven_joints(arm, *, fresh: bool = False):
             continue
         if j in MARKER_JOINTS:
             continue
+        # the nearest canonical ancestor this rig has: a rig without Spine2 hangs its chest
+        # off Spine1, and the chest is still a joint to drive
+        while p >= 0 and joint_bone(arm, names[p]) is None:
+            p = parents[p] if p < len(parents) else -1
+        if p < 0:
+            continue
         pb = joint_bone(arm, names[p])
         b = arm.data.bones[bn]
-        if pb is None or b.parent is None or b.parent.name != pb.name:
-            continue                                  # something undriven sits in between
-        rig = b.matrix_local.translation - pb.matrix_local.translation
-        rig = mathutils.Vector((rig.x, rig.z, -rig.y))          # blender -> poser frame
+        if pb.name not in {a.name for a in b.parent_recursive}:
+            continue                                  # not below its parent joint at all
+        off = fix.get(names[p], mathutils.Matrix.Identity(3)) @ (
+            b.matrix_local.translation - pb.matrix_local.translation)
+        rig = to_poser(arm, off)
         canon = mathutils.Vector((float(rest[i][0] - rest[p][0]),
                                   float(rest[i][1] - rest[p][1]),
                                   float(rest[i][2] - rest[p][2])))
@@ -302,7 +522,9 @@ def driven_joints(arm, *, fresh: bool = False):
 
 #: what the artist is told when the Autoposer cannot work on a rig, instead of a traceback
 NO_MODEL = "The Autoposer model isn't downloaded yet — see Preferences > Add-ons > Animatica"
-UNSUPPORTED = "This rig isn't supported by the Autoposer"
+UNSUPPORTED = "The Autoposer couldn't find a humanoid body on this rig"
+CONTROL_RIG = ("This rig's bones are driven by a control rig, which the Autoposer can't pose "
+               "yet — pose its deform skeleton instead")
 LINKED = ("This rig is linked from another file, so its controls can't be added or removed "
           "here (make it local first)")
 
@@ -330,13 +552,38 @@ def rig_problem(arm):
         return "Pick the character to pose first"
     if not engine.meta():
         return NO_MODEL
-    if len(joint_names(arm)) < 3:
+    missing = joint_map.missing_core(joint_map_of(arm))
+    if len(missing) == len(joint_map.CORE):
         return UNSUPPORTED
+    if missing:
+        names = ", ".join(control_label(j) for j in missing[:4])
+        more = f" and {len(missing) - 4} more" if len(missing) > 4 else ""
+        it = "it" if len(missing) == 1 else "them"
+        return f"Couldn't find the {names}{more} on this rig — set {it} under Skeleton"
+    if _constrained(arm):
+        return CONTROL_RIG
     try:
         engine.skeleton()
     except engine.NotReady:
         return NO_MODEL
     return None
+
+
+def _constrained(arm) -> bool:
+    """Whether the mapped bones are driven by constraints — a control rig, whose deform bones
+    ignore anything written to them. Posing it means posing its controls, which this does not
+    do; the question is asked so the answer is a sentence rather than a rig that will not move."""
+    for _j, bn in joint_names(arm):
+        pb = arm.pose.bones.get(bn)
+        if pb is None:
+            continue
+        for c in pb.constraints:
+            if c.mute or c.influence <= 0.0:
+                continue
+            if c.type in {"COPY_TRANSFORMS", "COPY_ROTATION", "CHILD_OF", "ARMATURE",
+                          "DAMPED_TRACK", "IK", "STRETCH_TO"}:
+                return True
+    return False
 
 
 def _deform_bones(arm):
@@ -358,22 +605,124 @@ def _bone_lengths(arm):
     extra bones the two differ, and a descriptor in the wrong order poses a different body.
     Raw metres: the runtime sanitises them (a rig differs from the training population on the
     near-constant dims by millimetres, which raw z-scoring turns into a collapsed pose).
+
+    A rig that lacks a joint still has the body around it. Where joints are missing between
+    two it has (one neck bone for SOMA's two, two spine bones for three), the measured span is
+    shared out in the proportions of the average body; a joint with nothing below it (a jaw,
+    the finger markers, a toe) gets the average body's length, scaled to this one. Zeros, as
+    this sent before, describe a body with no neck.
+
+    A length is measured ALONG the canonical bone: the poser can only lay a bone out in its
+    own direction, and a rig whose shoulders start up by the neck, 30 cm from the chest but
+    only 13 cm out to the side, described by the full 30 cm gets a body with its shoulders
+    30 cm out — and a spine bent double to bring the hands back in. On the canonical rig the
+    two directions agree and this is the plain distance.
     """
     meta = engine.meta()
     parents = meta.get("parents") or []
-    canon = {j: bn for j, bn in joint_names(arm)}
     order = meta.get("joint_names") or []
+    mean = list(meta.get("blen_mean") or [])
+    canon = {j: bn for j, bn in joint_names(arm)}
+    s = unit_scale(arm)
     heads = {j: arm.data.bones[bn].matrix_local.translation for j, bn in canon.items()}
-    out = []
-    for i, j in enumerate(order):
+    neutral = meta.get("neutral_joints") or []
+    fix = _rest_fix(arm)
+    slot = {}                                   # joint index -> position in the descriptor
+    for i in range(len(order)):
         p = parents[i] if i < len(parents) else -1
-        if p < 0 or p == i:
+        if 0 <= p != i:
+            slot[i] = len(slot)
+    out = [None] * len(slot)
+
+    def avg(i):
+        k = slot[i]
+        return float(mean[k]) if k < len(mean) else 0.0
+
+    for i, j in enumerate(order):
+        if i not in slot or j not in heads:
             continue
-        pj = order[p]
-        if j in heads and pj in heads:
-            out.append((heads[j] - heads[pj]).length)
-        else:
-            out.append(0.0)
+        span, p = [i], parents[i]
+        while p >= 0 and order[p] not in heads:
+            if p in slot:
+                span.append(p)
+            p = parents[p] if p < len(parents) else -1
+        if p < 0:
+            continue
+        off = heads[j] - heads[order[p]]
+        d = off.length * s
+        if len(span) == 1 and neutral and d > 0:
+            rig_dir = to_poser(arm, fix.get(order[p], mathutils.Matrix.Identity(3)) @ off)
+            canon_dir = mathutils.Vector([neutral[i][k] - neutral[p][k] for k in range(3)])
+            if canon_dir.length > 1e-8 and rig_dir.length > 1e-8 and \
+                    math.degrees(rig_dir.angle(canon_dir)) > REST_FIX_MIN_DEG:
+                # never below a third: a joint mapped far off its bone is not a stub
+                d = max(rig_dir.dot(canon_dir.normalized()), d / 3.0)
+        total = sum(avg(k) for k in span)
+        for k in span:
+            out[slot[k]] = d * (avg(k) / total if total > 0 else 1.0 / len(span))
+    known = [(out[slot[i]], avg(i)) for i in slot if out[slot[i]] is not None and avg(i) > 0]
+    ratios = sorted(v / m for v, m in known if v > 0)
+    ratio = ratios[len(ratios) // 2] if ratios else 1.0
+    joint_at = {k: i for i, k in slot.items()}
+    out = [v if v is not None else avg(joint_at[k]) * ratio for k, v in enumerate(out)]
+    if _canonical_build(arm):
+        return out
+    return _in_distribution(out, {order[i]: k for i, k in slot.items()}, meta)
+
+
+#: Spans whose TOTAL a rig gives reliably but whose split between joints is a rig convention:
+#: Mixamo starts its spine 10 cm above the hips where SOMA starts it 5 cm up, and hangs its
+#: arms off a clavicle half as long. Measured joint by joint these read to the poser as a body
+#: 23 standard deviations from anything it was trained on, and its answer jumps about; the
+#: total, shared out as the average body shares it, is the same torso in the poser's terms.
+_CONVENTION_SPANS = (("Spine1", "Spine2", "Chest", "Neck1", "Neck2", "Head"),
+                     ("LeftShoulder", "LeftArm"), ("RightShoulder", "RightArm"))
+#: ...and no dimension further out than this, in standard deviations of the training bodies
+BODY_Z_MAX = 2.5
+
+
+def _canonical_build(arm) -> bool:
+    """Whether the rig is laid out like the canonical skeleton: every bone at the canonical rest
+    direction. Such a rig's descriptor is measured, not reinterpreted."""
+    return all(m == mathutils.Matrix.Identity(3) for m in _rest_fix(arm).values())
+
+
+def _in_distribution(lengths, slot_of, meta):
+    """The descriptor of a rig built to another convention, restated in the poser's terms: its
+    convention-dependent spans re-split like the average body's, then every dimension held
+    within `BODY_Z_MAX` of the training population."""
+    mean = [float(v) for v in (meta.get("blen_mean") or [])]
+    std = [float(v) for v in (meta.get("blen_std") or [])]
+    if len(mean) != len(lengths) or len(std) != len(lengths):
+        return lengths
+    out = list(lengths)
+    for span in _CONVENTION_SPANS:
+        ks = [slot_of[j] for j in span if j in slot_of]
+        total, share = sum(out[k] for k in ks), sum(mean[k] for k in ks)
+        if total > 0 and share > 0:
+            for k in ks:
+                out[k] = total * mean[k] / share
+    deg = float(meta.get("cond_degenerate_std", 1e-3))
+    for k, v in enumerate(out):
+        if std[k] >= deg:
+            out[k] = min(max(v, mean[k] - BODY_Z_MAX * std[k]), mean[k] + BODY_Z_MAX * std[k])
+    return out
+
+
+def chain_bones(arm):
+    """Bones that sit BETWEEN two driven joints — a third spine bone, a twist bone inside an
+    arm chain. Held at rest (identity basis) while the joints either side are posed, so the
+    chain reads through them; `pose_bases` writes them."""
+    driven = {bn for _j, bn in driven_joints(arm)}
+    out = []
+    for bn in driven:
+        b = arm.data.bones[bn].parent
+        between = []
+        while b is not None and b.name not in driven:
+            between.append(b.name)
+            b = b.parent
+        if b is not None:
+            out.extend(n for n in between if n not in out)
     return out
 
 
@@ -437,7 +786,7 @@ def _rot_effector(arm, joint, b, tol):
     the orientation the joint already had: adding it changes nothing.
     """
     jb = joint_pose_bone(arm, joint)
-    rest3 = jb.bone.matrix_local.to_3x3() if jb else mathutils.Matrix.Identity(3)
+    rest3 = _rest3(arm, joint)
     ref = b.get("ap_rot_ref")
     if ref is not None and len(ref) == 9:
         R_ref = mathutils.Matrix(((ref[0], ref[1], ref[2]),
@@ -448,7 +797,7 @@ def _rot_effector(arm, joint, b, tol):
     desired = _ctrl_delta(arm, b) @ R_ref
     # the robot wants the LINK's world rotation, and its frame is Blender's: no
     # rest removal, no y-up conversion (the SOMA poser needs both)
-    R3 = M @ (desired @ rest3.inverted()) @ MT
+    R3 = rot_to_poser(arm, desired @ rest3.inverted())
     return {"joint": joint, "type": "rot", "tol": tol,
             "rot": [R3[0][0], R3[1][0], R3[2][0], R3[0][1], R3[1][1], R3[2][1]]}
 
@@ -511,16 +860,14 @@ def _effectors(arm):
         if key in picked and picked[key][0] <= tol:
             continue
         m = pb.matrix
-        p = M @ m.translation
+        p = to_poser(arm, m.translation)
         if ety == 2:                                    # look-at: control position IS the target
             e = {"joint": joint, "type": "lookat", "pos": [p.x, p.y, p.z]}
         elif ety == 1:
             # rotation effector = the joint's GLOBAL rotation in the poser frame, as the first two
             # matrix columns. The control carries the joint's pose matrix, so the joint's own rest
             # orientation has to come back out before converting frames — same relation as _apply.
-            jb = joint_pose_bone(arm, b.ap_joint)
-            rest3 = jb.bone.matrix_local.to_3x3() if jb else mathutils.Matrix.Identity(3)
-            R3 = M @ (m.to_3x3() @ rest3.inverted()) @ MT
+            R3 = rot_to_poser(arm, m.to_3x3() @ _rest3(arm, b.ap_joint).inverted())
             e = {"joint": joint, "type": "rot", "tol": tol,
                  "rot": [R3[0][0], R3[1][0], R3[2][0], R3[0][1], R3[1][1], R3[2][1]]}
         else:
@@ -558,12 +905,13 @@ def toe_tips(arm):
             continue
         tip = min(kids, key=lambda c: (c.matrix_local.translation
                                        - b.matrix_local.translation).length)
-        d = tip.matrix_local.translation - b.matrix_local.translation
-        out[ball] = [d.x, d.z, -d.y]                        # blender -> poser
+        d = to_poser(arm, _rest_fix(arm).get(ball, mathutils.Matrix.Identity(3))
+                     @ (tip.matrix_local.translation - b.matrix_local.translation))
+        out[ball] = [d.x, d.y, d.z]
     return out
 
 
-def pose_bases(arm, names, pos, r6):
+def pose_bases(arm, names, pos, r6, pins=None):
     """The solve as {bone name: matrix_basis}, without writing anything.
 
     Split out of `_apply` so a solve can also be keyed at a frame the rig is
@@ -575,9 +923,25 @@ def pose_bases(arm, names, pos, r6):
     Only `driven_joints` are written: a bone whose name matches a canonical joint but whose
     chain says otherwise is left alone, because forcing it detaches it from the bones above it
     and the skin tears at exactly that seam.
+
+    Each joint is given its solved ORIENTATION; only the root is given its solved position.
+    Every other joint lands where its parent chain puts it — which is where the poser put it
+    on a rig of the canonical build, and on any other rig is the only position a key of its
+    rotations can reproduce. Writing solved positions onto disconnected bones (every FBX
+    import) would show one pose live and key another.
+
+    ``pins`` — ``{hand or foot joint: armature-space position}`` — are the handles the artist
+    pinned. On a rig built differently from the canonical one, the chain above a hand does not
+    land exactly where the poser's did (its shoulders branch off the chest at another angle),
+    so the limb is finished with a two-bone fit onto the pin. The canonical rig skips this and
+    is posed exactly as it always was.
+
+    Bones between two driven joints (`chain_bones`) are held at identity, so the joints below
+    them can be placed through them.
     """
     drivable = {j for j, _bn in driven_joints(arm)}
-    want = {}
+    root_joint = (engine.meta().get("joint_names") or ["Hips"])[0]
+    rots, root_pos = {}, None
     for i, nm in enumerate(names):
         if nm not in drivable:
             continue
@@ -589,24 +953,114 @@ def pose_bases(arm, names, pos, r6):
         c1 = (c1 - c1.dot(c0) * c0).normalized()
         c2 = c0.cross(c1)
         R_ps = mathutils.Matrix(((c0.x, c1.x, c2.x), (c0.y, c1.y, c2.y), (c0.z, c1.z, c2.z)))
-        m = ((MT @ R_ps @ M) @ pb.bone.matrix_local.to_3x3()).to_4x4()
-        m.translation = MT @ mathutils.Vector(pos[i])
-        want[pb.name] = m
-    bases = {}
-    for nm, target in want.items():
-        b = arm.pose.bones[nm].bone
-        if b.parent is not None and b.parent.name in want:
-            base = want[b.parent.name] @ (b.parent.matrix_local.inverted() @ b.matrix_local)
-        else:
-            base = b.matrix_local.copy()
-        bases[nm] = base.inverted() @ target
+        rots[pb.name] = rot_from_poser(arm, R_ps) @ _rest3(arm, nm, pb.bone)
+        if nm == root_joint:
+            root_pos = (pb.name, from_poser(arm, pos[i]))
+    posed, bases = _chain_pose(arm, rots, root_pos)
+    if pins and needs_fit(arm):
+        for joint, target in pins.items():
+            _fit_limb(arm, joint, mathutils.Vector(target), rots, posed)
+        posed, bases = _chain_pose(arm, rots, root_pos)
     return bases
 
 
-def _apply(arm, names, pos, r6):
+def _chain_pose(arm, rots, root_pos):
+    """World orientations -> ({bone: armature-space pose}, {bone: matrix_basis}), parents first:
+    a joint is placed through the pose of the joint above it."""
+    I4 = mathutils.Matrix.Identity(4)
+    bases, posed = {}, {}
+    for nm in sorted(rots, key=lambda n: len(arm.data.bones[n].parent_recursive)):
+        b = arm.data.bones[nm]
+        anc, between = b.parent, []
+        while anc is not None and anc.name not in rots:
+            between.append(anc.name)
+            anc = anc.parent
+        if anc is not None:
+            base = posed[anc.name] @ (anc.matrix_local.inverted() @ b.matrix_local)
+            for n in between:
+                bases[n] = I4.copy()
+        else:
+            base = b.matrix_local.copy()
+        target = rots[nm].to_4x4()
+        target.translation = (root_pos[1] if root_pos and root_pos[0] == nm
+                              else base.translation)
+        posed[nm] = target
+        bases[nm] = base.inverted() @ target
+    return posed, bases
+
+
+#: the two-bone limbs a pinned hand or foot is fitted through: (upper, lower, end)
+LIMBS = {"LeftHand": ("LeftArm", "LeftForeArm"), "RightHand": ("RightArm", "RightForeArm"),
+         "LeftFoot": ("LeftLeg", "LeftShin"), "RightFoot": ("RightLeg", "RightShin")}
+
+
+def needs_fit(arm) -> bool:
+    """Whether this rig is built differently enough from the canonical one that a pinned limb
+    has to be finished on the rig itself (see `pose_bases`)."""
+    return bool(chain_bones(arm)) or any(
+        m != mathutils.Matrix.Identity(3) for m in _rest_fix(arm).values())
+
+
+def _fit_limb(arm, joint, target, rots, posed):
+    """Turn a limb's upper and lower bones so its end reaches *target*, keeping the plane it
+    bends in and the end's own orientation. Changes ``rots`` in place."""
+    if joint not in LIMBS:
+        return
+    ua, la = (joint_bone(arm, j) for j in LIMBS[joint])
+    end = joint_bone(arm, joint)
+    if ua is None or la is None or end is None or not {ua.name, la.name, end.name} <= set(posed):
+        return
+    A = posed[ua.name].translation
+    B = posed[la.name].translation
+    C = posed[end.name].translation
+    l1, l2 = (B - A).length, (C - B).length
+    to_t = target - A
+    d = to_t.length
+    if l1 < 1e-8 or l2 < 1e-8 or d < 1e-8 or (target - C).length < 1e-6:
+        return
+    d = max(abs(l1 - l2) + 1e-5, min(l1 + l2 - 1e-5, d))
+    u = to_t.normalized()
+    # the bend: where the elbow or knee points now, off the line from the shoulder to the hand
+    pole = (B - A) - (B - A).dot(u) * u
+    if pole.length < 1e-6:
+        pole = (C - A).cross(u).cross(u) if (C - A).cross(u).length > 1e-6 else u.orthogonal()
+    v = pole.normalized()
+    cos_a = max(-1.0, min(1.0, (l1 * l1 + d * d - l2 * l2) / (2 * l1 * d)))
+    B2 = A + l1 * (cos_a * u + math.sqrt(max(0.0, 1 - cos_a * cos_a)) * v)
+    Ra = (B - A).rotation_difference(B2 - A).to_matrix()
+    C_turned = B2 + Ra @ (C - B)
+    Rb = (C_turned - B2).rotation_difference(A + u * d - B2).to_matrix()
+    # world orientations: the end keeps the one the poser gave it
+    for n, r in ((ua.name, Ra), (la.name, Rb @ Ra)):
+        rots[n] = r @ rots[n]
+
+
+def _apply(arm, names, pos, r6, pins=None):
     """Write the solve onto the rig, one depsgraph update for the whole body."""
-    for nm, basis in pose_bases(arm, names, pos, r6).items():
+    for nm, basis in pose_bases(arm, names, pos, r6, pins).items():
         arm.pose.bones[nm].matrix_basis = basis
+
+
+#: A handle looser than this is a hint to the poser, not a pin to be met on the rig.
+PIN_TOL = 0.02                  # metres
+
+
+def _pins(arm, eff, out, floor):
+    """The hands and feet the artist pinned, in armature space, for `pose_bases` to finish.
+
+    With the floor on, a pinned foot never goes lower than the poser left it: the floor pass
+    may have lifted it, and pulling it back down would put the toes under the floor it keeps.
+    """
+    names = list(out.get("names") or [])
+    pins = {}
+    for e in eff:
+        if e.get("type") != "pos" or e["joint"] not in LIMBS or float(e.get("tol", 1)) > PIN_TOL:
+            continue
+        p = list(e["pos"])
+        if floor and e["joint"].endswith("Foot") and e["joint"] in names:
+            p[1] = max(p[1], float(out["joints"][names.index(e["joint"])][1]))
+        pins[e["joint"]] = from_poser(arm, p)
+    return pins
 
 
 def solve(context, report=None, *, moved: bool = False):
@@ -622,7 +1076,7 @@ def solve(context, report=None, *, moved: bool = False):
     arm = _armature(context)
     if arm is None:
         if report:
-            report({"ERROR"}, "Pick a SOMA-30 armature in the Autoposer panel")
+            report({"ERROR"}, "Pick the character to pose first")
         return False
     _latch_rotations(arm)
     eff = _effectors(arm)
@@ -666,7 +1120,8 @@ def solve(context, report=None, *, moved: bool = False):
 
     _BUSY = True
     try:
-        _apply(arm, out["names"], out["joints"], out["rotations_6d"])
+        _apply(arm, out["names"], out["joints"], out["rotations_6d"],
+               _pins(arm, eff, out, floor))
         context.view_layer.update()          # joints must be evaluated before controls read them
         _follow(arm)          # every DISABLED control tracks the joint the poser just placed
         _reseat_rot_refs(arm)  # ...and every non-rotating control re-anchors its rotation frame
@@ -874,8 +1329,14 @@ def _seed_position(arm, spec):
         return None
     p = src.matrix.translation.copy()
     if spec["ety"] == 2:
-        p = p + mathutils.Vector((0.0, -AIM_OFFSET, 0.0))     # -Y is 'forward' in this rig's frame
+        p = p + _forward(arm) * AIM_OFFSET
     return p
+
+
+def _forward(arm):
+    """One metre straight ahead of the character at rest, in armature units — -Y on the
+    canonical rig, whatever the rig's own frame on any other."""
+    return from_poser(arm, (0.0, 0.0, 1.0))
 
 
 def _preserve_pose(arm):
@@ -886,8 +1347,8 @@ def _preserve_pose(arm):
     reproduces the pose exactly — verified 0.0001 cm — so a structural edit is guaranteed not to
     move the character, which is the whole contract of add/remove.
     """
-    return {b.name: arm.pose.bones[b.name].matrix_basis.copy()
-            for b in _deform_bones(arm) if arm.pose.bones.get(b.name)}
+    names = [b.name for b in _deform_bones(arm)] + chain_bones(arm)
+    return {n: arm.pose.bones[n].matrix_basis.copy() for n in names if arm.pose.bones.get(n)}
 
 
 def _restore_pose(arm, snap, context):
@@ -975,8 +1436,9 @@ def _add_control(arm, spec, context):
     bone_name = spec["joint"]
     jb = joint_bone(arm, bone_name)
     rest_head = jb.matrix_local.translation.copy()
+    unit = 1.0 / unit_scale(arm)                # a metre, in this rig's units
     if spec["ety"] == 2:
-        rest_head = rest_head + mathutils.Vector((0.0, -AIM_OFFSET, 0.0))
+        rest_head = rest_head + _forward(arm) * AIM_OFFSET
     prev = arm.mode
     context.view_layer.objects.active = arm
     bpy.ops.object.mode_set(mode="EDIT")
@@ -984,7 +1446,7 @@ def _add_control(arm, spec, context):
         eb = arm.data.edit_bones
         b = eb.get(name) or eb.new(name)
         b.head = rest_head
-        b.tail = rest_head + mathutils.Vector((0.0, 0.0, 0.08))
+        b.tail = rest_head + _frame(arm)[2].transposed() @ mathutils.Vector((0.0, 0.08 * unit, 0.0))
         b.parent = None
         b.use_deform = False
         b.use_connect = False
@@ -1012,7 +1474,7 @@ def _add_control(arm, spec, context):
     pb = arm.pose.bones[name]
     pb.custom_shape = _shape_mesh(spec["shape"])
     pb.use_custom_shape_bone_size = False
-    s = SHAPE_SCALE.get(spec["shape"], 1.0) * 0.10
+    s = SHAPE_SCALE.get(spec["shape"], 1.0) * 0.10 * unit
     try:
         pb.custom_shape_scale_xyz = (s, s, s)
     except Exception:
@@ -1029,16 +1491,18 @@ def _add_control(arm, spec, context):
     return name
 
 
-def _aim_dir(joint_pb):
-    """World (Blender-frame) direction of the poser's LOCAL aim axis for this joint.
+def _aim_dir(arm, joint):
+    """Armature-space direction of the poser's LOCAL aim axis for this joint.
 
     The poser aims its local +z (poser frame). Pushing that through the apply relation
-    M_bone = MT . R_ps . M . rest  gives  dir_blender = (pose3 . rest3^-1) . (MT . +z_poser),
-    and MT @ (0,0,1) is (0,-1,0). Using the bone's own local +z instead would aim the wrong axis.
+    M_bone = R^T . R_ps . R . rest  gives  dir = (pose3 . rest3^-1) . (R^T . +z_poser), which
+    on the canonical rig (R = M) is (0,-1,0). Using the bone's own local +z instead would aim
+    the wrong axis.
     """
+    joint_pb = joint_pose_bone(arm, joint)
     pose3 = joint_pb.matrix.to_3x3()
-    rest3 = joint_pb.bone.matrix_local.to_3x3()
-    return (pose3 @ rest3.inverted()) @ mathutils.Vector((0.0, -1.0, 0.0))
+    fwd = _frame(arm)[2].transposed() @ mathutils.Vector((0.0, 0.0, 1.0))
+    return (pose3 @ _rest3(arm, joint).inverted()) @ fwd
 
 
 def _place(arm, b):
@@ -1060,7 +1524,8 @@ def _place(arm, b):
     want = rest.copy()
     ety = int(b.get("ap_ety", 0))
     if ety == 2:
-        want.translation = src.matrix.translation + AIM_OFFSET * _aim_dir(src).normalized()
+        want.translation = (src.matrix.translation
+                            + (AIM_OFFSET / unit_scale(arm)) * _aim_dir(arm, b.ap_joint).normalized())
     else:
         want.translation = src.matrix.translation
     pb.matrix_basis = rest.inverted() @ want
@@ -1116,7 +1581,7 @@ class AP_OT_build_rig(bpy.types.Operator):
     def execute(self, context):
         arm = _armature(context)
         if arm is None:
-            self.report({"ERROR"}, "Pick a SOMA-30 armature first")
+            self.report({"ERROR"}, "Pick the character to pose first")
             return {"CANCELLED"}
         try:
             rig = rig_def(refresh=True)
@@ -1136,7 +1601,9 @@ class AP_OT_build_rig(bpy.types.Operator):
             return {"CANCELLED"}
         _show_controls_in_front(arm)           # handles inside a body are not handles
         _hide_deform_bones(arm, context.scene.ap_hide_deform)
-        arm["ap_prefix"] = joint_prefix(arm)    # settle the namespace once, at build time
+        if not len(arm.ap_joints):
+            store_map(arm, joint_map_of(arm))  # settle the map once, where it can be corrected
+            drivable = driven_joints(arm, fresh=True)
         arm["ap_driven"] = [j for j, _bn in drivable]
         global _BUILDING
         _BUILDING = True                    # creating controls must not fire the toggle callbacks
@@ -1154,11 +1621,9 @@ class AP_OT_build_rig(bpy.types.Operator):
         _restore_pose(arm, keep, context)
         _snap(arm, context)
         sync_state(arm)          # the controls moved because we built them, not because anyone posed
-        pre = arm.get("ap_prefix") or ""
         skipped = len(have) - len(drivable)
         self.report({"INFO"}, f"{len(made)} controls, driving {len(drivable)} joints"
-                              + (f" (rig prefix {pre!r})" if pre else "")
-                              + (f", {skipped} name-matched bones left alone" if skipped else "")
+                              + (f", {skipped} mapped bones left alone" if skipped else "")
                               + " — grab them in Pose Mode")
         return {"FINISHED"}
 
@@ -1444,8 +1909,8 @@ class AP_OT_rest(bpy.types.Operator):
         arm = _armature(context)
         if arm is None:
             return {"CANCELLED"}
-        for b in _deform_bones(arm):
-            arm.pose.bones[b.name].matrix_basis = mathutils.Matrix()
+        for n in [b.name for b in _deform_bones(arm)] + chain_bones(arm):
+            arm.pose.bones[n].matrix_basis = mathutils.Matrix()
         context.view_layer.update()
         _snap(arm, context)
         sync_state(arm)          # rest is where the artist asked to be, not a pose to solve back out of
@@ -1495,12 +1960,77 @@ def joint_label(b) -> str:
                          b.get("ap_kind") or "")
 
 
+# --------------------------------------------------------------------------- the joint map
+def _on_map_edit(self, context):
+    """A joint was pointed at another bone: everything worked out from the old map is stale,
+    and the controls re-seat on the joints they now follow."""
+    if _STORING:
+        return
+    arm = self.id_data
+    forget_map(arm)
+    if has_controls(arm):
+        try:
+            _snap(arm, context)
+            sync_state(arm)
+        except Exception:                                   # noqa: BLE001
+            pass
+
+
+class AP_JointItem(bpy.types.PropertyGroup):
+    """One row of a rig's joint map: which of its bones plays a canonical joint."""
+    joint: bpy.props.StringProperty(name="Joint")
+    bone: bpy.props.StringProperty(
+        name="Bone", update=_on_map_edit,
+        description="The bone of this rig that plays this joint. Empty: the rig has no such "
+                    "joint, and the poser fills it in from its prior")
+
+
+class AP_OT_detect_joints(bpy.types.Operator):
+    bl_idname = "autoposer.detect_joints"
+    bl_label = "Detect Joints"
+    bl_description = ("Find the hips, spine, arms, legs and head on this rig again, from its "
+                      "shape, replacing any joints set by hand")
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        arm = _armature(context)
+        if arm is None:
+            return {"CANCELLED"}
+        arm.ap_joints.clear()
+        if "ap_up" in arm:
+            del arm["ap_up"]
+        forget_map(arm)
+        store_map(arm)
+        if has_controls(arm):
+            _snap(arm, context)
+            sync_state(arm)
+        found = sum(1 for it in arm.ap_joints if it.bone)
+        missing = joint_map.missing_core(joint_map_of(arm))
+        if missing:
+            self.report({"WARNING"}, f"found {found} joints; set "
+                        + ", ".join(control_label(j) for j in missing) + " by hand")
+        else:
+            self.report({"INFO"}, f"found {found} joints")
+        return {"FINISHED"}
+
+
+def skeleton_summary(arm) -> str:
+    """One line for the panel: how much of the body the rig was matched on."""
+    jm = joint_map_of(arm)
+    total = len([j for j in joint_map.CANON if j not in MARKER_JOINTS])
+    got = len([j for j in jm if j not in MARKER_JOINTS])
+    return f"{got} of {total} joints matched"
+
+
 CLASSES = (AP_OT_build_rig, AP_OT_add_control, AP_OT_remove_control, AP_OT_solve,
            AP_OT_snap_controls, AP_OT_rest, AP_OT_key_pose, AP_OT_take_over, AP_OT_release,
+           AP_OT_detect_joints,
 )
 
 
 def register():
+    bpy.utils.register_class(AP_JointItem)
+    bpy.types.Object.ap_joints = bpy.props.CollectionProperty(type=AP_JointItem)
     B = bpy.types.Bone
     B.ap_joint = bpy.props.StringProperty(name="Joint", default="",
                                           description="SOMA joint this control drives")
@@ -1544,6 +2074,9 @@ def register():
         description="Hide the deform bones so only the controls and the character are visible. "
                     "Display only — the poser drives them either way")
     S.ap_status = bpy.props.StringProperty(name="Status", default="")
+    S.ap_show_joints = bpy.props.BoolProperty(
+        name="Skeleton", default=False,
+        description="Show which bone of the rig plays each joint the Autoposer poses")
     for c in CLASSES:
         bpy.utils.register_class(c)
 
@@ -1556,11 +2089,15 @@ def unregister():
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
     for p in ("ap_armature", "ap_live", "ap_rate", "ap_use_ik", "ap_status",
-              "ap_hide_deform", "ap_floor"):
+              "ap_hide_deform", "ap_floor", "ap_show_joints"):
         if hasattr(bpy.types.Scene, p):
             delattr(bpy.types.Scene, p)
     for p in ("ap_joint", "ap_enabled", "ap_tol_m", "ap_rot", "ap_rot_tol_m"):
         if hasattr(bpy.types.Bone, p):
             delattr(bpy.types.Bone, p)
+    if hasattr(bpy.types.Object, "ap_joints"):
+        del bpy.types.Object.ap_joints
+    bpy.utils.unregister_class(AP_JointItem)
+    forget_map()
 
 

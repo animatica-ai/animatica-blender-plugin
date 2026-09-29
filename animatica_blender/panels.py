@@ -98,6 +98,41 @@ def _draw_rig_held(layout, context, settings) -> None:
     box.operator("animatica.give_back_rig", icon='LOOP_BACK', text="Give Back Rig")
 
 
+def _draw_skeleton(layout, context, arm, open_if_wrong=False) -> None:
+    """Which bone plays each joint the Autoposer poses — found from the rig's shape, and
+    correctable here when a rig's shape is unusual enough to fool it."""
+    from .autoposer import poser
+
+    scene = context.scene
+    shown = scene.ap_show_joints or open_if_wrong
+    row = layout.row(align=True)
+    row.prop(scene, "ap_show_joints", text="",
+             icon='DISCLOSURE_TRI_DOWN' if shown else 'DISCLOSURE_TRI_RIGHT', emboss=False)
+    row.label(text=f"Skeleton · {poser.skeleton_summary(arm)}")
+    row.operator("autoposer.detect_joints", text="", icon='FILE_REFRESH')
+    if not shown:
+        return
+    col = layout.column(align=True)
+    col.use_property_split = True
+    col.use_property_decorate = False
+    if not len(arm.ap_joints):
+        # Nothing stored yet: show what detection found, and store it on the first edit.
+        col.operator("autoposer.detect_joints", text="Edit Joints", icon='GREASEPENCIL')
+        jm = poser.joint_map_of(arm)
+        for j in poser.joint_map.CANON:
+            if j in poser.MARKER_JOINTS:
+                continue
+            r = col.row()
+            r.active = j in jm
+            r.label(text=poser.control_label(j))
+            r.label(text=jm.get(j, "—"))
+        return
+    for it in arm.ap_joints:
+        if it.joint in poser.MARKER_JOINTS:
+            continue
+        col.prop_search(it, "bone", arm.data, "bones", text=poser.control_label(it.joint))
+
+
 def _draw_set_keyframe(layout, context, settings) -> None:
     """The one button for committing a pose you posed by hand.
 
@@ -724,8 +759,15 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
                              text=engine.download_label())
             box.label(text="Preferences → Animatica for detail")
         elif not poser.has_controls(arm):
+            problem = poser.rig_problem(arm)
+            if problem and problem != poser.NO_MODEL:
+                row = layout.row()
+                row.alert = True
+                row.label(text=problem[:70], icon='ERROR')
+            _draw_skeleton(layout, context, arm, open_if_wrong=bool(problem))
             row = layout.row()
             row.scale_y = 1.3
+            row.enabled = problem is None
             row.operator("autoposer.build_rig", icon='OUTLINER_OB_ARMATURE',
                          text="Start the Autoposer")
         else:
@@ -751,6 +793,8 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
             row = layout.row(align=True)
             row.prop(settings, "pose_tightness", slider=True)
             row.prop(settings, "pose_details", text="", icon='OPTIONS')
+            if settings.pose_details:
+                _draw_skeleton(layout, context, arm)
 
         # --- the pose at this frame: proposed by the model, or stated -----
         layout.separator()
