@@ -9,6 +9,16 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- **The Autoposer works on any humanoid rig.** It finds the hips, spine,
+  arms, legs and head from the skeleton's shape instead of its bone names, so
+  Mixamo, Unreal and other humanoid rigs get handles without renaming
+  anything. A-pose rigs, rigs exported Y-up or in centimetres, and rigs with
+  extra spine or twist bones are posed correctly. **Skeleton** in the **Pose**
+  panel shows which bone plays each joint and lets you change it. On a control
+  rig the Autoposer now says why it can't start instead of posing nothing.
+
 ## [0.6.1] — 2026-09-28
 
 ### Fixed
