@@ -468,14 +468,12 @@ class _Body:
 
 # --- the simplest trajectory ----------------------------------------------------------
 
-#: A model is accepted within these of the travel path, split by direction.
-#: Across the path: RMS 1.5 cm + 2.5 % of the distance, max 4 cm + 5 % (a
-#: motion's own wobble about a line is a few % of its length; a real curve is
-#: far outside it). Along it: 2 cm RMS, 5 cm max, whatever the distance -- an
-#: error along the path is timing, and played in place it is the body sliding
-#: forward or back (a line accepted on an 11 m run had it drift 0.5 m back).
+#: A shape is accepted within these of the travel path, across it: RMS 1.5 cm
+#: + 2.5 % of the distance, max 4 cm + 5 % (a motion's own wobble about a line
+#: is a few % of its length; a real curve is far outside it). Along the path
+#: there is no tolerance, because there is no error: the trajectory moves along
+#: its shape with the body (see _retime). Same as the Blender addon's inplace.py.
 TOL_RMS, TOL_MAX, TOL_REL = 0.015, 0.04, 0.025
-ALONG_RMS, ALONG_MAX = 0.02, 0.05
 #: distance-curve keys at most this far apart (s), besides the take's events
 KEY_GAP = 0.25
 #: on the spot: never strays further than this (or creeps < 8 cm at < 5 cm/s)
@@ -494,8 +492,6 @@ def on_the_spot(path) -> bool:
         return True
     return (float(np.linalg.norm(path[-1] - path[0])) < ON_SPOT_NET
             and float(np.linalg.norm(path - path[0], axis=1).max()) < ON_SPOT_REACH)
-MODELS = ("still", "line", "arc", "line + distance curve", "arc + distance curve", "bezier + distance curve")
-LOOPABLE = ("still", "line", "arc")
 
 
 def _pchip(tk, yk, t):
@@ -582,50 +578,51 @@ def _tangent_yaw(xy, fps):
     return ang - ang[idx[0]]
 
 
-def _fit(model, path, T, tk, fps):
-    """One model fitted to the travel path (+Z up): (xy, heading change, numbers) or None.
+#: The trajectory keeps a simple shape -- a game can draw it, or steer along
+#: it -- but moves along it with the body, frame by frame: its centre of mass,
+#: projected onto the shape. At a constant speed along a line, the body's own
+#: speeding up and slowing down within each stride stayed in the pose, and
+#: played in place it floated forward and back; timed by the body, only the
+#: sway across the path, the height and the facing stay.
+MODELS = ("still", "line", "arc", "bezier")
+LOOPABLE = ("still", "line", "arc")
+#: the COM is smoothed over this (s) before it times the trajectory: frame jitter, not the stride
+TIMING_SMOOTH = 0.1
+#: past its ends the shape runs straight on this far (m), for a body that starts behind it
+_EXTEND = 3.0
+
+
+def _shape(model, path, T, tk):
+    """The travel path laid onto one shape (+Z up): each frame's point on it,
+    in order along it, and the shape's numbers; None if it does not apply.
     Headings: 0 faces -Y (the glTF +Z), + turns left."""
     n = len(path)
-    zero = np.zeros(n)
     if model == "still":
-        c = path.mean(0)
-        return np.repeat(c[None], n, 0), zero, {}
+        return np.repeat(path.mean(0)[None], n, 0), {}, None
     if model == "line":
-        A = np.stack([np.ones(n), T], 1)
-        coef, *_ = np.linalg.lstsq(A, path, rcond=None)
-        v = coef[1]
-        return A @ coef, zero, {"speed": round(float(np.linalg.norm(v)), 3),
-                                "heading_deg": round(math.degrees(math.atan2(v[0], -v[1])), 1)}
-    if model in ("arc", "arc + distance curve"):
+        m = path.mean(0)
+        _, _, vt = np.linalg.svd(path - m, full_matrices=False)
+        u = vt[0] if vt[0] @ (path[-1] - path[0]) >= 0 else -vt[0]
+        t = (path - m) @ u
+        guide = m + np.linspace(t.min() - _EXTEND, t.max() + _EXTEND, 400)[:, None] * u
+        return m + t[:, None] * u, {"heading_deg": round(math.degrees(math.atan2(u[0], -u[1])), 1)}, guide
+    if model == "arc":
         circ = _circle(path)
         if circ is None:
             return None
         c, r = circ
-        phi = np.unwrap(np.arctan2(path[:, 1] - c[1], path[:, 0] - c[0]))
-        if model == "arc":
-            A = np.stack([np.ones(n), T], 1)
-            (p0, w), *_ = np.linalg.lstsq(A, phi, rcond=None)
-            ph = p0 + w * T
-            prm = {"speed": round(abs(w) * r, 3), "turn_deg_s": round(math.degrees(w), 2), "radius_m": round(r, 2)}
-        else:
-            keys = _monotone_keys(phi, T, tk)
-            ph = _pchip(tk, keys, T)
-            prm = {"radius_m": round(r, 2), "turned_deg": round(math.degrees(keys[-1] - keys[0]), 1),
-                   "key_times_s": [round(float(t), 3) for t in tk],
-                   "distance_keys_m": [round(float(abs(k - keys[0]) * r), 3) for k in keys]}
-        return c + r * np.stack([np.cos(ph), np.sin(ph)], 1), ph - ph[0], prm
-    if model == "line + distance curve":
-        d = path[-1] - path[0]
-        _, _, vt = np.linalg.svd(path - path.mean(0), full_matrices=False)
-        u = vt[0] if vt[0] @ d >= 0 else -vt[0]
-        s_raw = (path - path[0]) @ u
-        base = (path - s_raw[:, None] * u).mean(0)
-        keys = _monotone_keys(s_raw, T, tk)
-        s = _pchip(tk, keys, T)
-        return base + s[:, None] * u, zero, {"heading_deg": round(math.degrees(math.atan2(u[0], -u[1])), 1),
-                                             "key_times_s": [round(float(t), 3) for t in tk],
-                                             "distance_keys_m": [round(float(k - keys[0]), 3) for k in keys]}
-    if model == "bezier + distance curve":
+        d = path - c
+        ln = np.linalg.norm(d, axis=1, keepdims=True)
+        if float(ln.min()) < 1e-6:
+            return None
+        phi = np.unwrap(np.arctan2(d[:, 1], d[:, 0]))
+        ext = min(math.pi / 2, _EXTEND / r)            # round on past both ends
+        a = np.linspace(phi.min() - ext, phi.max() + ext, 720)
+        if phi[-1] < phi[0]:
+            a = a[::-1]
+        guide = c + r * np.stack([np.cos(a), np.sin(a)], 1)
+        return c + r * d / ln, {"radius_m": round(r, 2)}, guide
+    if model == "bezier":
         seg = np.linalg.norm(np.diff(path, axis=0), axis=1)
         L = seg.sum()
         if L < 1e-6:
@@ -633,18 +630,56 @@ def _fit(model, path, T, tk, fps):
         e_raw = np.concatenate([[0], np.cumsum(seg)]) / L
         e = np.clip(_pchip(tk, _monotone_keys(e_raw, T, tk), T), 0, 1)
         Bm = np.stack([(1 - e) ** 3, 3 * (1 - e) ** 2 * e, 3 * (1 - e) * e ** 2, e ** 3], 1)
-        P, *_ = np.linalg.lstsq(Bm, path, rcond=None)
-        xy = Bm @ P
-        cp = [[round(float(a), 3), round(float(-b), 3)] for a, b in P]      # glTF (x, z)
-        return xy, _tangent_yaw(xy, fps), {"control_points_xz": cp}
+        Pc, *_ = np.linalg.lstsq(Bm, path, rcond=None)
+        cp = [[round(float(a), 3), round(float(-b), 3)] for a, b in Pc]     # glTF (x, z)
+        return Bm @ Pc, {"control_points_xz": cp}, _extend(_bezier(Pc))
     return None
 
 
+def _bezier(Pc, n=400):
+    e = np.linspace(0.0, 1.0, n)[:, None]
+    return (1 - e) ** 3 * Pc[0] + 3 * (1 - e) ** 2 * e * Pc[1] + 3 * (1 - e) * e ** 2 * Pc[2] + e ** 3 * Pc[3]
+
+
+def _extend(P):
+    """A path's points in order, run straight on past both ends (_EXTEND m)."""
+    keep = np.concatenate([[True], np.linalg.norm(np.diff(P, axis=0), axis=1) > 1e-6])
+    P = P[keep]
+    if len(P) < 2:
+        return P
+
+    def tangent(a, b):
+        d = b - a
+        return d / max(float(np.linalg.norm(d)), 1e-9)
+    k = max(1, len(P) // 20)
+    return np.vstack([P[0] - tangent(P[0], P[k]) * _EXTEND, P, P[-1] + tangent(P[-1 - k], P[-1]) * _EXTEND])
+
+
+def _retime(guide, com, fps, loop):
+    """Each frame where the body (*com*, per frame) is along a shape: its
+    *guide* (the shape's points in order, run on past its ends), at the
+    nearest point to the body's COM."""
+    if guide is None or len(guide) < 2 or float(np.linalg.norm(np.diff(guide, axis=0), axis=1).sum()) < 1e-3:
+        return None
+    D = np.diff(guide, axis=0)
+    L = np.linalg.norm(D, axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(L)])
+    c = np.stack([_box(com[:, j], np.full(len(com), TIMING_SMOOTH * fps), loop) for j in range(2)], 1)
+    A = guide[:-1]
+    u = np.clip(((c[:, None, :] - A[None]) * D[None]).sum(-1) / np.maximum(L ** 2, 1e-12)[None], 0.0, 1.0)
+    d2 = ((c[:, None, :] - (A[None] + u[..., None] * D[None])) ** 2).sum(-1)
+    near = d2.argmin(1)
+    at = cum[near] + u[np.arange(len(c)), near] * L[near]
+    return np.stack([np.interp(at, cum, guide[:, j]) for j in range(2)], 1)
+
+
 def _select(body: _Body):
+    """The simplest shape within tolerance of the travel path: (xy along it
+    timed by the travel path, model, numbers)."""
     path, labels = body.travel_path()
     n, fps = len(path), body.fps
     if n < 3:
-        return path, np.zeros(n), "still", {}
+        return path, "still", {}, None
     T = np.arange(n) / fps
     dist = float(np.linalg.norm(np.diff(path, axis=0), axis=1).sum())
     tol_rms, tol_max = TOL_RMS + TOL_REL * dist, TOL_MAX + 2 * TOL_REL * dist
@@ -653,24 +688,23 @@ def _select(body: _Body):
     for m in MODELS:
         if body.loop and m not in LOOPABLE:
             continue
-        got = _fit(m, path, T, tk, fps)
+        got = _shape(m, path, T, tk)
         if got is None:
             continue
-        xy, yaw, prm = got
+        xy, prm, guide = got
         err = np.linalg.norm(xy - path, axis=1)
         rms, mx = float(np.sqrt((err ** 2).mean())), float(err.max())
+        _along, across = _split_error(xy, path)
         if m == "still":
             net = float(np.linalg.norm(path[-1] - path[0]))
             ok = mx <= STILL_MAX or (net < 0.08 and dist / max(float(T[-1]), 1e-6) < 0.05) or on_the_spot(path)
         else:
-            along, across = _split_error(xy, path)
-            ok = (float(np.sqrt((across ** 2).mean())) <= tol_rms and float(across.max()) <= tol_max
-                  and float(np.sqrt((along ** 2).mean())) <= ALONG_RMS and float(np.abs(along).max()) <= ALONG_MAX)
-        prm = dict(prm, off_cm=round(rms * 100, 1))
+            ok = float(np.sqrt((across ** 2).mean())) <= tol_rms and float(across.max()) <= tol_max
+        prm = dict(prm, off_cm=round(float(np.sqrt((across ** 2).mean())) * 100, 1))
         if ok:
-            return xy, yaw, m, prm
+            return xy, m, prm, guide
         if best is None or rms < best[4]:
-            best = (xy, yaw, m, prm, rms)
+            best = (xy, m, prm, guide, rms)
     return best[:4]
 
 
@@ -725,10 +759,13 @@ def trajectory_from_points(J: Mapping[str, tuple], fps: float, loop: bool = Fals
     if "hips" not in J:
         return None
     body = _Body(J, fps, loop)
-    xy, path_yaw, model, prm = _select(body)
+    xy, model, prm, guide = _select(body)
+    timed = _retime(guide, body.com, fps, loop) if model != "still" else None
+    if timed is not None:
+        xy = timed
     yaw, how, raw = _heading(body, model == "still")
     if yaw is None:                    # no hips or shoulders to read a facing from: the path's
-        yaw, how = path_yaw, "path"
+        yaw, how = _tangent_yaw(xy, fps), "path"
     if loop and len(xy) > 1:
         u = np.linspace(0, 1, len(xy))
         if root_xy is not None:
@@ -738,6 +775,14 @@ def trajectory_from_points(J: Mapping[str, tuple], fps: float, loop: bool = Fals
         turn = float(raw[-1] - raw[0]) if raw is not None else root_turn
         if turn is not None and (raw is not None or model == "arc"):
             yaw = yaw + (turn - yaw[-1]) * u
+    if model != "still" and len(xy) > 1:
+        v = np.linalg.norm(np.gradient(xy, axis=0), axis=1) * fps
+        prm = dict(prm, speed=round(float(v.mean()), 3),
+                   speed_range=[round(float(v.min()), 3), round(float(v.max()), 3)])
+        if model == "arc":             # the path's own turn (its direction's), not the body's facing
+            turned = math.degrees(float(_tangent_yaw(xy, fps)[-1]))
+            prm["turned_deg"] = round(turned, 1)
+            prm["turn_deg_s"] = round(turned / max((len(xy) - 1) / fps, 1e-6), 2)
     return {"model": model, "loop": bool(loop), "params": prm, "heading": how,
             "markers": body.touchdowns(), "xy": xy, "yaw": yaw}
 
