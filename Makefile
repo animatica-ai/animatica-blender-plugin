@@ -25,7 +25,12 @@ p.read_text(), count=1, flags=re.M))'
 # macOS default Blender 5.x addon path. Override on Linux/Windows.
 BLENDER_ADDONS_DIR ?= $(HOME)/Library/Application Support/Blender/5.0/scripts/addons
 
-.PHONY: zip clean install uninstall info
+.PHONY: deps zip clean install uninstall info
+
+# The MMCP client is not in git: fetch the pinned motionmcp wheel into
+# animatica_blender/vendor/motionmcp/ (see docs/developing.md).
+deps:
+	python3 scripts/vendor_motionmcp.py --write
 
 zip: $(ZIP)
 
@@ -35,7 +40,7 @@ zip: $(ZIP)
 # 140 MB never lands in the working copy — or in git.
 #
 #   make zip-with-model MODEL_DIR="~/Library/.../animatica_autoposer/current" VERSION_SUFFIX=-dev
-zip-with-model:
+zip-with-model: deps
 	@test -n "$(MODEL_DIR)" || { echo "set MODEL_DIR=<bundle directory>"; exit 1; }
 	@test -f "$(MODEL_DIR)/meta.json" || { echo "no meta.json in $(MODEL_DIR)"; exit 1; }
 	@mkdir -p $(DIST)
@@ -53,7 +58,7 @@ zip-with-model:
 # Staged rather than zipped in place, so the build can stamp its own release
 # tag into the copy without touching the working tree. The updater compares
 # that tag, which is the only way preview2 can know it is newer than preview1.
-$(ZIP): $(shell find $(ADDON) -name '*.py' -not -path '*/__pycache__/*')
+$(ZIP): deps $(shell find $(ADDON) -name '*.py' -not -path '*/__pycache__/*')
 	@mkdir -p $(DIST)
 	@rm -rf $(DIST)/.stage && mkdir -p $(DIST)/.stage
 	@find $(ADDON) -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
@@ -64,7 +69,7 @@ $(ZIP): $(shell find $(ADDON) -name '*.py' -not -path '*/__pycache__/*')
 	@rm -rf $(DIST)/.stage
 	@echo "→ $(ZIP)"
 
-install:
+install: deps
 	@mkdir -p "$(BLENDER_ADDONS_DIR)"
 	@if [ -e "$(BLENDER_ADDONS_DIR)/$(ADDON)" ]; then \
 		echo "Removing existing $(BLENDER_ADDONS_DIR)/$(ADDON)"; \

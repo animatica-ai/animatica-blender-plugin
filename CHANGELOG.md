@@ -9,6 +9,13 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- The addon now talks to the server through the shared `motionmcp` client
+  0.9.0, the same one the MotionBuilder and 3ds Max plugins use. It accepts
+  GLB responses from the server, and a session that expires while a take is
+  still being generated no longer starts a second take. No change to the UI.
+
 ## [0.6.2] — 2026-09-29
 
 ### Changed

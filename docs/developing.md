@@ -26,7 +26,38 @@ Override: `make install BLENDER_ADDONS_DIR=/path/to/scripts/addons`
 Python package: `animatica_blender/` — operators in `operators.py`, UI in
 `panels.py`, request assembly in `request_builder.py`, animation bake in
 `gltf_to_blender.py`, updates in `updater.py`, example scenes in `examples.py`,
-the Autoposer in `autoposer/`.
+the Autoposer in `autoposer/`, MMCP HTTP calls in `mmcp_client.py`, on top of
+the vendored `motionmcp` client in `vendor/motionmcp/`.
+
+## Bundled packages
+
+The addon talks MMCP through the public `motionmcp` package
+([`motionmcp-sdk`](https://pypi.org/project/motionmcp-sdk/) on PyPI), which
+is not kept in git. The build fetches the version pinned by the single
+`motionmcp-sdk==X.Y.Z` line in `requirements-bundle.txt` into
+`animatica_blender/vendor/motionmcp/` (git-ignored), the same way the
+MotionBuilder and 3ds Max plugins bundle their dependencies. `mmcp_client.py`
+calls into it for the MMCP wire format; the addon owns only the offline gate,
+the cloud session and the error codes.
+
+After cloning, and after every change to the pin, fetch it once:
+
+```bash
+python scripts/vendor_motionmcp.py --write    # or: make deps
+```
+
+`make zip`, `make install` and CI run this step themselves. Without it the
+addon refuses to load with a message naming the command.
+
+To bump the pinned version: edit `requirements-bundle.txt`, run the fetch,
+run the tests, and restart Blender — a running Blender keeps the modules it
+already imported.
+
+`python scripts/vendor_motionmcp.py` with no flag only checks the fetched
+tree against the pin (exit 0: in sync, 1: drift, 2: could not tell).
+
+Run the test suite with `python -m pytest tests -q` (needs `numpy` and
+`pytest`; no Blender required).
 
 ## Protocol & servers
 
