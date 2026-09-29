@@ -18,5 +18,8 @@ animatica_blender/autoposer/model/
 
 .claude/plans/
 
+# Fetched from PyPI by `python scripts/vendor_motionmcp.py --write` (make deps)
+animatica_blender/vendor/motionmcp/
+
 # Wheels downloaded by scripts/vendor_motionmcp.py
 wheels/

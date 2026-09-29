@@ -1,25 +1,11 @@
-# Run on every push and PR to catch two things before they reach main:
-# - the vendored motionmcp SDK drifting from its pin (must go red, not
-#   "cannot tell", if the wheel can't be fetched or compared);
-# - the pytest suite and a straight compile check of the addon and scripts.
+# Run on every push and PR: fetch the pinned motionmcp wheel the way the
+# build does, run the pytest suite, and byte-compile the addon and scripts.
+# Python 3.13 is the interpreter Blender 5.2 ships.
 name: Tests
 
 on: [push, pull_request]
 
 jobs:
-  vendored-motionmcp-is-untouched:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Check vendored motionmcp matches the pinned wheel
-        run: python scripts/vendor_motionmcp.py
-
   tests:
     runs-on: ubuntu-latest
     steps:
@@ -29,6 +15,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+
+      - name: Fetch the pinned motionmcp client
+        run: python scripts/vendor_motionmcp.py --write
 
       - name: Install test dependencies
         run: pip install numpy pytest

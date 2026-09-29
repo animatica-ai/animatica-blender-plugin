@@ -31,28 +31,30 @@ the vendored `motionmcp` client in `vendor/motionmcp/`.
 
 ## Bundled packages
 
-`animatica_blender/vendor/motionmcp/` is a vendored copy of the public
-`motionmcp` package ([`motionmcp-sdk`](https://pypi.org/project/motionmcp-sdk/)
-on PyPI), pinned by the single `motionmcp-sdk==X.Y.Z` line in
-`requirements-bundle.txt`. `mmcp_client.py` calls into it for the MMCP wire
-format; the addon owns only the offline gate, the cloud session and error
-codes.
+The addon talks MMCP through the public `motionmcp` package
+([`motionmcp-sdk`](https://pypi.org/project/motionmcp-sdk/) on PyPI), which
+is not kept in git. The build fetches the version pinned by the single
+`motionmcp-sdk==X.Y.Z` line in `requirements-bundle.txt` into
+`animatica_blender/vendor/motionmcp/` (git-ignored), the same way the
+MotionBuilder and 3ds Max plugins bundle their dependencies. `mmcp_client.py`
+calls into it for the MMCP wire format; the addon owns only the offline gate,
+the cloud session and the error codes.
 
-To bump the pinned version:
+After cloning, and after every change to the pin, fetch it once:
 
 ```bash
-# edit the version in requirements-bundle.txt, then:
-python scripts/vendor_motionmcp.py --write
-python -m pytest tests -q
+python scripts/vendor_motionmcp.py --write    # or: make deps
 ```
 
-Restart Blender afterwards — hot-swapping the addon does not reload modules
-already imported by a running Blender, so a stale `vendor/motionmcp/` can stay
-loaded until restart.
+`make zip`, `make install` and CI run this step themselves. Without it the
+addon refuses to load with a message naming the command.
 
-Run `python scripts/vendor_motionmcp.py` on its own to check the vendored
-tree against the pin without changing anything (exit 0: in sync, 1: drift, 2:
-could not tell).
+To bump the pinned version: edit `requirements-bundle.txt`, run the fetch,
+run the tests, and restart Blender — a running Blender keeps the modules it
+already imported.
+
+`python scripts/vendor_motionmcp.py` with no flag only checks the fetched
+tree against the pin (exit 0: in sync, 1: drift, 2: could not tell).
 
 Run the test suite with `python -m pytest tests -q` (needs `numpy` and
 `pytest`; no Blender required).

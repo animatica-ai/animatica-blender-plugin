@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Keep animatica_blender/vendor/motionmcp/ identical to the pinned wheel.
+"""Fetch the pinned motionmcp wheel into animatica_blender/vendor/motionmcp/.
 
-    python scripts/vendor_motionmcp.py           # check: exit 0 in sync, 1 drift, 2 undecidable
-    python scripts/vendor_motionmcp.py --write   # re-extract from the wheel, then check
+    python scripts/vendor_motionmcp.py --write   # the build step: extract the wheel, then check
+    python scripts/vendor_motionmcp.py           # check only: exit 0 in sync, 1 drift, 2 undecidable
 
-The pin is the single ``motionmcp-sdk==X`` line in requirements-bundle.txt.
-The wheel is fetched with pip into wheels/ (git-ignored) unless already there.
-Every RECORD entry under ``motionmcp/`` must match the vendored file by
-sha256; the LICENSE is compared against the wheel's dist-info copy.
+The vendored tree is git-ignored: `make deps` (run by `make zip` and
+`make install`) and CI put it there from the pin, the single
+``motionmcp-sdk==X`` line in requirements-bundle.txt, the same way the
+MotionBuilder and 3ds Max plugins bundle their dependencies. The wheel is
+fetched with pip into wheels/ (git-ignored) unless already there. The check
+compares every RECORD entry under ``motionmcp/`` with the extracted file by
+sha256, and the LICENSE with the wheel's dist-info copy.
 """
 
 from __future__ import annotations

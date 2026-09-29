@@ -38,8 +38,16 @@ from urllib.request import Request
 
 import bpy
 
-from .vendor.motionmcp.client import http as _http
-from .vendor.motionmcp.client.http import MmcpError as SdkError
+try:
+    from .vendor.motionmcp.client import http as _http
+    from .vendor.motionmcp.client.http import MmcpError as SdkError
+except ImportError as _exc:
+    # The client is fetched at build time, not kept in git: a source checkout
+    # has to run the fetch once (docs/developing.md).
+    raise ImportError(
+        "the motionmcp client is not bundled in this checkout: run "
+        "`python scripts/vendor_motionmcp.py --write` (or `make deps`)"
+    ) from _exc
 # Bound at import on purpose: the helper is private to the SDK, so a bump
 # that renames it must fail here, at load, not inside sign_in later.
 _sdk_error_from_http = _http._error_from_http
