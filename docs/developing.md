@@ -28,6 +28,13 @@ Python package: `animatica_blender/` — operators in `operators.py`, UI in
 `gltf_to_blender.py`, updates in `updater.py`, example scenes in `examples.py`,
 the Autoposer in `autoposer/`.
 
+Tests: `tests/` holds scripts that run inside a headless Blender without a
+server, one per behaviour they guard:
+
+```bash
+blender -b --factory-startup --python tests/test_bake_object_rotation.py
+```
+
 ## Protocol & servers
 
 The addon is an MMCP client. Generation runs on the server; the only model

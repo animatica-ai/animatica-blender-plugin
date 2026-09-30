@@ -39,6 +39,54 @@ _MMCP_TO_BLENDER = Matrix((
 ))
 
 
+def _gltf_root_joints(nodes: list[dict[str, Any]]) -> set[str]:
+    """Names of the nodes no other node lists as a child: the skeleton's root."""
+    children = {c for n in nodes for c in (n.get("children") or ())}
+    return {n.get("name", "") for i, n in enumerate(nodes) if i not in children}
+
+
+class _RotationBaker:
+    """Turns the response's joint rotations into pose-bone quaternions.
+
+    Each channel carries the joint's rotation relative to its parent, in the
+    MMCP Y-up frame, relative to the rig's rest pose *as it stands at yaw 0*
+    (see ``coords.split_world_yaw``). Per joint:
+
+        MMCP Y-up → Blender world → armature-local → bone-local rest
+
+    where armature-local undoes only the object's tilt. The object's yaw is
+    undone once, on the root, so the take lands in the world where the
+    server put it whichever way the armature object is turned; folding the
+    yaw into every bone turned the whole body by it (a rig at 180° walked
+    backwards, its knees bending the wrong way). The outbound side
+    (``constraints_ui._joint_rotation_to_mmcp``) is the exact inverse and
+    must stay in sync.
+    """
+
+    def __init__(self, armature_obj: bpy.types.Object, nodes: list[dict[str, Any]]) -> None:
+        yaw, tilt = coords.split_world_yaw(armature_obj.matrix_world)
+        self._yaw_t = yaw.transposed()
+        self._tilt = tilt
+        self._tilt_t = tilt.transposed()
+        self._roots = _gltf_root_joints(nodes)
+        self._rest: dict[str, tuple[Matrix, Matrix]] = {}
+
+    def bone_quaternion(self, joint_name: str, bone, q_mmcp) -> Quaternion:
+        rest = self._rest.get(bone.name)
+        if rest is None:
+            ML = bone.bone.matrix_local.to_3x3()
+            rest = self._rest[bone.name] = (ML, ML.transposed())   # orthogonal → inverse = transpose
+        ML, ML_inv = rest
+        qx, qy, qz, qw = q_mmcp
+        R_mmcp          = Quaternion((qw, qx, qy, qz)).to_matrix()
+        R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
+        if joint_name in self._roots:
+            R_blender_world = self._yaw_t @ R_blender_world
+        R_blender_arm   = self._tilt_t @ R_blender_world @ self._tilt
+        R_bone          = ML_inv @ R_blender_arm @ ML
+        return R_bone.to_quaternion()
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -207,12 +255,7 @@ def bake_gltf_to_armature(
     new_action = bpy.data.actions.new(name=action_name)
     armature_obj.animation_data.action = new_action
 
-    # Armature's world-rotation basis. The outbound side
-    # (``armature_to_skeleton`` / ``sample_pose_keyframes``) lifts offsets
-    # and rotations into Blender world frame, so we undo that here when
-    # baking. No-op when ``matrix_world`` is identity.
-    mw_rot = armature_obj.matrix_world.to_quaternion().to_matrix()
-    mw_rot_t = mw_rot.transposed()
+    rotations = _RotationBaker(armature_obj, nodes)
 
     skipped: list[str] = []
 
@@ -234,18 +277,8 @@ def bake_gltf_to_armature(
         timestamps  = _input_for(sampler_idx)
         quats       = _quats_for(sampler_idx)
 
-        # Inverse of the outbound chain in ``sample_pose_keyframes``:
-        #   MMCP Y-up → Blender world → armature-local → bone-local rest.
-        ML     = bone.bone.matrix_local.to_3x3()
-        ML_inv = ML.transposed()   # ML is orthogonal → inverse = transpose
-
         for ts, q_mmcp in zip(timestamps, quats):
-            qx, qy, qz, qw = q_mmcp
-            R_mmcp          = Quaternion((qw, qx, qy, qz)).to_matrix()
-            R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
-            R_blender_arm   = mw_rot_t @ R_blender_world @ mw_rot
-            R_bone          = ML_inv @ R_blender_arm @ ML
-            bone.rotation_quaternion = R_bone.to_quaternion()
+            bone.rotation_quaternion = rotations.bone_quaternion(joint_name, bone, q_mmcp)
             bone.keyframe_insert(
                 data_path="rotation_quaternion",
                 frame=_frame_from_time(ts, gltf, start_frame),
@@ -426,8 +459,7 @@ def splice_gltf_into_action(
     for pb in pose.bones:
         pb.rotation_mode = 'QUATERNION'
 
-    mw_rot   = armature_obj.matrix_world.to_quaternion().to_matrix()
-    mw_rot_t = mw_rot.transposed()
+    rotations = _RotationBaker(armature_obj, nodes)
     arm_world_inv = armature_obj.matrix_world.inverted()
 
     # Step 1a — snapshot user-authored keys (kp.type != 'GENERATED') sitting
@@ -495,19 +527,11 @@ def splice_gltf_into_action(
         timestamps  = _input_for(sampler_idx)
         quats       = _quats_for(sampler_idx)
 
-        ML     = bone.bone.matrix_local.to_3x3()
-        ML_inv = ML.transposed()
-
         for ts, q_mmcp in zip(timestamps, quats):
             frame = _frame_from_time(ts, gltf, request_start_frame)
             if not (fs_target <= frame <= fe_target):
                 continue
-            qx, qy, qz, qw = q_mmcp
-            R_mmcp          = Quaternion((qw, qx, qy, qz)).to_matrix()
-            R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
-            R_blender_arm   = mw_rot_t @ R_blender_world @ mw_rot
-            R_bone          = ML_inv @ R_blender_arm @ ML
-            bone.rotation_quaternion = R_bone.to_quaternion()
+            bone.rotation_quaternion = rotations.bone_quaternion(joint_name, bone, q_mmcp)
             bone.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
     for ch in channels:
@@ -713,8 +737,7 @@ def bake_gltf_to_actions_per_block(
     if armature_obj.animation_data is None:
         armature_obj.animation_data_create()
 
-    mw_rot   = armature_obj.matrix_world.to_quaternion().to_matrix()
-    mw_rot_t = mw_rot.transposed()
+    rotations = _RotationBaker(armature_obj, nodes)
     arm_world_inv = armature_obj.matrix_world.inverted()
 
     skipped: list[str] = []
@@ -787,9 +810,6 @@ def bake_gltf_to_actions_per_block(
             timestamps = _input_for(ch["sampler"])
             quats      = _quats_for(ch["sampler"])
 
-            ML     = bone.bone.matrix_local.to_3x3()
-            ML_inv = ML.transposed()
-
             data_path = f'pose.bones["{bone.name}"].rotation_quaternion'
             buf_w: list[float] = []
             buf_x: list[float] = []
@@ -801,12 +821,7 @@ def bake_gltf_to_actions_per_block(
                 frame = _frame_from_time(ts, gltf, request_start_frame)
                 if not (fs <= frame <= fe):
                     continue
-                qx, qy, qz, qw = q_mmcp
-                R_mmcp          = Quaternion((qw, qx, qy, qz)).to_matrix()
-                R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
-                R_blender_arm   = mw_rot_t @ R_blender_world @ mw_rot
-                R_bone          = ML_inv @ R_blender_arm @ ML
-                qb              = R_bone.to_quaternion()
+                qb = rotations.bone_quaternion(joint_name, bone, q_mmcp)
                 buf_f.append(frame)
                 buf_w.append(qb.w)
                 buf_x.append(qb.x)
@@ -1874,11 +1889,7 @@ def bake_single_pose(
     for pb in pose.bones:
         pb.rotation_mode = 'QUATERNION'
 
-    # Undo the armature's ``matrix_world`` rotation on the way in; matches
-    # the outbound conversion in ``sample_pose_keyframes``. No-op when
-    # matrix_world is identity.
-    mw_rot = armature_obj.matrix_world.to_quaternion().to_matrix()
-    mw_rot_t = mw_rot.transposed()
+    rotations = _RotationBaker(armature_obj, nodes)
 
     if root_translation not in ("skip", "height_only", "full"):
         raise ValueError(
@@ -1912,12 +1923,8 @@ def bake_single_pose(
             quats = _read_floats(gltf, sampler["output"], "VEC4")
             if source_frame * 4 + 4 > len(quats):
                 continue
-            qx, qy, qz, qw = quats[source_frame * 4:(source_frame + 1) * 4]
-            R_mmcp = Quaternion((qw, qx, qy, qz)).to_matrix()
-            R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
-            R_blender_arm = mw_rot_t @ R_blender_world @ mw_rot
-            R_bone = ML.transposed() @ R_blender_arm @ ML
-            bone.rotation_quaternion = R_bone.to_quaternion()
+            q_mmcp = quats[source_frame * 4:(source_frame + 1) * 4]
+            bone.rotation_quaternion = rotations.bone_quaternion(joint_name, bone, q_mmcp)
             bone.keyframe_insert(data_path="rotation_quaternion", frame=target_frame)
         else:
             vec3s = _read_floats(gltf, sampler["output"], "VEC3")

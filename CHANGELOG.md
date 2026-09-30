@@ -9,6 +9,16 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A take lands where the server put it, whichever way the armature is
+  turned.** The bake folded the armature object's rotation about Z into
+  every bone, so a character turned 180° in object mode walked backwards
+  with its knees bending the wrong way, and one turned 30° walked at a 30°
+  skew. Generate, Regenerate Block, Pose and control rigs (Mixamo, Rigify)
+  now all place the motion in world space as the server generated it, and
+  a pose you key on a turned rig goes out facing the way you see it.
+
 ## [0.6.3] — 2026-09-30
 
 ### Changed
