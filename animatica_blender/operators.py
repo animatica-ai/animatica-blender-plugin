@@ -1156,6 +1156,10 @@ class ANIMATICA_OT_generate(Operator):
             settings.prompt_blocks, arm, context.scene
         )
         self._gen_start_frame = gen_start
+        # And its end, as sent: the window depends on the keys either side of
+        # the blocks (see compute_frame_range), which are not what they were
+        # once the bake has swapped the rig's action.
+        self._gen_end_frame = gen_end
 
         src_action = (
             arm.animation_data.action
@@ -1241,11 +1245,11 @@ class ANIMATICA_OT_generate(Operator):
         #     via the Mixamo operator hand-off).
         gen_start = getattr(self, "_gen_start_frame", context.scene.frame_start)
         gen_end_settings_scene_frame = context.scene.frame_end
-        # Recompute gen_end via the same helper to stay in sync with what
-        # was sent to the server.
-        _, gen_end = request_builder.compute_frame_range(
-            settings.prompt_blocks, arm, context.scene
-        )
+        gen_end = getattr(self, "_gen_end_frame", None)
+        if gen_end is None:
+            _, gen_end = request_builder.compute_frame_range(
+                settings.prompt_blocks, arm, context.scene
+            )
 
         self._remove_regen_scratch_actions()
 

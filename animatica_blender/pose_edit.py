@@ -231,10 +231,11 @@ def pose_channels(arm) -> list:
     """
     channels = []
     root = next((pb for pb in arm.pose.bones if pb.parent is None), None)
+    hips = hips_bone(arm)
     for pb in _edited_bones(arm):
         path, values = _rotation_values(pb)
         channels += [(f'pose.bones["{pb.name}"].{path}', i, v) for i, v in enumerate(values)]
-        if pb is root or pb.parent is None:
+        if pb is root or pb.parent is None or pb.name == hips:
             # The root's placement is half the pose: without it the body's
             # rotation is keyed and its position is left to whatever else is
             # driving the rig.
@@ -243,6 +244,19 @@ def pose_channels(arm) -> list:
                 for i, v in enumerate(pb.location)
             ]
     return channels
+
+
+def hips_bone(arm) -> str:
+    """The bone that carries the body's placement when it is not the rig's root — an Unreal
+    ``pelvis`` under ``root``. Keying only a parentless bone's location leaves such a rig's
+    body wherever the last key put it."""
+    try:
+        from .autoposer import poser
+
+        b = poser.joint_bone(arm, "Hips")
+    except Exception:                       # noqa: BLE001 — never break a key
+        return ""
+    return b.name if b is not None else ""
 
 
 def _write_pose_to_action(arm, action, frame: int) -> int:

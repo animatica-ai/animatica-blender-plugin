@@ -17,11 +17,18 @@ The model animates the body. It does not move the face, and it does not move
 fingers: each hand gets one of three shapes laid over the take (**Relaxed**,
 **Gripping** or **Straight**, in the **Pose** panel).
 
-## The Autoposer needs a matching rig
+## The Autoposer needs a humanoid
 
-The Autoposer is built for SOMA-style humanoid skeletons, like the ready-made
-character's. It finds the joints on many rigs with different bone names, but a
-rig with a very different layout may not get handles at all.
+The Autoposer works on most humanoid skeletons: it finds the hips, spine,
+arms, legs and head from the rig's shape, whatever the bones are called and
+whether the rig stands in a T-pose or an A-pose. It needs two arms, two legs
+and a head, so a quadruped or a creature with extra limbs gets no handles.
+If it picks the wrong bone, set the right one under **Skeleton** in the
+**Pose** panel.
+
+It poses the bones that deform the mesh. On a control rig (Rigify, the Mixamo
+Control Rig, Unreal's Control Rig) those bones follow the controls, so the
+Autoposer says so and does not start. Pose the deform skeleton instead.
 
 ## Every frame is keyed
 

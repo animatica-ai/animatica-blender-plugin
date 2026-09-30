@@ -103,21 +103,21 @@ def _poser():
     return poser
 
 
-def _canonical(bone_name: str) -> str:
-    """``animatica:LeftHand`` → ``LeftHand``."""
-    return bone_name.rsplit(":", 1)[-1]
+def _canonical(arm, bone_name: str) -> str:
+    """``animatica:LeftHand`` → ``LeftHand``; ``hand_l`` → ``LeftHand`` on an Unreal rig."""
+    return _poser().canonical_joint(arm, bone_name)
 
 
 def _to_poser(arm, world: Vector) -> list[float]:
-    """World position → the poser's frame (armature space, Y-up)."""
+    """World position → the poser's frame (armature space, stood up Y-up, in metres)."""
     local = arm.matrix_world.inverted() @ world
-    p = _poser().M @ local
+    p = _poser().to_poser(arm, local)
     return [p.x, p.y, p.z]
 
 
 def _from_poser(arm, xyz) -> Vector:
     """The poser's frame → world position."""
-    return arm.matrix_world @ (_poser().MT @ Vector(tuple(float(v) for v in xyz)))
+    return arm.matrix_world @ _poser().from_poser(arm, xyz)
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +298,7 @@ def _effectors_at(arm, frame_index: int, dragged_bone: str, target: Vector,
         else:
             world = target if bone == dragged_bone else Vector(points[frame_index])
         out.append({
-            "joint": _canonical(bone),
+            "joint": _canonical(arm, bone),
             "type": "pos",
             "pos": _to_poser(arm, world),
             "tol": DRAG_TOL,
@@ -360,6 +360,7 @@ def commit(arm, frame: int, out) -> int:
         arm.animation_data.action = action
 
     bases = _poser().pose_bases(arm, out["names"], out["joints"], out["rotations_6d"])
+    hips = pose_edit.hips_bone(arm)
     channels = []
     for name, basis in bases.items():
         pb = arm.pose.bones.get(name)
@@ -375,7 +376,7 @@ def commit(arm, frame: int, out) -> int:
             axis, angle = quat.to_axis_angle()
             values = [angle, axis.x, axis.y, axis.z]
         channels += [(f'pose.bones["{name}"].{path}', i, v) for i, v in enumerate(values)]
-        if pb.parent is None:
+        if pb.parent is None or name == hips:
             # The root carries the body's placement; keying rotation alone
             # would leave the character where the old key put it.
             channels += [
@@ -578,14 +579,14 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         self._whole = self._mode(event)
         _drag.update({
             "whole_pose": self._whole,
-            "active": True, "bone": self.bone, "joint": _canonical(self.bone),
+            "active": True, "bone": self.bone, "joint": _canonical(self._arm, self.bone),
             "frame": int(self.frame), "origin": origin, "target": origin.copy(),
             "points": None, "parents": None, "solve": None, "error": "",
         })
         self._plane_no = context.region_data.view_rotation @ Vector((0.0, 0.0, 1.0))
         self._solve(context, event)
         context.area.header_text_set(
-            f"Move {_canonical(self.bone)} at frame {self.frame}"
+            f"Move {_canonical(self._arm, self.bone)} at frame {self.frame}"
             + (f" along {self.axis}" if self.axis else "")
             + "   |   Shift: whole pose   |   Esc: cancel")
         context.window_manager.modal_handler_add(self)
@@ -682,7 +683,7 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             key_poses.flash_keyed(frame)
             key_poses.invalidate_plan()
             key_poses.request_rebuild()
-            what = "whole pose moved" if whole else f"{_canonical(self.bone)} moved"
+            what = "whole pose moved" if whole else f"{_canonical(self._arm, self.bone)} moved"
             self.report({'INFO'}, f"{what} at frame {frame} — keyed ({written} channels)")
             return {'FINISHED'}
 

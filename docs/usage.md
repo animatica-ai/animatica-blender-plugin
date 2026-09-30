@@ -156,6 +156,13 @@ follow. It is optional and runs on your machine.
   exactly where you put the handle; high lets the poser keep the body natural.
   The icon next to it shows each handle's own settings.
 
+**Skeleton**, above **Start the Autoposer**, says how much of the body it found
+on your rig. It works out which bone is the hips, each knee, each hand and so on
+from the skeleton's shape, so Mixamo, Unreal and other humanoid rigs
+work without renaming anything, in T-pose or A-pose. If it picked the wrong
+bone, open **Skeleton** and choose the right one; the refresh button finds them
+all again.
+
 The handles follow the playhead, so scrub to any frame and grab one. With the
 record button next to **Set Keyframe** on (the default), posing with the
 handles keys the pose where you made it. Turn it off to try a pose out without
@@ -273,7 +280,10 @@ handles.
 **Advanced:** **Guidance** with its **Text Weight** (how literally the motion
 follows the prompt) and **Constraint Weight** (how tightly it sticks to your
 poses, waypoints and pins), and **Blend Between Blocks** (frames blended where
-one prompt block meets the next; 0 is a hard cut).
+one prompt block meets the next; 0 is a hard cut). The same number of frames
+blends a take into your own keys where they carry on past the first or last
+block; with no keys of yours there, the take starts and ends exactly at the
+blocks.
 
 ## Prompt blocks on the timeline
 

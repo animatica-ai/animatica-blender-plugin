@@ -120,10 +120,12 @@ def compute_frame_range(
     """The generation window.
 
     **Prompt blocks win outright.** When the user has drawn any enabled block,
-    the window is that span widened by ``transition_frames`` on each side and
-    nothing else — the blocks *are* the statement of which stretch of the
-    timeline they are generating, and the margin is there so the server has
-    material either side to blend the splice into.
+    the window is that span and nothing else — the blocks *are* the statement
+    of which stretch of the timeline they are generating. It is widened by
+    ``transition_frames`` only on a side where the user's action (see
+    :func:`blend_action`) has keys beyond the blocks, so the server has
+    material there to blend the splice into; a side with nothing to blend
+    into stays exactly at the block's edge.
 
     This used to be a union with the source action's whole keyframe span,
     which quietly defeated splicing: blocking out poses across 200 frames and
@@ -165,12 +167,16 @@ def compute_frame_range(
         settings = getattr(scene, "animatica", None)
         if getattr(settings, "loop", False) and len(considered) == 1:
             return (lo, hi)
-        # Widen by the blend margin, but never past the scene the user set up
-        # — unless a block already reaches beyond it, in which case the block
-        # is the authority and must not be clipped.
+        # Widen by the blend margin only on a side where there is animation
+        # to blend into: the user's keys beyond that edge, which the take is
+        # spliced against. With nothing there the margin was only frames
+        # nobody asked for -- five after the last block, up to five before
+        # the first. Never past the scene the user set up, unless a block
+        # already reaches beyond it (the block is the authority then).
+        before, after = _keys_beyond(blend_action(armature_obj, scene), lo, hi)
         return (
-            max(lo - margin, min(lo, int(scene.frame_start))),
-            min(hi + margin, max(hi, int(scene.frame_end))),
+            max(lo - margin, min(lo, int(scene.frame_start))) if before else lo,
+            min(hi + margin, max(hi, int(scene.frame_end))) if after else hi,
         )
 
     src = (
@@ -189,6 +195,49 @@ def compute_frame_range(
             return (min(kfs), max(kfs))
 
     return (int(scene.frame_start), int(scene.frame_end))
+
+
+def blend_action(armature_obj, scene):
+    """The animation a take over the blocks blends into: the rig's own action.
+
+    Not an Animatica bake. While a take is showing, the rig plays the preview
+    (which carries the user's keys in, but is not theirs); the user's action is
+    then the one the preview session keeps, or the one Generate stashed.
+    """
+    ad = getattr(armature_obj, "animation_data", None) if armature_obj is not None else None
+    act = ad.action if ad is not None else None
+    if act is not None and not act.name.startswith(_GENERATED_ACTION_PREFIXES):
+        return act
+    if act is None:
+        return None
+    src = None
+    try:
+        from . import preview_session
+        if preview_session.get(armature_obj) is not None:
+            src = preview_session.source_of(armature_obj)
+    except Exception:                        # noqa: BLE001 -- best effort only
+        src = None
+    if src is None:
+        name = getattr(getattr(scene, "animatica", None), "source_action_name", "") or ""
+        src = bpy.data.actions.get(name) if name else None
+    if src is not None and not src.name.startswith(_GENERATED_ACTION_PREFIXES):
+        return src
+    return None
+
+
+def _keys_beyond(action, lo: int, hi: int) -> tuple[bool, bool]:
+    """Whether *action* has keys before *lo*, and after *hi*."""
+    before = after = False
+    if action is None:
+        return before, after
+    for fc in constraints_ui.iter_action_fcurves(action):
+        for kp in fc.keyframe_points:
+            f = int(round(kp.co.x))
+            before = before or f < lo
+            after = after or f > hi
+            if before and after:
+                return before, after
+    return before, after
 
 
 def build_request(
