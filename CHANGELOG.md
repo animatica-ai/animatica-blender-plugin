@@ -9,6 +9,16 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- **Running out of generations opens a dialog.** When a generation is refused
+  because the monthly allowance is used up, a **Generation limit reached**
+  dialog says so and offers **Get more generations**, which opens the page for
+  credit packs and Pro. It replaces the error line in the status bar, and a
+  batch opens it once, not once per character. The banner in the sidebar now
+  appears straight away, too; before, it only showed once the mouse passed
+  over the sidebar.
+
 ## [0.6.2] — 2026-09-29
 
 ### Changed

@@ -19,6 +19,7 @@ from __future__ import annotations
 import random
 import threading
 import time
+import traceback
 
 import bpy
 from mathutils import Vector
@@ -706,6 +707,49 @@ def _clear_quota_state(settings) -> None:
     settings.quota_upgrade_url = ""
 
 
+def _announce_quota(context, exc) -> bool:
+    """Tell the user they are out of generations, where they are looking.
+
+    True when ``exc`` was a quota refusal — the caller then skips its own
+    error report, which the dialog replaces. Setting the banner state alone
+    was not enough: nothing asked the sidebar to redraw, so the banner only
+    appeared once the mouse passed over it, and until then all the user saw
+    was an error line in the status bar.
+    """
+    settings = context.scene.animatica
+    _stash_quota_state(settings, exc)
+    if not settings.quota_exceeded_message:
+        return False
+    _redraw_sidebars(context)
+    _open_quota_dialog(context)
+    return True
+
+
+def _redraw_sidebars(context) -> None:
+    for window in context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == 'VIEW_3D':
+                for region in area.regions:
+                    if region.type == 'UI':
+                        region.tag_redraw()
+
+
+def _open_quota_dialog(context) -> None:
+    """The dialog, given a window explicitly — see ``mmcp_client.popup``."""
+    if bpy.app.background:
+        return
+    windows = list(context.window_manager.windows)
+    if not windows:
+        return
+    window = context.window or windows[0]
+    try:
+        with context.temp_override(window=window, screen=window.screen):
+            bpy.ops.animatica.quota_dialog('INVOKE_DEFAULT')
+    except Exception:                                       # noqa: BLE001
+        # The banner is already up; a dialog that failed to open costs nothing.
+        traceback.print_exc()
+
+
 def _tick_generation_elapsed(context, start_time: float) -> None:
     """Advance the scene's ``generation_elapsed`` counter and nudge the
     sidebar to repaint.
@@ -1214,8 +1258,10 @@ class ANIMATICA_OT_generate(Operator):
         # Worker finished.
         if self._error is not None:
             self._cleanup(context)
-            _stash_quota_state(context.scene.animatica, self._error)
-            self.report({'ERROR'}, f"Generation failed: {self._error}")
+            if _announce_quota(context, self._error):
+                self.report({'INFO'}, "Generation limit reached")
+            else:
+                self.report({'ERROR'}, f"Generation failed: {self._error}")
             return {'CANCELLED'}
 
         if self._result is None:
@@ -1986,8 +2032,10 @@ class ANIMATICA_OT_generate_pose(Operator):
 
         if self._error is not None:
             self._cleanup(context)
-            _stash_quota_state(context.scene.animatica, self._error)
-            self.report({'ERROR'}, f"Pose generation failed: {self._error}")
+            if _announce_quota(context, self._error):
+                self.report({'INFO'}, "Generation limit reached")
+            else:
+                self.report({'ERROR'}, f"Pose generation failed: {self._error}")
             return {'CANCELLED'}
 
         if self._result is None:
@@ -2145,6 +2193,37 @@ class ANIMATICA_OT_open_upgrade(Operator):
 DISCORD_HELP_URL = "https://discord.com/invite/A8CrURBewz"
 
 
+class ANIMATICA_OT_quota_dialog(Operator):
+    """Out of generations: what happened, and one click to get more.
+
+    Opened by ``_announce_quota`` the moment a generation is refused. The
+    sidebar banner stays behind it for whoever closes the dialog first.
+    """
+    bl_idname = "animatica.quota_dialog"
+    bl_label = "Generation limit reached"
+    bl_options = {'INTERNAL'}
+
+    def invoke(self, context, event):
+        has_url = bool((context.scene.animatica.quota_upgrade_url or "").strip())
+        return context.window_manager.invoke_props_dialog(
+            self,
+            width=320,
+            title="Generation limit reached",
+            confirm_text="Get more generations" if has_url else "OK",
+        )
+
+    def draw(self, context):
+        col = self.layout.column(align=True)
+        for line in (context.scene.animatica.quota_exceeded_message or "").split("\n")[:3]:
+            col.label(text=line)
+
+    def execute(self, context):
+        url = (context.scene.animatica.quota_upgrade_url or "").strip()
+        if url:
+            bpy.ops.wm.url_open(url=url)
+        return {'FINISHED'}
+
+
 class ANIMATICA_OT_open_discord_help(Operator):
     bl_idname = "animatica.open_discord_help"
     bl_label = "Need help?"
@@ -2228,6 +2307,7 @@ _classes = (
     ANIMATICA_OT_signin,
     ANIMATICA_OT_signout,
     ANIMATICA_OT_open_upgrade,
+    ANIMATICA_OT_quota_dialog,
     ANIMATICA_OT_open_discord_help,
     ANIMATICA_OT_dismiss_quota,
     ANIMATICA_OT_randomize_seed,

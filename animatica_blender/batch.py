@@ -260,6 +260,9 @@ class ANIMATICA_OT_generate_batch(Operator):
         self._pool = ThreadPoolExecutor(max_workers=min(MAX_PARALLEL, len(jobs)))
         _submit(self._pool, jobs, mmcp_client.get_mmcp_url(), model_caps)
         self._jobs = jobs
+        # Whether any character was refused for the quota. The dialog opens
+        # once, when the batch ends, not once per refused character.
+        self._quota_hit = False
         self._skipped = skipped
 
         settings.is_generating = True
@@ -322,11 +325,15 @@ class ANIMATICA_OT_generate_batch(Operator):
                 settings.batch_done += 1
             except Exception as exc:  # noqa: BLE001 — one character's failure is not the batch's
                 operators._stash_quota_state(settings, exc)
+                self._quota_hit = self._quota_hit or getattr(exc, "code", None) == "quota_exceeded"
                 job.error = str(exc)
                 settings.batch_failed = json.dumps(failures(settings) + [f"{job.name}: {exc}"])
 
         if all(j.done for j in self._jobs):
             self._finish(context)
+            if self._quota_hit:
+                operators._redraw_sidebars(context)
+                operators._open_quota_dialog(context)
             ok, bad = settings.batch_done, len(self._jobs) - settings.batch_done
             self.report({'WARNING'} if bad else {'INFO'},
                         f"{ok} take(s) ready for review" + (f", {bad} failed" if bad else ""))

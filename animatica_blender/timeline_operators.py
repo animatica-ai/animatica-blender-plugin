@@ -1371,9 +1371,9 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
     def modal(self, context, event):
         from . import gltf_to_blender
         from .operators import (
+            _announce_quota,
             _clear_quota_state,
             _live_target_armature_or_clear,
-            _stash_quota_state,
             _tick_generation_elapsed,
         )
 
@@ -1393,8 +1393,10 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
 
         if self._error is not None:
             self._cleanup(context)
-            _stash_quota_state(s, self._error)
-            self.report({'ERROR'}, f"Regenerate failed: {self._error}")
+            if _announce_quota(context, self._error):
+                self.report({'INFO'}, "Generation limit reached")
+            else:
+                self.report({'ERROR'}, f"Regenerate failed: {self._error}")
             return {'CANCELLED'}
 
         if self._result is None:
