@@ -598,10 +598,14 @@ def _correct_torso_translation(
             mh = src_arm.matrix_world @ src_pb.head
             delta_world = mh - rh
 
+            # The parent's pose matrix is in armature space, so the delta
+            # goes there first: with the rig turned or scaled in object
+            # mode, a world delta pushed the torso the wrong way.
+            delta_arm = tar_arm.matrix_world.to_3x3().inverted() @ delta_world
             parent_pose = (
                 torso_pb.parent.matrix if torso_pb.parent else Matrix.Identity(4)
             )
-            delta_local = parent_pose.to_3x3().inverted() @ delta_world
+            delta_local = parent_pose.to_3x3().inverted() @ delta_arm
 
             for fc, dv in ((fc_x, delta_local.x), (fc_y, delta_local.y), (fc_z, delta_local.z)):
                 for kp in fc.keyframe_points:

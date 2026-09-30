@@ -9,6 +9,25 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-09-30
+
+### Fixed
+
+- **A take lands where the server put it, whichever way the armature is
+  turned.** The bake folded the armature object's rotation about Z into
+  every bone, so a character turned 180° in object mode walked backwards
+  with its knees bending the wrong way, and one turned 30° walked at a 30°
+  skew. Generate, Regenerate Block, Pose and control rigs (Mixamo, Rigify)
+  now all place the motion in world space as the server generated it, and
+  a pose you key on a turned rig goes out facing the way you see it.
+- **A Rigify rig moved or turned away from its metarig bakes where it
+  stands.** The bake onto the controls read the metarig where it was
+  generated, and nudged the torso by a world-space offset as if the rig
+  were not turned, so a Rigify rig moved or turned in object mode came out
+  displaced. On a turned Rigify rig the neck may still twist and the
+  forearms roll a little: Rigify's follow settings blend the torso's turn
+  into bones the bake does not key.
+
 ## [0.6.3] — 2026-09-30
 
 ### Changed
@@ -557,7 +576,8 @@ make game-ready loops. The addon also updates itself.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/animatica-ai/animatica-blender-plugin/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/animatica-ai/animatica-blender-plugin/compare/v0.6.4...HEAD
+[0.6.4]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.4
 [0.6.3]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.3
 [0.6.2]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.2
 [0.6.1]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.1
