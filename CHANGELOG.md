@@ -9,6 +9,14 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ## [Unreleased]
 
+### Removed
+
+- **The unused T-pose arm helpers** `is_t_pose_arm_bone` and `t_pose_q_matrix`
+  in `request_builder.py`. Nothing has called them since the arm flattening was
+  taken out of the request (the 0.4.0 entry below describes the old behaviour):
+  an A-posed rig goes out as it is, and the server normalises the rest pose
+  itself.
+
 ## [0.6.0] — 2026-09-28
 
 You can now pose the character by dragging it, see the plan in the viewport,
