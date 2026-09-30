@@ -1156,6 +1156,15 @@ def _bake_via_metarig_detour(
 
     bone_names = {pb.name for pb in metarig_obj.pose.bones}
 
+    # The retarget copies world-space transforms from the metarig's bones
+    # onto the rig's controls, and its helpers sit at the rig's rest bones
+    # by armature-local matrices, so the two objects must stand in the same
+    # place (``rigify_bake``). The metarig is usually left where it was
+    # generated while the rig is moved and turned, so it stands in for the
+    # duration of the bake exactly where the rig stands.
+    saved_meta_matrix = metarig_obj.matrix_world.copy()
+    metarig_obj.matrix_world = rig_obj.matrix_world.copy()
+
     # Save + clear the metarig's existing action so we don't compose with it.
     saved_meta_action = None
     if metarig_obj.animation_data and metarig_obj.animation_data.action:
@@ -1208,7 +1217,9 @@ def _bake_via_metarig_detour(
         import traceback
         traceback.print_exc()
     finally:
-        # Restore the metarig to whatever it was animating before.
+        # Restore the metarig to whatever it was animating before, and to
+        # where it stood.
+        metarig_obj.matrix_world = saved_meta_matrix
         if metarig_obj.animation_data:
             metarig_obj.animation_data.action = saved_meta_action
         try:

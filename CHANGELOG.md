@@ -18,6 +18,13 @@ Proscenium, and keep the identifiers those releases actually shipped.
   skew. Generate, Regenerate Block, Pose and control rigs (Mixamo, Rigify)
   now all place the motion in world space as the server generated it, and
   a pose you key on a turned rig goes out facing the way you see it.
+- **A Rigify rig moved or turned away from its metarig bakes where it
+  stands.** The bake onto the controls read the metarig where it was
+  generated, and nudged the torso by a world-space offset as if the rig
+  were not turned, so a Rigify rig moved or turned in object mode came out
+  displaced. On a turned Rigify rig the neck may still twist and the
+  forearms roll a little: Rigify's follow settings blend the torso's turn
+  into bones the bake does not key.
 
 ## [0.6.3] — 2026-09-30
 
