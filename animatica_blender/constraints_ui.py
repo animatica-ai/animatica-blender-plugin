@@ -1055,6 +1055,21 @@ def _evaluated_local_basis(pb: bpy.types.PoseBone) -> 'Matrix':
     return parent_offset @ pb.parent.matrix.inverted() @ pb.matrix
 
 
+def _request_root_pose_bone(arm: bpy.types.Object) -> bpy.types.PoseBone | None:
+    """The pose bone the request serializes as the skeleton's root.
+
+    On a control rig that is the *deform* skeleton's root, chosen by
+    ``request_builder._build_deform_parent_map``, not the armature's outer
+    root pose bone. The response's root joint is the same bone, and
+    ``gltf_to_blender._RotationBaker`` undoes the object's yaw on it, so the
+    outbound side must put the yaw on exactly this one.
+    """
+    from . import request_builder
+    root = next((j["name"] for j in request_builder.armature_to_skeleton(arm)["joints"]
+                 if j["parent"] is None), None)
+    return arm.pose.bones.get(root) if root else None
+
+
 def _joint_rotation_to_mmcp(pb: bpy.types.PoseBone, *, is_root: bool, yaw, tilt) -> list[float]:
     """One pose bone's rotation the way the server expects it: relative to
     its parent, in the MMCP Y-up frame, relative to the rig's rest pose as
@@ -1158,11 +1173,6 @@ def sample_pose_keyframes(
     # module load — both modules are pulled into __init__'s register flow.
     from . import request_builder
 
-    root_pb = next(
-        (pb for pb in armature_obj.pose.bones if pb.parent is None),
-        None,
-    )
-
     # Use the same filtered deform set as :func:`armature_to_skeleton` —
     # face / tweak-half bones we strip out of the request must not appear
     # in pose_keyframe ``joint_rotations`` either, or the server-side
@@ -1207,16 +1217,7 @@ def sample_pose_keyframes(
     # skeleton's root, not the armature's outer root pose bone: its rotation
     # carries the object's yaw, and its evaluated head is the world root
     # position.
-    sample_root = root_pb
-    if is_control_rig and root_pb is not None and root_pb.name not in deform_bones:
-        # Find the topmost deform bone; that's the deform skeleton's root.
-        for pb in armature_obj.pose.bones:
-            if pb.name in deform_bones:
-                cur = pb
-                while cur.parent is not None and cur.parent.name in deform_bones:
-                    cur = cur.parent
-                sample_root = cur
-                break
+    sample_root = _request_root_pose_bone(armature_obj)
     root_name = sample_root.name if sample_root is not None else None
 
     # Heuristic: if the user keyed bones that live outside Kimodo's
@@ -1318,8 +1319,6 @@ def sample_pose_at_frame(
     # rig's control handles into joint_rotations the moment one existed, and
     # the server rejects a constraint naming a joint it was never given.
     sample_bone_names = set(request_builder.request_joint_set(armature_obj))
-    deform_bones = request_builder.emitted_deform_bones(armature_obj)
-    is_control_rig = request_builder.is_control_rig(armature_obj)
     if bone_names is not None:
         sample_bone_names = sample_bone_names & bone_names
     if not sample_bone_names:
@@ -1335,19 +1334,7 @@ def sample_pose_at_frame(
 
     yaw, tilt = coords.split_world_yaw(armature_obj.matrix_world)
 
-    root_pb = next(
-        (pb for pb in armature_obj.pose.bones if pb.parent is None),
-        None,
-    )
-    sample_root = root_pb
-    if is_control_rig and root_pb is not None and root_pb.name not in deform_bones:
-        for pb in armature_obj.pose.bones:
-            if pb.name in deform_bones:
-                cur = pb
-                while cur.parent is not None and cur.parent.name in deform_bones:
-                    cur = cur.parent
-                sample_root = cur
-                break
+    sample_root = _request_root_pose_bone(armature_obj)
 
     try:
         scene.frame_set(sample_frame)
