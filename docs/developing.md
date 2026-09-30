@@ -28,11 +28,20 @@ Python package: `animatica_blender/` — operators in `operators.py`, UI in
 `gltf_to_blender.py`, updates in `updater.py`, example scenes in `examples.py`,
 the Autoposer in `autoposer/`.
 
-Tests: `tests/` holds scripts that run inside a headless Blender without a
-server, one per behaviour they guard:
+Tests: `tests/` holds scripts that run inside Blender without a server, one
+per behaviour they guard. Headless:
 
 ```bash
 blender -b --factory-startup --python tests/test_bake_object_rotation.py
+```
+
+Through the addon's own operators, in a window that closes itself (the
+server is stood in for by a stub; the report and screenshots land in
+`tests/out/gui`, and `--rig`, `--arm`, `--take` point it at a rig of yours
+and a saved response for it):
+
+```bash
+blender --factory-startup --python tests/test_gui_object_rotation.py
 ```
 
 ## Protocol & servers
