@@ -9,6 +9,8 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-09-30
+
 ### Changed
 
 - **Running out of generations opens a dialog.** When a generation is refused
@@ -555,7 +557,8 @@ make game-ready loops. The addon also updates itself.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/animatica-ai/animatica-blender-plugin/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/animatica-ai/animatica-blender-plugin/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.3
 [0.6.2]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.2
 [0.6.1]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.1
 [0.6.0]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.0
