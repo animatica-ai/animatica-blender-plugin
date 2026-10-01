@@ -400,6 +400,7 @@ def _draw_prompt(layout, settings, has_prompt, in_preview) -> None:
         return
     i = min(max(settings.active_block_index, 0), len(blocks) - 1)
     col = layout.column(align=True)
+    col.enabled = mmcp_client.tool_available(settings.model_id, "prompt")
     label = "Prompt" if len(blocks) == 1 else f"Prompt · block {i + 1} of {len(blocks)}"
     head = col.row(align=True)
     head.label(text=label)
@@ -848,9 +849,14 @@ class ANIMATICA_PT_paths(AnimaticaPanelBase, Panel):
         settings = scene.animatica
 
         row = layout.row(align=True)
-        row.operator("animatica.add_waypoint", icon='MESH_CIRCLE',
+        # greyed out when the connected model can't use them
+        sub = row.row(align=True)
+        sub.enabled = mmcp_client.tool_available(settings.model_id, "waypoint")
+        sub.operator("animatica.add_waypoint", icon='MESH_CIRCLE',
                      text=f"Waypoint at {scene.frame_current}")
-        row.operator("animatica.add_effector_target", icon='EMPTY_SINGLE_ARROW', text="Pin")
+        sub = row.row(align=True)
+        sub.enabled = mmcp_client.tool_available(settings.model_id, "pin")
+        sub.operator("animatica.add_effector_target", icon='EMPTY_SINGLE_ARROW', text="Pin")
 
         found = constraints_ui.walk_scene_constraints(scene)
         marks = found["waypoints"]

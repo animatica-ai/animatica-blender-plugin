@@ -581,6 +581,31 @@ def cached_model(model_id: str) -> dict[str, Any] | None:
     return None
 
 
+def model_supports(model_id: str, kind: str) -> bool:
+    """Whether the connected model can take ``kind``: a segment type
+    (``"pose"``, ``"text"``) or a constraint type (``"root_path"``,
+    ``"effector_target"``). True while nothing is connected -- unknown is not
+    "no", and the tools stay usable before Connect."""
+    m = cached_model(model_id)
+    if m is None:
+        return True
+    return kind in (m.get("supported_segments") or []) or kind in (m.get("supported_constraints") or [])
+
+
+#: What each tool needs of the model, for the UI to grey out what it can't use.
+TOOL_NEEDS = {
+    "describe": "pose",
+    "prompt": "text",
+    "waypoint": "root_path",
+    "pin": "effector_target",
+}
+
+
+def tool_available(model_id: str, tool: str) -> bool:
+    need = TOOL_NEEDS.get(tool)
+    return need is None or model_supports(model_id, need)
+
+
 def store_capabilities(caps: dict[str, Any]) -> None:
     """Replace the cache and rebuild the EnumProperty items list."""
     global _CAPABILITIES, _MODEL_ITEMS, _LAST_ERROR

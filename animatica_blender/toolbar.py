@@ -142,22 +142,28 @@ def items(context) -> list[Item]:
     if arm is None:
         return []
     here = block_at(s, context.scene.frame_current)
+
+    def can(tool):
+        # greyed out when the connected model can't use it
+        return mmcp_client.tool_available(s.model_id, tool)
+
     out = [
         # to the moment: only your key poses, not every generated key
         Item("key_prev", "key_prev", "animatica.step_key_pose", {"direction": 'PREV'}),
         Item("key_next", "key_next", "animatica.step_key_pose", {"direction": 'NEXT'}),
         # the pose
         Item("autopose", "autopose", "animatica.toolbar_autoposer", on=poser.has_controls(arm), group=1),
-        Item("describe", "describe", "animatica.generate_pose", group=1),
+        Item("describe", "describe", "animatica.toolbar_describe", enabled=can("describe"), group=1),
         # keying it
         Item("set_key", "set_key", "animatica.set_key_pose", group=2),
         Item("auto_key", "auto_key", "animatica.toolbar_toggle", {"name": "auto_key_pose"},
              on=bool(s.auto_key_pose), rec=bool(s.auto_key_pose), group=2),
         # where it goes
-        Item("waypoint", "waypoint", "animatica.add_waypoint", group=3),
-        Item("pin", "pin", "animatica.add_effector_target", group=3),
+        Item("waypoint", "waypoint", "animatica.add_waypoint", enabled=can("waypoint"), group=3),
+        Item("pin", "pin", "animatica.add_effector_target", enabled=can("pin"), group=3),
         # what happens -- written next to the button that makes it
-        Item("prompt", "prompt", "animatica.toolbar_prompt_here", label=_prompt_label(s, here), group=4),
+        Item("prompt", "prompt", "animatica.toolbar_prompt_here", label=_prompt_label(s, here),
+             enabled=can("prompt"), group=4),
     ]
 
     # the take: one primary action at a time
@@ -190,7 +196,15 @@ def items(context) -> list[Item]:
     # looking at it: a view switch, apart from the actions
     out.append(Item("ghost", "ghost", "animatica.toolbar_toggle", {"name": "key_pose_overlay"},
                     on=bool(s.key_pose_overlay), group=9))
+    # what makes it: the model, at the far end -- set up once, changed rarely
+    if mmcp_client.cached_model(s.model_id) is not None:
+        out.append(Item("model", "model", "animatica.toolbar_model", label=_short(s.model_id),
+                        enabled=not s.is_generating, group=10))
     return out
+
+
+def _short(text: str) -> str:
+    return text if len(text) <= PROMPT_CHARS else text[:PROMPT_CHARS - 1].rstrip() + "…"
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +369,7 @@ SLOTS = {
     "key_prev": 1, "key_next": 1, "autopose": 1, "describe": 1, "set_key": 1, "auto_key": 1,
     "waypoint": 1, "pin": 1, "prompt": 6, "connect": 9, "working": 9,
     "generate": 9, "accept": 3, "redo": 3, "var_prev": 1, "var_next": 1,
-    "reject": 3, "ghost": 1,
+    "reject": 3, "ghost": 1, "model": 6,
 }
 
 
@@ -496,6 +510,93 @@ class ANIMATICA_OT_toolbar_redo(bpy.types.Operator):
         return bpy.ops.animatica.regenerate_block('INVOKE_DEFAULT', block_index=here)
 
 
+class ANIMATICA_MT_toolbar_models(bpy.types.Menu):
+    bl_idname = "ANIMATICA_MT_toolbar_models"
+    bl_label = "Model"
+
+    def draw(self, context):
+        from . import mmcp_client
+        s = context.scene.animatica
+        layout = self.layout
+        for ident, name, info in mmcp_client.cached_model_items():
+            row = layout.row()
+            row.prop_enum(s, "model_id", ident, text=f"{name}   ({info})" if info else name)
+        layout.separator()
+        layout.label(text=mmcp_client.get_mmcp_url(), icon='URL')
+        layout.operator("animatica.connect", text="Reconnect", icon='FILE_REFRESH')
+        op = layout.operator("preferences.addon_show", text="Server Settings…", icon='PREFERENCES')
+        op.module = __package__
+
+
+class ANIMATICA_OT_toolbar_model(bpy.types.Operator):
+    """The model that makes the takes. Click to pick another, or change the server"""
+    bl_idname = "animatica.toolbar_model"
+    bl_label = "Model"
+    bl_options = {'INTERNAL'}
+
+    @classmethod
+    def description(cls, context, properties):
+        from . import mmcp_client
+        s = context.scene.animatica
+        return (f"Model: {s.model_id}, on {mmcp_client.get_mmcp_url()}.\n"
+                "Click to pick another model, or change the server")
+
+    def invoke(self, context, event):
+        # The bar acts on the press. A menu opened then closed again on the
+        # release, so it only stayed while the button was held: open it once
+        # the click is over, as a click on any other menu button does.
+        if event.value == 'PRESS':
+            context.window_manager.modal_handler_add(self)
+            return {'RUNNING_MODAL'}
+        return self._open(context)
+
+    def modal(self, context, event):
+        if event.type in {'LEFTMOUSE', 'RIGHTMOUSE', 'ESC'} and event.value == 'RELEASE' \
+                or event.type == 'ESC':
+            return self._open(context) if event.type == 'LEFTMOUSE' else {'CANCELLED'}
+        return {'RUNNING_MODAL'}
+
+    def _open(self, context):
+        bpy.ops.wm.call_menu(name=ANIMATICA_MT_toolbar_models.bl_idname)
+        return {'FINISHED'}
+
+
+class ANIMATICA_OT_toolbar_describe(bpy.types.Operator):
+    """Describe a pose in words and key it at the playhead"""
+    bl_idname = "animatica.toolbar_describe"
+    bl_label = "Describe a Pose"
+    bl_options = {'INTERNAL'}
+
+    @classmethod
+    def description(cls, context, properties):
+        why = _describe_blocker(context)
+        return f"Describe a pose in words and key it at the playhead.\n{why}" if why else \
+            "Describe a pose in words and key it at the playhead"
+
+    def invoke(self, context, event):
+        why = _describe_blocker(context)
+        if why:
+            # the click used to do nothing at all: say why
+            self.report({'WARNING'}, why)
+            return {'CANCELLED'}
+        return bpy.ops.animatica.generate_pose('INVOKE_DEFAULT')
+
+
+def _describe_blocker(context) -> str:
+    """Why Describe cannot run here, in the artist's words, or ''."""
+    from . import mmcp_client
+    s = context.scene.animatica
+    caps = mmcp_client.cached_model(s.model_id) if s.model_id else None
+    if caps is None:
+        return "Connect to the server first"
+    if "pose" not in (caps.get("supported_segments") or []):
+        return (f"The model '{s.model_id}' on {mmcp_client.get_mmcp_url()} can't make a pose "
+                f"from words; pick a model (or a server) that can")
+    if bpy.ops.animatica.generate_pose.poll():
+        return ""
+    return "Not available right now"
+
+
 class ANIMATICA_OT_toolbar_autoposer(bpy.types.Operator):
     """Autoposer: drag hands, feet and hips and the body follows. Again to give the rig back"""
     bl_idname = "animatica.toolbar_autoposer"
@@ -552,7 +653,8 @@ class ANIMATICA_OT_toolbar_prompt_here(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 
 _classes = (ANIMATICA_OT_toolbar_toggle, ANIMATICA_OT_toolbar_generate, ANIMATICA_OT_toolbar_redo,
-            ANIMATICA_OT_toolbar_autoposer,
+            ANIMATICA_OT_toolbar_autoposer, ANIMATICA_OT_toolbar_describe,
+            ANIMATICA_MT_toolbar_models, ANIMATICA_OT_toolbar_model,
             ANIMATICA_OT_toolbar_prompt_here, ANIMATICA_GT_toolbar_bar, ANIMATICA_GGT_toolbar)
 _NS = "_animatica_toolbar_handle"            # an older copy drew from a handler
 
