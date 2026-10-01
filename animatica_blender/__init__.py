@@ -53,6 +53,7 @@ from . import waypoints
 from . import batch
 from . import variations
 from . import toolbar
+from . import picker
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +199,7 @@ def register():
     batch.register()
     variations.register()
     toolbar.register()
+    picker.register()
 
     _reset_runtime_flags()
 
@@ -226,6 +228,7 @@ def unregister():
     _purge_stale_handlers(bpy.app.handlers.save_pre, "_animatica_save_pre")
     _purge_stale_handlers(bpy.app.handlers.load_post, "_animatica_load_post")
 
+    picker.unregister()
     toolbar.unregister()
     variations.unregister()
     batch.unregister()

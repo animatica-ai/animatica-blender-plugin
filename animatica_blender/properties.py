@@ -963,6 +963,18 @@ class AnimaticaSettings(PropertyGroup):
     # One switch for the whole overlay, so it can go away in a click instead
     # of three. It sits with the toggles it governs — the same switch in the
     # Pose panel's *header* read as switching posing off, which it never did.
+    show_picker: BoolProperty(
+        name="Handle Picker",
+        description=(
+            "A card in the viewport with the character in T-pose and the "
+            "Autoposer's handles on it: pick one or several, switch them on or "
+            "off, and set how strictly the pose keeps to them"
+        ),
+        default=True,
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    picker_collapsed: BoolProperty(name="Picker Collapsed", default=False,
+                                   update=lambda self, context: _redraw_3d_views())
     show_toolbar: BoolProperty(
         name="Toolbar",
         description=(

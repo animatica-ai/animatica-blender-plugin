@@ -794,6 +794,8 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
                 for b in controls:
                     grid.prop(b, "ap_enabled", text=poser.joint_label(b), toggle=True)
                 grid.operator("autoposer.add_control", text="", icon='ADD')
+            layout.prop(settings, "show_picker", text="Handle Picker in the Viewport",
+                        icon='RESTRICT_SELECT_OFF')
             row = layout.row(align=True)
             row.prop(settings, "pose_tightness", slider=True)
             row.prop(settings, "pose_details", text="", icon='OPTIONS')
