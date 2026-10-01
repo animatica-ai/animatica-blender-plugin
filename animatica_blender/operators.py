@@ -1941,6 +1941,15 @@ class ANIMATICA_OT_generate_pose(Operator):
         default="",
     )
     seed: IntProperty(name="Seed", default=42, min=0, max=999999)
+    on_ground: BoolProperty(
+        name="Stand on the ground",
+        description=(
+            "Put the pose's lowest point on the ground under the character. Off: "
+            "the height the model gave it, over that ground -- for a pose that "
+            "should be in the air, like a jump"
+        ),
+        default=True,
+    )
     preserve_height: BoolProperty(
         name="Preserve height",
         description=(
@@ -2028,6 +2037,9 @@ class ANIMATICA_OT_generate_pose(Operator):
         row = layout.row(align=True)
         row.prop(self, "seed")
         row.operator("animatica.randomize_pose_seed", text="", icon='FILE_REFRESH')
+        row = layout.row()
+        row.active = not self.preserve_height
+        row.prop(self, "on_ground")
         layout.prop(self, "preserve_height")
         layout.prop(self, "pose_apply_scope")
         layout.label(text=f"Insert keyframe at frame {context.scene.frame_current}")
@@ -2203,7 +2215,8 @@ class ANIMATICA_OT_generate_pose(Operator):
                 source_frame=0,
                 target_frame=self._target_frame,
                 sample_index=0,
-                root_translation="skip" if self.preserve_height else "height_only",
+                root_translation=("skip" if self.preserve_height
+                                  else "on_ground" if self.on_ground else "height_only"),
                 joint_name_filter=self._pose_joint_filter,
             )
         except Exception as exc:                         # noqa: BLE001
