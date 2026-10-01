@@ -73,17 +73,22 @@ def _uniform():
     return _shader
 
 
-def rounded(rect, r, color) -> None:
-    """A filled rounded rectangle ``(x0, y0, x1, y1)`` in region pixels."""
+def rounded(rect, r, color, *, left: bool = True, right: bool = True) -> None:
+    """A filled rounded rectangle ``(x0, y0, x1, y1)`` in region pixels.
+
+    ``left`` / ``right`` False square that side's corners: the buttons of a
+    segmented group sit flush, and only the group's ends are rounded."""
     x0, y0, x1, y1 = rect
     if x1 <= x0 or y1 <= y0:
         return
     r = max(0.0, min(r, (x1 - x0) / 2, (y1 - y0) / 2))
+    rr, rl = (r if right else 0.0), (r if left else 0.0)
     pts = []
-    for cx, cy, a0 in ((x1 - r, y1 - r, 0), (x0 + r, y1 - r, 90), (x0 + r, y0 + r, 180), (x1 - r, y0 + r, 270)):
+    for cx, cy, a0, rc in ((x1 - rr, y1 - rr, 0, rr), (x0 + rl, y1 - rl, 90, rl),
+                           (x0 + rl, y0 + rl, 180, rl), (x1 - rr, y0 + rr, 270, rr)):
         for k in range(7):
             a = math.radians(a0 + 15 * k)
-            pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+            pts.append((cx + rc * math.cos(a), cy + rc * math.sin(a)))
     verts = [((x0 + x1) / 2, (y0 + y1) / 2)] + pts
     tris = [(0, i, i % len(pts) + 1) for i in range(1, len(pts) + 1)]
     sh = _uniform()

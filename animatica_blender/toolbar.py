@@ -56,7 +56,7 @@ HOVER_OUTLINE = st.OUTLINE_HOVER
 BUTTON = 30          # px at 1x, square
 ICON = 18            # the glyph inside it
 PAD = 5
-GAP = 3
+GAP = 1              # inside a group: a hairline, the buttons a segmented strip
 GROUP_GAP = 13       # between groups
 BOTTOM = 14
 RADIUS = 6
@@ -147,23 +147,36 @@ def items(context) -> list[Item]:
         # greyed out when the connected model can't use it
         return mmcp_client.tool_available(s.model_id, tool)
 
+    # Left to right, the way a moment is worked on: make the pose, key it
+    # (step between the keyed ones, see them as ghosts), say where the
+    # character goes, say what happens and make the take; then the model,
+    # set once.
     out = [
-        # to the moment: only your key poses, not every generated key
-        Item("key_prev", "key_prev", "animatica.step_key_pose", {"direction": 'PREV'}),
-        Item("key_next", "key_next", "animatica.step_key_pose", {"direction": 'NEXT'}),
-        # the pose
+        # 1. the pose
         Item("autopose", "autopose", "animatica.toolbar_autoposer", on=poser.has_controls(arm), group=1),
+    ]
+    if poser.has_controls(arm):
+        # the handle picker, beside the Autoposer whose handles it shows
+        out.append(Item("picker", "picker", "animatica.toolbar_toggle", {"name": "show_picker"},
+                        on=bool(s.show_picker), group=1))
+    out += [
         Item("describe", "describe", "animatica.toolbar_describe", enabled=can("describe"), group=1),
-        # keying it
+        # 2. keys: set one here, between the steps to the one before and after
+        #    (your key poses, not every generated key), and record
+        Item("key_prev", "key_prev", "animatica.step_key_pose", {"direction": 'PREV'}, group=2),
         Item("set_key", "set_key", "animatica.set_key_pose", group=2),
+        Item("key_next", "key_next", "animatica.step_key_pose", {"direction": 'NEXT'}, group=2),
         Item("auto_key", "auto_key", "animatica.toolbar_toggle", {"name": "auto_key_pose"},
              on=bool(s.auto_key_pose), rec=bool(s.auto_key_pose), group=2),
-        # where it goes
+        # ...and seeing them: the key poses as ghosts, their trail, their frames
+        Item("ghost", "ghost", "animatica.toolbar_toggle", {"name": "key_pose_overlay"},
+             on=bool(s.key_pose_overlay), group=2),
+        # 3. where it goes
         Item("waypoint", "waypoint", "animatica.add_waypoint", enabled=can("waypoint"), group=3),
         Item("pin", "pin", "animatica.add_effector_target", enabled=can("pin"), group=3),
-        # what happens -- written next to the button that makes it
+        # 4. what happens -- written next to the button that makes it
         Item("prompt", "prompt", "animatica.toolbar_prompt_here", label=_prompt_label(s, here),
-             enabled=can("prompt"), group=4),
+             enabled=can("prompt"), group=5),         # in one group with the take it makes
     ]
 
     # the take: one primary action at a time
@@ -193,9 +206,6 @@ def items(context) -> list[Item]:
         out.append(Item("generate", "generate", "animatica.toolbar_generate", label="Generate",
                         primary=not why, enabled=not why, group=5, width="take"))
 
-    # looking at it: a view switch, apart from the actions
-    out.append(Item("ghost", "ghost", "animatica.toolbar_toggle", {"name": "key_pose_overlay"},
-                    on=bool(s.key_pose_overlay), group=9))
     # what makes it: the model, at the far end -- set up once, changed rarely
     if mmcp_client.cached_model(s.model_id) is not None:
         out.append(Item("model", "model", "animatica.toolbar_model", label=_short(s.model_id),
@@ -285,8 +295,8 @@ def shown(context) -> bool:
 # Drawing
 # ---------------------------------------------------------------------------
 
-def _rounded(_shader, rect, r, color):
-    st.rounded(rect, r, color)
+def _rounded(_shader, rect, r, color, left=True, right=True):
+    st.rounded(rect, r, color, left=left, right=right)
 
 
 def _icon(name: str, cx: float, cy: float, size: float, color) -> None:
@@ -314,9 +324,13 @@ def draw_bar(context) -> None:
     _rounded(shader, bar, (RADIUS + 3) * u, BAR_COLOR)
     size = TEXT_SIZE * u
     side = BUTTON * u
-    for it, rect in rects:
+    for i, (it, rect) in enumerate(rects):
         x0, y0, x1, y1 = rect
+        # A group is one segmented strip: rounded at its ends, square between.
+        first = i == 0 or rects[i - 1][0].group != it.group
+        last = i == len(rects) - 1 or rects[i + 1][0].group != it.group
         if not it.icon and not it.op:          # a plain label, e.g. "2/4"
+            _rounded(shader, rect, RADIUS * u, BUTTON_COLOR, left=first, right=last)
             blf.size(0, size)
             tw = blf.dimensions(0, it.label)[0]
             blf.color(0, *WHITE[:3], 0.7)
@@ -324,24 +338,23 @@ def draw_bar(context) -> None:
             blf.draw(0, it.label)
             continue
         hot = _hot(live, it)
+        # hover lifts the segment itself: an outline round one segment of a strip read as a gap
         if it.primary:
             color = PRIMARY_HOVER if hot else PRIMARY_COLOR
         elif it.on:
-            color = ON_COLOR
+            color = st.ON_HOVER if hot else ON_COLOR
         else:
-            color = BUTTON_COLOR
-        if hot and not it.primary:
-            _rounded(shader, (x0 - 1.5 * u, y0 - 1.5 * u, x1 + 1.5 * u, y1 + 1.5 * u),
-                     (RADIUS + 1.5) * u, HOVER_OUTLINE)
+            color = st.TILE_HOVER if hot else BUTTON_COLOR
         dim = not it.enabled and it.progress is None
         if dim:
             color = (color[0], color[1], color[2], 0.45)
-        _rounded(shader, rect, RADIUS * u, color)
+        _rounded(shader, rect, RADIUS * u, color, left=first, right=last)
         if it.progress is not None:
             # an estimate (no server progress in MMCP), in the accent, never an empty-looking stub
             w = (x1 - x0) * max(0.0, min(it.progress, 0.97))
             if w > 2 * RADIUS * u:
-                _rounded(shader, (x0, y0, x0 + w, y1), RADIUS * u, FILL_COLOR)
+                _rounded(shader, (x0, y0, x0 + w, y1), RADIUS * u, FILL_COLOR,
+                         left=first, right=last and w >= x1 - x0 - 1)
         if it.primary:
             tint = st.ON_PRIMARY                   # white on soft orange does not read
         elif it.rec or it.on:
@@ -369,7 +382,7 @@ SLOTS = {
     "key_prev": 1, "key_next": 1, "autopose": 1, "describe": 1, "set_key": 1, "auto_key": 1,
     "waypoint": 1, "pin": 1, "prompt": 6, "connect": 9, "working": 9,
     "generate": 9, "accept": 3, "redo": 3, "var_prev": 1, "var_next": 1,
-    "reject": 3, "ghost": 1, "model": 6,
+    "reject": 3, "ghost": 1, "model": 6, "picker": 1,
 }
 
 
@@ -457,6 +470,8 @@ class ANIMATICA_GGT_toolbar(bpy.types.GizmoGroup):
 # ---------------------------------------------------------------------------
 
 _TOGGLE_TIPS = {
+    "show_picker": "Handle picker: the character in T-pose with the Autoposer's handles on it. "
+                   "Pick them, switch them on or off, set their slack, add or remove them",
     "auto_key_pose": "Auto-key: key the pose as you pose it. Off: only Set Key writes one",
     "key_pose_overlay": "Show the key poses, the trail and the frame numbers in the viewport. "
                         "Off to judge the motion on its own",
@@ -479,6 +494,8 @@ class ANIMATICA_OT_toolbar_toggle(bpy.types.Operator):
         if not hasattr(s, self.name):
             return {'CANCELLED'}
         setattr(s, self.name, not getattr(s, self.name))
+        if self.name == "show_picker" and s.show_picker:
+            s.picker_collapsed = False          # opened to be used, not as a folded title
         return {'FINISHED'}
 
 

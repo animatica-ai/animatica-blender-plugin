@@ -258,9 +258,9 @@ def layout(context, area, region) -> dict | None:
         out["slack_pos"] = (inner0, y, inner1, y + ROW_H * u)
         y += (ROW_H + GAP) * u
         square = ROW_H * u
-        third = (inner1 - inner0 - square - 3 * 3 * u) / 3
+        third = (inner1 - inner0 - square - 6 * u - 2 * u) / 3      # one strip, as on the bar
         for k, name in enumerate(("on", "off", "rot")):
-            a = inner0 + k * (third + 3 * u)
+            a = inner0 + k * (third + u)
             out[name] = (a, y, a + third, y + ROW_H * u)
         out["remove"] = (inner1 - square, y, inner1, y + ROW_H * u)
         y += (ROW_H + GAP) * u
@@ -500,7 +500,8 @@ def draw_card(context):
     for name, text in (("on", "On"), ("off", "Off"), ("rot", "Rotation")):
         rect = L[name]
         fill = st.ON if states[name] else (st.TILE_HOVER if _hot(live, name) and have else st.TILE)
-        st.rounded(rect, 5 * u, fill if have else st.with_alpha(fill, 0.45))
+        st.rounded(rect, 5 * u, fill if have else st.with_alpha(fill, 0.45),
+                   left=name == "on", right=name == "rot")
         blf.size(0, SMALL * u)
         tw = blf.dimensions(0, text)[0]
         color = (st.REC if states[name] else st.WHITE) if have else (1, 1, 1, 0.35)
@@ -986,14 +987,14 @@ class ANIMATICA_OT_picker_collapse(bpy.types.Operator):
 
 
 class ANIMATICA_OT_picker_close(bpy.types.Operator):
-    """Hide the handle picker. Pose panel → Handle Picker brings it back"""
+    """Hide the handle picker. The picker button on the floating bar brings it back"""
     bl_idname = "animatica.picker_close"
     bl_label = "Hide Handle Picker"
     bl_options = {'INTERNAL'}
 
     def execute(self, context):
         context.scene.animatica.show_picker = False
-        self.report({'INFO'}, "Handle picker hidden: Pose panel → Handle Picker brings it back")
+        self.report({'INFO'}, "Handle picker hidden: the picker button on the floating bar brings it back")
         return {'FINISHED'}
 
 
