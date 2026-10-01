@@ -35,7 +35,7 @@ from . import ui_style as st
 #: Block row height, region pixels, once set by dragging the lane's top edge;
 #: None until then, which is DEFAULT_BLOCK_HEIGHT at the UI scale.
 _strip_height = None
-DEFAULT_BLOCK_HEIGHT = 26    # logical px (× UI scale)
+DEFAULT_BLOCK_HEIGHT = 32    # logical px (× UI scale): two lines, the prompt and its length
 MIN_STRIP_HEIGHT = 22        # region px: below this the label no longer fits
 MAX_STRIP_HEIGHT = 120
 RESIZE_HANDLE_HEIGHT = 4     # logical px either side of the lane's top edge
@@ -65,12 +65,12 @@ TAKE_STRIP = 3
 # Identity colours, cycled per block: the swatch on the tile, and the colour
 # of the block's ghosts and trail in the viewport (key_poses reads them).
 STRIP_COLORS = [
-    (0.941, 0.631, 0.341, 1.0),   # soft orange
-    (0.914, 0.325, 0.573, 1.0),   # tutuji pink
-    (0.600, 0.520, 0.820, 1.0),   # mulberry, lifted
-    (0.333, 0.718, 0.678, 1.0),   # teal
-    (0.400, 0.620, 0.890, 1.0),   # sky
-    (0.850, 0.760, 0.420, 1.0),   # sand
+    (0.267, 0.541, 0.878, 1.0),   # blue
+    (0.878, 0.435, 0.267, 1.0),   # orange
+    (0.365, 0.737, 0.400, 1.0),   # green
+    (0.729, 0.333, 0.729, 1.0),   # purple
+    (0.878, 0.722, 0.267, 1.0),   # yellow
+    (0.267, 0.796, 0.796, 1.0),   # teal
 ]
 
 UNDER_EDGE = st._hex("8E7CC3")               # the top edge of the block under the playhead
@@ -90,6 +90,7 @@ WAYPOINT_PIN_RADIUS = WAYPOINT_RAIL / 2
 
 EMPTY_HINT = "Double-click to add a prompt block, or use Prompt… on the bar"
 UNCONDITIONED_LABEL = "model decides"
+EMPTY_BLOCK_HINT = "Double-click to describe the motion"
 EXPECTED_SECONDS = 30.0
 
 # Inline-edit state (written by timeline_operators, read by draw callback)
@@ -110,6 +111,7 @@ interaction = {
     "drag": None,        # block index being dragged
     "key": None,         # key-pose frame under the mouse
     "key_drag": None,    # (from frame, to frame) while a key pose is dragged
+    "band": None,        # (x0, y0, x1, y1) while a rubber band is drawn
 }
 
 #: The frames the last generation asked for (the take under review is that one).
@@ -144,13 +146,18 @@ def markers_visible(context) -> bool:
     return len(context.scene.timeline_markers) > 0
 
 
+#: the editor's horizontal scrollbar along the bottom (logical px): it takes
+#: the clicks there before the add-on sees them, so the lane sits above it
+SCROLLBAR = 14
+
+
 def lane_y_offset(context) -> int:
-    """Region-pixel Y of the bottom of the lane's content: above the marker
-    row when there is one, so the lane stays clickable and doesn't cover the
-    markers."""
-    if not markers_visible(context):
-        return STRIP_Y_OFFSET
+    """Region-pixel Y of the bottom of the lane's content: above the scrollbar,
+    and above the marker row when there is one, so the lane stays clickable
+    and doesn't cover the markers."""
     ui_scale = context.preferences.system.ui_scale
+    if not markers_visible(context):
+        return STRIP_Y_OFFSET + math.ceil(SCROLLBAR * ui_scale)
     return STRIP_Y_OFFSET + math.ceil(MARKER_ROW_HEIGHT * ui_scale)
 
 
@@ -284,23 +291,31 @@ def hit_test_strips(context, mouse_x, mouse_y):
         return {"index": None, "zone": None}
     view2d = context.region.view2d
 
+    # The grab zone of an edge reaches in over the block's grips (drawn a few
+    # pixels inside it) and a little out past it, at the UI scale: a fixed 6 px
+    # missed the grips entirely on a scaled display.
+    u = g.u
+    inside, outside = max(EDGE_HANDLE_WIDTH, 11 * u), max(3, 3 * u)
+    best = None
     for i, fr in enumerate(props.prompt_blocks):
         x_start, _ = view2d.view_to_region(fr.frame_start, 0, clip=False)
         x_end, _ = view2d.view_to_region(fr.frame_end, 0, clip=False)
-
-        # X check (with edge tolerance)
-        if mouse_x < x_start - EDGE_HANDLE_WIDTH or mouse_x > x_end + EDGE_HANDLE_WIDTH:
+        if mouse_x < x_start - outside or mouse_x > x_end + outside:
             continue
-
-        # Determine zone
-        if abs(mouse_x - x_start) <= EDGE_HANDLE_WIDTH:
-            return {"index": i, "zone": "edge_start"}
-        elif abs(mouse_x - x_end) <= EDGE_HANDLE_WIDTH:
-            return {"index": i, "zone": "edge_end"}
+        # a block too narrow for both zones keeps a middle to grab it by
+        reach = min(inside, max(2.0, (x_end - x_start) / 3))
+        if x_start - outside <= mouse_x <= x_start + reach:
+            hit = {"index": i, "zone": "edge_start"}
+            d = abs(mouse_x - x_start)
+        elif x_end - reach <= mouse_x <= x_end + outside:
+            hit = {"index": i, "zone": "edge_end"}
+            d = abs(mouse_x - x_end)
         else:
             return {"index": i, "zone": "body"}
-
-    return {"index": None, "zone": None}
+        # two blocks that meet both claim the edge: the nearer side wins
+        if best is None or d < best[0]:
+            best = (d, hit)
+    return best[1] if best else {"index": None, "zone": None}
 
 
 def hit_test_waypoint_pin(context, mouse_x, mouse_y):
@@ -529,6 +544,7 @@ def _draw(context, region, props, window, key_pose_ticks, waypoint_frames):
 
     tagged = {j for j in (hover, props.active_block_index, drag)
               if j is not None and 0 <= j < len(props.prompt_blocks)}
+    any_text = any((b.prompt or "").strip() for b in props.prompt_blocks)
     label_room = W           # where the first block starts: room for the lane's name
     card = None              # (index, full prompt) wanting a hover card
     blocks = props.prompt_blocks
@@ -554,20 +570,20 @@ def _draw(context, region, props, window, key_pose_ticks, waypoint_frames):
 
         empty = _is_unconditioned(fr)
         is_under = i == under
+        # The block in its own colour (the colour its ghosts and trail carry
+        # in the viewport), deep enough for white text; lighter under the
+        # mouse and under the playhead.
+        sw = _strip_color(fr, i)
+        lift = 0.86 if (i == hover or is_under) else 0.74
+        fill = tuple(sw[c] * lift + st.TILE[c] * (1 - lift) for c in range(3)) + (1.0,)
         if empty:
             st.rounded(rect, r, _dim((1, 1, 1, 0.03), k))
             _dashed(rect, u, _dim(DASH, k))
         else:
-            fill = st.ON if is_under else (st.TILE_HOVER if i == hover else st.TILE)
             st.rounded(rect, r, _dim(fill, k))
         if is_under and not empty:
-            st.rounded((x0, g.b1 - 2 * u, x1, g.b1), min(r, u), _dim(UNDER_EDGE, k))
-
-        # identity swatch
-        sw = _strip_color(fr, i)
-        if x1 - x0 > 10 * u:
-            st.rounded((x0 + 3 * u, g.b0 + 4 * u, x0 + (3 + SWATCH) * u, g.b1 - 4 * u),
-                       SWATCH * u / 2, _dim((sw[0], sw[1], sw[2], 1.0), k))
+            # under the playhead: what the bar's Prompt and Redo act on
+            st.rounded((x0, g.b1 - 2 * u, x1, g.b1), min(r, u), _dim((sw[0], sw[1], sw[2], 1.0), k))
 
         if not fr.enabled:
             _hatch(rect, u)
@@ -582,49 +598,71 @@ def _draw(context, region, props, window, key_pose_ticks, waypoint_frames):
             if tx1 > tx0:
                 st.rounded((tx0, g.b0, tx1, g.b0 + TAKE_STRIP * u), min(r, 1.5 * u), st.PRIMARY)
 
-        if i == props.active_block_index:
-            st.outline(rect, r, max(1.0, u * 0.75), SELECTED_OUTLINE)
+        if getattr(fr, "selected", False):
+            st.outline(rect, r, max(1.0, (1.5 if i == props.active_block_index else 1.0) * u),
+                       st.SOFT_ORANGE)
 
-        # --- what it says ---
+        # grips at both ends: the edges are handles
+        wide = x1 - x0 > 30 * u
+        grip_h = (g.b1 - g.b0) * 0.36
+        cy = (g.b0 + g.b1) / 2
+        if wide:
+            gc = _dim((1, 1, 1, 0.45 if i in tagged else 0.28), k)
+            for gx in (x0 + 4 * u, x1 - 4 * u):
+                st.lines([((gx - 1.2 * u, cy - grip_h / 2), (gx - 1.2 * u, cy + grip_h / 2)),
+                          ((gx + 1.2 * u, cy - grip_h / 2), (gx + 1.2 * u, cy + grip_h / 2))],
+                         max(1.0, 0.8 * u), gc)
+
+        # --- what it says: frames at the edges, the prompt in the middle, its length under it
         locked = bool(getattr(fr, "locked", False))
-        tx = x0 + (3 + SWATCH + TEXT_PAD - 2) * u
-        right = x1 - TEXT_PAD * u
-        if locked and x1 - x0 > 30 * u:
+        tx = x0 + (8 + 3) * u if wide else x0 + 4 * u
+        right = x1 - (8 + 3) * u if wide else x1 - 4 * u
+        _font(TAG_SIZE * u)
+        a_txt, b_txt = str(fr.frame_start), str(fr.frame_end)
+        aw, bw = blf.dimensions(0, a_txt)[0], blf.dimensions(0, b_txt)[0]
+        if right - tx - aw - bw - 12 * u >= MIN_LABEL_WIDTH * u:
+            y = _baseline(g.b0, g.b1)
+            _text(a_txt, tx, y, _dim(st.MUTED, k))
+            _text(b_txt, right - bw, y, _dim(st.MUTED, k))
+            tx += aw + 6 * u
+            right -= bw + 6 * u
+        if locked and right - tx > LOCK_SIZE * u + MIN_LABEL_WIDTH * u:
             ls = LOCK_SIZE * u
-            st.icon("lock", right - ls / 2 + 2 * u, (g.b0 + g.b1) / 2, ls, _dim((1, 1, 1, 0.75), k))
+            st.icon("lock", right - ls / 2, cy, ls, _dim((1, 1, 1, 0.75), k))
             right -= ls + 4 * u
-        # frame numbers at its edges: under the mouse, selected, or dragged
-        if i in tagged:
-            _font(TAG_SIZE * u)
-            a_txt, b_txt = str(fr.frame_start), str(fr.frame_end)
-            aw, bw = blf.dimensions(0, a_txt)[0], blf.dimensions(0, b_txt)[0]
-            # only where they leave room to read the prompt (or the length)
-            if right - tx - aw - bw - 12 * u >= MIN_LABEL_WIDTH * u:
-                y = _baseline(g.b0, g.b1)
-                _text(a_txt, tx, y, _dim(st.MUTED, k))
-                _text(b_txt, right - bw, y, _dim(st.MUTED, k))
-                tx += aw + 6 * u
-                right -= bw + 6 * u
         size = min(TEXT_SIZE * u, (g.b1 - g.b0) * 0.5)
+        # room for a second line: the length under the prompt
+        two_lines = (g.b1 - g.b0) >= (TEXT_SIZE + TAG_SIZE + 10) * u
         if inline_edit_state["active"] and inline_edit_state["index"] == i:
             _draw_strip_text_editing(inline_edit_state["text"], inline_edit_state["cursor"],
                                      tx, right, g.b0, g.b1, size)
             continue
+        length = f"{fr.frame_end - fr.frame_start}f"
         if i == drag:
             # while it moves: how long it is
             _font(size)
-            n = f"{fr.frame_end - fr.frame_start} f"
-            nw = blf.dimensions(0, n)[0]
+            nw = blf.dimensions(0, length)[0]
             if right - tx > nw:
-                _text(n, (tx + right - nw) / 2, _baseline(g.b0, g.b1), st.WHITE)
+                _text(length, (tx + right - nw) / 2, _baseline(g.b0, g.b1), st.WHITE)
             continue
-        label = UNCONDITIONED_LABEL if empty else fr.prompt
+        # With nothing typed anywhere, the empty block is where to start; with
+        # prompts around it, it is a stretch the model fills on its own.
+        label = fr.prompt if not empty else (UNCONDITIONED_LABEL if any_text else EMPTY_BLOCK_HINT)
         cut = True
         if x1 - x0 >= MIN_LABEL_WIDTH * u and right - tx > 8 * u:
             _font(size)
             shown, cut = _fit(label, right - tx)
+            sw_ = blf.dimensions(0, shown)[0]
             color = st.MUTED if empty else st.WHITE
-            _text(shown, tx, _baseline(g.b0, g.b1), _dim(color, k if fr.enabled else 0.5))
+            mid = (tx + right - sw_) / 2
+            if two_lines:
+                line_y = cy + 1 * u
+                _text(shown, mid, line_y, _dim(color, k if fr.enabled else 0.5))
+                _font(TAG_SIZE * u)
+                lw = blf.dimensions(0, length)[0]
+                _text(length, (tx + right - lw) / 2, cy - TAG_SIZE * u - 2 * u, _dim(st.MUTED, k))
+            else:
+                _text(shown, mid, _baseline(g.b0, g.b1), _dim(color, k if fr.enabled else 0.5))
         if cut and i == hover and zone == "body" and drag is None:
             card = (i, label, x0)
 
@@ -633,6 +671,13 @@ def _draw(context, region, props, window, key_pose_ticks, waypoint_frames):
     # the whole prompt of a block whose label is cut: the tile, opened out
     if card is not None:
         _hover_card(card[1], card[2], g, W)
+
+    band = interaction.get("band")
+    if band is not None:
+        bx0, by0, bx1, by1 = band
+        rect = (min(bx0, bx1), min(by0, by1), max(bx0, bx1), max(by0, by1))
+        st.rounded(rect, 0, st.with_alpha(st.SOFT_ORANGE, 0.12))
+        st.outline(rect, 0, max(1.0, u * 0.75), st.with_alpha(st.SOFT_ORANGE, 0.8))
 
     _draw_key_pose_rail(g, W, fx, key_pose_ticks)
     _draw_waypoint_rail(g, W, fx, waypoint_frames)
@@ -796,13 +841,17 @@ def _draw_waypoint_rail(g, W, fx, frames):
     if not frames:
         return
     u = g.u
+    from . import waypoints
     hot = interaction.get("pin")
     hot_frame = None
     if hot:
         obj = bpy.context.scene.objects.get(hot)
         hot_frame = getattr(obj, "animatica_waypoint_frame", None)
+    picked = {int(o.animatica_waypoint_frame) for o in waypoints.waypoints(bpy.context.scene)
+              if o.select_get()}
     for x, group in _clusters([(fx(f), f) for f in frames if -8 * u <= fx(f) <= W + 8 * u], CLUSTER * u):
-        color = st.WHITE if hot_frame in group else WAYPOINT_COLOR
+        color = (st.WHITE if hot_frame in group
+                 else st.SOFT_ORANGE if picked & set(group) else WAYPOINT_COLOR)
         # the floating bar's Waypoint icon, so the two read as one thing
         size = g.wp1 - g.wp0
         st.icon("waypoint", x, (g.wp0 + g.wp1) / 2, size, color)

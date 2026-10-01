@@ -62,6 +62,10 @@ BOTTOM = 14
 RADIUS = 6
 TEXT_SIZE = 11
 PROMPT_CHARS = 16    # of the block's prompt shown on its button
+FIELD = 210          # px at 1x: the prompt field, before the take's buttons take their share
+PLACEHOLDER = "Describe what happens here…"
+#: the buttons of the take slot, whose widths the prompt field gives way to
+TAKE_IDS = {"connect", "generate", "working", "accept", "redo", "var_prev", "var_label", "var_next", "reject"}
 EXPECTED_SECONDS = 30.0
 
 
@@ -125,11 +129,34 @@ def blockers(context) -> list:
     return _cache["blockers"]
 
 
+def gate(context) -> tuple:
+    """What stands between the artist and a take, the first thing first:
+    ``(kind, text, operator)``.
+
+    ``offline`` -- Blender's online access is off; ``connect`` -- no server
+    yet; ``sign_in`` -- the cloud needs an account; ``blocked`` -- nothing to
+    go on yet (``text`` says what); ``ready``. One answer for the sidebar's
+    button and the bar's, each naming the step instead of greying out without
+    a word.
+    """
+    from . import mmcp_client
+    s = context.scene.animatica
+    if mmcp_client.offline():
+        return ("offline", "Allow Online Access", "animatica.allow_online")
+    if mmcp_client.cached_model(s.model_id) is None:
+        return ("connect", "Connect", "animatica.connect")
+    if mmcp_client.needs_sign_in():
+        return ("sign_in", "Sign in to Generate", "animatica.signin_generate")
+    why = blockers(context)
+    if why:
+        return ("blocked", why[0], None)
+    return ("ready", "Generate", "animatica.toolbar_generate")
+
+
 def _prompt_label(settings, here: int) -> str:
-    text = (settings.prompt_blocks[here].prompt or "").strip() if here >= 0 else ""
-    if not text:
-        return "Prompt…"
-    return text if len(text) <= PROMPT_CHARS else text[:PROMPT_CHARS - 1].rstrip() + "…"
+    """The prompt of the block under the playhead, whole (the field cuts it
+    to fit); empty shows the placeholder."""
+    return (settings.prompt_blocks[here].prompt or "").strip() if here >= 0 else ""
 
 
 def items(context) -> list[Item]:
@@ -140,7 +167,7 @@ def items(context) -> list[Item]:
     s = context.scene.animatica
     arm = properties._live_armature(s.target_armature)
     if arm is None:
-        return []
+        return _setup_items(context)
     here = block_at(s, context.scene.frame_current)
 
     def can(tool):
@@ -175,20 +202,25 @@ def items(context) -> list[Item]:
         Item("waypoint", "waypoint", "animatica.add_waypoint", enabled=can("waypoint"), group=3),
         Item("pin", "pin", "animatica.add_effector_target", enabled=can("pin"), group=3),
         # 4. what happens -- written next to the button that makes it
-        Item("prompt", "prompt", "animatica.toolbar_prompt_here", label=_prompt_label(s, here),
-             enabled=can("prompt"), group=5),         # in one group with the take it makes
+        # what happens: typed, so it looks like somewhere to type
+        Item("prompt", "", "animatica.toolbar_prompt_here", label=_prompt_label(s, here),
+             enabled=can("prompt"), group=4, width="field"),
     ]
 
     # the take: one primary action at a time
-    if mmcp_client.cached_model(s.model_id) is None:
-        out.append(Item("connect", "connect", "animatica.connect", label="Connect", primary=True,
-                        group=5, width="take"))
+    kind, text, op = gate(context)
+    # a take being made or waiting for review keeps its own buttons, whatever else is missing
+    busy = s.is_generating or s.is_previewing
+    if kind in ("offline", "connect") and not busy:
+        out.append(Item("connect", "connect", op, label=text, primary=True, group=5))
+    elif kind == "sign_in" and not busy:
+        out.append(Item("generate", "generate", op, label=text, primary=True, group=5))
     elif s.is_generating:
         elapsed = float(getattr(s, "generation_elapsed", 0))
         # one button, the width Generate had: the time it has taken, filling, and
         # a click on it cancels -- a Cancel beside it made the bar jump
         out.append(Item("working", "cancel", "animatica.cancel", label=f"{int(elapsed)} s  ·  Cancel",
-                        group=5, width="take",
+                        group=5,
                         progress=1.0 - math.exp(-elapsed / EXPECTED_SECONDS)))
     elif s.is_previewing and not (batch.pending(s) or batch.failures(s)):
         out.append(Item("accept", "accept", "animatica.accept", label="Accept", primary=True, group=5))
@@ -202,15 +234,60 @@ def items(context) -> list[Item]:
             out.append(Item("var_next", "var_next", "animatica.show_variation", {"step": 1}, group=6))
         out.append(Item("reject", "reject", "animatica.reject", label="Reject", group=7))
     else:
-        why = blockers(context)
-        out.append(Item("generate", "generate", "animatica.toolbar_generate", label="Generate",
-                        primary=not why, enabled=not why, group=5, width="take"))
+        # blocked: the button says what is missing (short enough to read), the tooltip the rest
+        label = text if kind == "blocked" and len(text) <= 24 else "Generate"
+        out.append(Item("generate", "generate", "animatica.toolbar_generate", label=label,
+                        primary=kind == "ready", enabled=kind == "ready", group=5))
 
+    # how the next take comes back (loop, in place, variations), beside the button that makes it
+    out.append(Item("options", "options", "animatica.toolbar_menu", {"menu": "ANIMATICA_MT_take_options"},
+                    group=8))           # its own group: the bar is as long in review as before
     # what makes it: the model, at the far end -- set up once, changed rarely
     if mmcp_client.cached_model(s.model_id) is not None:
         out.append(Item("model", "model", "animatica.toolbar_model", label=_short(s.model_id),
                         enabled=not s.is_generating, group=10))
     return out
+
+
+def _setup_items(context) -> list:
+    """The bar before there is a character: the way in, so the sidebar is
+    never where a first session has to start. Online access if Blender keeps
+    the add-on offline; then a character -- the ready-made one, the rig
+    already in the scene, or a whole example scene."""
+    from . import canonical_skeleton, mmcp_client
+    s = context.scene.animatica
+    kind, text, op = gate(context)
+    out = []
+    if kind in ("offline", "connect"):
+        out.append(Item("connect", "connect", op, label=text, primary=True, group=1))
+        return out
+    fetching = canonical_skeleton.download_state()
+    if fetching["active"]:
+        pct = float(fetching["percent"])
+        out.append(Item("fetching", "add_character", None, label=f"Fetching the character… {pct:.0f}%",
+                        group=1, progress=pct / 100.0))
+    else:
+        out.append(Item("add_char", "add_character", "animatica.import_canonical_skeleton",
+                        label="Add a Character", primary=True, group=1))
+        out.append(Item("use_rig", "rig", "animatica.use_selected_rig", label="Use Selected Rig",
+                        enabled=_selected_rig(context) is not None, group=1))
+    out.append(Item("examples", "examples", "animatica.toolbar_menu", {"menu": "ANIMATICA_MT_examples"},
+                    label="Examples", group=2))
+    if mmcp_client.cached_model(s.model_id) is not None:
+        out.append(Item("model", "model", "animatica.toolbar_model", label=_short(s.model_id), group=10))
+    return out
+
+
+def _selected_rig(context):
+    """The armature the artist has selected: an armature, or the one a selected mesh is bound to."""
+    ob = context.active_object
+    if ob is None:
+        return None
+    if ob.type == 'ARMATURE':
+        return ob
+    if ob.type == 'MESH':
+        return ob.find_armature()
+    return None
 
 
 def _short(text: str) -> str:
@@ -246,17 +323,20 @@ def _plain_width(label: str, has_icon: bool, u: float, size: float) -> float:
 
 
 def _take_width(u: float, size: float) -> float:
-    """The review set -- Accept, Redo, Reject and the gaps between them --
-    which is the widest the take slot gets. Every state of the slot is drawn
-    this wide, so the bar never changes length and no button moves under the
-    mouse when a take arrives."""
-    return (_plain_width("Accept", True, u, size) + _plain_width("Redo", True, u, size)
-            + _plain_width("Reject", True, u, size) + 2 * GROUP_GAP * u)
+    """The widest the take's buttons get: the review set (Accept, Redo,
+    Reject), or the longest single button. The prompt field gives up what
+    the buttons of the moment do not use, so the bar keeps one length and
+    no button moves under the mouse when a take arrives."""
+    review = (_plain_width("Accept", True, u, size) + _plain_width("Redo", True, u, size)
+              + _plain_width("Reject", True, u, size) + 2 * GROUP_GAP * u)
+    single = max(_plain_width(t, True, u, size)
+                 for t in ("Generate", "Sign in to Generate", "Allow Online Access", "99 s  ·  Cancel"))
+    return max(review, single)
 
 
 def _width(it: Item, u: float, size: float) -> float:
-    if it.width == "take":
-        return _take_width(u, size)
+    if it.width == "field":
+        return FIELD * u
     return _plain_width(it.label, bool(it.icon), u, size)
 
 
@@ -270,6 +350,13 @@ def layout(context, area, region):
     size, side, pad = TEXT_SIZE * u, BUTTON * u, PAD * u
     widths = [_width(it, u, size) for it in its]
     gaps = [(GROUP_GAP if a.group != b.group else GAP) * u for a, b in zip(its, its[1:])]
+    # the field takes up what the take's buttons leave of their widest
+    take = [i for i, it in enumerate(its) if it.id in TAKE_IDS]
+    if take:
+        now = sum(widths[i] for i in take) + sum(gaps[i] for i in take[:-1])
+        for i, it in enumerate(its):
+            if it.width == "field":
+                widths[i] = max(120 * u, widths[i] + _take_width(u, size) - now)
     total = sum(widths) + sum(gaps)
     x0, x1 = _visible_span(area, region)
     x = max(x0 + pad, (x0 + x1) / 2 - total / 2)
@@ -303,11 +390,7 @@ def _icon(name: str, cx: float, cy: float, size: float, color) -> None:
     st.icon(name, cx, cy, size, color)
 
 
-def _hot(live, it) -> bool:
-    return it.enabled and any(g.is_highlight for g in live.get(it.id, ()) if not g.hide)
-
-
-def draw_bar(context) -> None:
+def draw_bar(context, highlighted: bool = True) -> None:
     area, region = context.area, context.region
     if area is None or region is None or region.type != 'WINDOW' or not shown(context):
         return
@@ -318,7 +401,12 @@ def draw_bar(context) -> None:
     if not bar:
         return
     u = _ui()
-    live = _live.get(area.as_pointer(), {})
+    hot_id = hovered(area) if highlighted else ""
+
+    def _hot(_live, it):
+        return it.enabled and it.id == hot_id
+
+    live = None
     shader = gpu.shader.from_builtin('UNIFORM_COLOR')
     gpu.state.blend_set('ALPHA')
     _rounded(shader, bar, (RADIUS + 3) * u, BAR_COLOR)
@@ -336,6 +424,9 @@ def draw_bar(context) -> None:
             blf.color(0, *WHITE[:3], 0.7)
             blf.position(0, (x0 + x1 - tw) / 2, (y0 + y1) / 2 - size * 0.36, 0)
             blf.draw(0, it.label)
+            continue
+        if it.width == "field":
+            _draw_field(it, rect, u, size, _hot(live, it), first, last)
             continue
         hot = _hot(live, it)
         # hover lifts the segment itself: an outline round one segment of a strip read as a gap
@@ -372,30 +463,107 @@ def draw_bar(context) -> None:
     gpu.state.blend_set('NONE')
 
 
-# ---------------------------------------------------------------------------
-# The buttons under the icons: Blender's own gizmos (click, hover, tooltip)
-# ---------------------------------------------------------------------------
+def _draw_field(it, rect, u, size, hot, first, last):
+    """The prompt, as a text field: inset, darker than the buttons, its text
+    from the left (or the placeholder, muted), cut to fit."""
+    from .timeline_overlay import inline_edit_state as edit
+    x0, y0, x1, y1 = rect
+    s = bpy.context.scene.animatica
+    typing = edit["active"] and edit["index"] == block_at(s, bpy.context.scene.frame_current)
+    st.rounded(rect, RADIUS * u, (0.07, 0.07, 0.075, 1.0), left=first, right=last)
+    st.outline(rect, RADIUS * u, max(1.0, u),
+               st.with_alpha(st.SOFT_ORANGE, 0.9) if typing else (1, 1, 1, 0.30 if hot else 0.12))
+    if typing:
+        _draw_typing(edit, rect, u, size)
+        return
+    text = it.label or PLACEHOLDER
+    color = WHITE if it.label else st.MUTED
+    if not it.enabled:
+        color = (color[0], color[1], color[2], 0.4)
+    blf.size(0, size)
+    pad = 10 * u
+    room = (x1 - x0) - 2 * pad
+    if blf.dimensions(0, text)[0] > room:
+        while text and blf.dimensions(0, text + "…")[0] > room:
+            text = text[:-1]
+        text = text.rstrip() + "…"
+    blf.color(0, *color)
+    blf.position(0, x0 + pad, (y0 + y1) / 2 - size * 0.36, 0)
+    blf.draw(0, text)
 
-#: every button that can be on the bar, and how many gizmos cover it: a
-#: gizmo's click area is round however it is scaled, so a wide button takes several
-SLOTS = {
-    "key_prev": 1, "key_next": 1, "autopose": 1, "describe": 1, "set_key": 1, "auto_key": 1,
-    "waypoint": 1, "pin": 1, "prompt": 6, "connect": 9, "working": 9,
-    "generate": 9, "accept": 3, "redo": 3, "var_prev": 1, "var_next": 1,
-    "reject": 3, "ghost": 1, "model": 6, "picker": 1,
-}
+
+def _draw_typing(edit, rect, u, size):
+    """The field while it is being typed in: the text, scrolled to keep the
+    cursor in view, the selection, the cursor."""
+    x0, y0, x1, y1 = rect
+    pad = 10 * u
+    room = (x1 - x0) - 2 * pad
+    blf.size(0, size)
+    text, cur = edit["text"], edit["cursor"]
+    start = _field_trim(text, cur, room)
+    shown = text[start:]
+    while shown and blf.dimensions(0, shown)[0] > room:
+        shown = shown[:-1]
+    tx, ty = x0 + pad, (y0 + y1) / 2 - size * 0.36
+    sel = edit.get("selection_start")
+    if sel is not None and sel != cur:
+        a, b = sorted((sel, cur))
+        a, b = max(a, start) - start, min(b, start + len(shown)) - start
+        if b > a:
+            sx0 = tx + blf.dimensions(0, shown[:a])[0]
+            sx1 = tx + blf.dimensions(0, shown[:b])[0]
+            st.rounded((sx0, y0 + 6 * u, sx1, y1 - 6 * u), 2 * u, st.with_alpha(st.MULBERRY, 0.9))
+    blf.color(0, *WHITE)
+    blf.position(0, tx, ty, 0)
+    blf.draw(0, shown)
+    cx = tx + blf.dimensions(0, shown[:max(0, cur - start)])[0]
+    st.lines([((cx, y0 + 7 * u), (cx, y1 - 7 * u))], max(1.0, 1.2 * u), st.SOFT_ORANGE)
+
+
+# ---------------------------------------------------------------------------
+# Clicks, hover and tooltips: the bar is one gizmo that knows its buttons
+# ---------------------------------------------------------------------------
+#
+# The buttons used to be Blender's round button gizmos under the drawing. Their
+# hit areas were circles inside rectangles (a wide button needed a row of
+# them), so clicks had to be precise, and on Windows their own hover highlight
+# flashed through. The bar now answers for every button's whole rectangle.
+
+#: the button under the mouse, per area pointer
+_hover: dict = {}
+MAX_PARTS = 48
+
+
+def hovered(area) -> str:
+    return _hover.get(area.as_pointer(), "") if area is not None else ""
 
 
 class ANIMATICA_GT_toolbar_bar(bpy.types.Gizmo):
-    """The bar, its icons and labels. A gizmo made last in its group, which
-    draws it first: under the buttons, which are themselves invisible."""
+    """The bar: draws itself, and says which button is under the mouse."""
     bl_idname = "ANIMATICA_GT_toolbar_bar"
 
     def draw(self, context):
-        draw_bar(context)
+        draw_bar(context, bool(self.is_highlight))
 
     def test_select(self, context, location):
-        return -1
+        area, region = context.area, context.region
+        hit = ""
+        index = -1
+        try:
+            _bar, rects, _d = layout(context, area, region)
+            x, y = location
+            for i, (it, (x0, y0, x1, y1)) in enumerate(rects):
+                # the gaps between segments count for the button on their left:
+                # a click on a hairline should not fall through to the viewport
+                if x0 <= x <= x1 + GAP * _ui() and y0 <= y <= y1 and it.op:
+                    hit, index = it.id, min(i, MAX_PARTS - 1)
+                    break
+        except Exception:                       # noqa: BLE001
+            pass
+        if _hover.get(area.as_pointer()) != hit:
+            _hover[area.as_pointer()] = hit
+            area.tag_redraw()
+        return index
 
 
 class ANIMATICA_GGT_toolbar(bpy.types.GizmoGroup):
@@ -407,62 +575,113 @@ class ANIMATICA_GGT_toolbar(bpy.types.GizmoGroup):
 
     @classmethod
     def poll(cls, context):
-        from . import properties
-
-        s = getattr(context.scene, "animatica", None)
-        return bool(shown(context) and properties._live_armature(s.target_armature))
+        return shown(context)
 
     def setup(self, context):
-        self.cells = {}
-        for name, n in SLOTS.items():
-            row = []
-            for _k in range(n):
-                gz = self.gizmos.new("GIZMO_GT_button_2d")
-                gz.draw_options = set()
-                gz.show_drag = False
-                gz.use_tooltip = True
-                gz.icon = 'NONE'
-                gz.hide = True
-                row.append([gz, None])
-            self.cells[name] = row
         self.bar = self.gizmos.new(ANIMATICA_GT_toolbar_bar.bl_idname)
-        self.bar.hide_select = True
+        # one part per button position: a part without an operator ignores the click,
+        # and a part of its own per button is what makes the tooltip follow the mouse
+        for part in range(MAX_PARTS):
+            self.bar.target_set_operator("animatica.bar_click", index=part)
+        self.bar.use_tooltip = True
+        self.bar.use_draw_hover = False
 
-    def draw_prepare(self, context):
-        area, region = context.area, context.region
-        try:
-            _bar, rects, _div = layout(context, area, region)
-        except Exception:                       # noqa: BLE001
-            rects = []
-        side = BUTTON * _ui()
-        placed = set()
-        for it, (x0, y0, x1, y1) in rects:
-            row = self.cells.get(it.id)
-            if row is None:
-                continue
-            placed.add(it.id)
-            key = (it.op, tuple(sorted(it.props.items())))
-            cy = (y0 + y1) / 2
-            for k, cell in enumerate(row):
-                gz, bound = cell
-                cx = x0 + side / 2 + side * 0.8 * k
-                if it.op is None or (k and cx - side / 2 >= x1):
-                    gz.hide = True
-                    continue
-                if bound != key:
-                    props = gz.target_set_operator(it.op)
-                    for name, value in it.props.items():
-                        setattr(props, name, value)
-                    cell[1] = key
-                gz.hide = False
-                gz.hide_select = not it.enabled
-                gz.scale_basis = side / 2
-                gz.matrix_basis = Matrix.Translation((min(cx, x1 - side / 2), cy, 0.0))
-        for name, row in self.cells.items():
-            if name not in placed:
-                for gz, _b in row:
-                    gz.hide = True
-        _live[area.as_pointer()] = {n: [g for g, _b in row] for n, row in self.cells.items()}
+
+#: what each button does: a title, then a line on it (the tooltip)
+TIPS = {
+    "autopose": ("Autoposer", "Pose by dragging hands, feet and hips; the body follows"),
+    "picker": ("Handle Picker", "Your character with its handles: pick them, switch them on or off, set their slack"),
+    "describe": ("Describe a Pose", "Type a pose in words; it is keyed at the playhead"),
+    "key_prev": ("Previous Key Pose", "Jump to the key pose before the playhead"),
+    "set_key": ("Set Key Pose", "Key the whole pose at this frame: the next take hits it"),
+    "key_next": ("Next Key Pose", "Jump to the key pose after the playhead"),
+    "auto_key": ("Auto Key", "On: posing keys itself. Off: only Set Key Pose writes a key"),
+    "ghost": ("Show Key Poses", "Ghosts of your key poses, and the motion's trail, in the viewport"),
+    "waypoint": ("Add Waypoint", "Where the character should be at this frame"),
+    "pin": ("Pin a Hand or Foot", "Hold a hand or foot to a target, like a rail or a door handle"),
+    "prompt": ("Prompt", "What happens in the block under the playhead. Click and type"),
+    "generate": ("Generate", "Make the motion from your prompts, key poses and waypoints"),
+    "working": ("Cancel", "Stop the take being made"),
+    "accept": ("Accept", "Keep this take, and lock its blocks against the next Generate"),
+    "redo": ("Redo", "Make the block under the playhead again. Shift: the whole take"),
+    "reject": ("Reject", "Throw this take away and go back to what you had"),
+    "var_prev": ("Previous Version", "Show the take's previous version"),
+    "var_next": ("Next Version", "Show the take's next version"),
+    "options": ("Take Options", "Loop, in place, and how many versions the next take makes"),
+    "add_char": ("Add a Character", "A ready-made rigged character to animate"),
+    "use_rig": ("Use Selected Rig", "Animate the armature you have selected (or the one its mesh is bound to)"),
+    "examples": ("Examples", "Open an example scene, ready to Generate"),
+}
+
+
+def tip(context, it) -> str:
+    """The tooltip for a button: its title, then what it does here and now."""
+    from . import mmcp_client
+    from .autoposer import poser
+    s = context.scene.animatica
+    title, line = TIPS.get(it.id, (it.label or it.id.replace("_", " ").title(), ""))
+    if it.id == "autopose":
+        arm = properties_live(s)
+        if arm is not None and poser.has_controls(arm):
+            title, line = "Stop the Autoposer", "Take the handles off the rig; the pose and keys stay"
+    elif it.id == "describe":
+        why = _describe_blocker(context)
+        line = why or line
+    elif it.id == "auto_key":
+        title += " (on)" if s.auto_key_pose else " (off)"
+    elif it.id == "ghost":
+        title += " (on)" if s.key_pose_overlay else " (off)"
+    elif it.id == "picker":
+        title += " (open)" if s.show_picker else ""
+    elif it.id == "prompt":
+        text = it.label
+        line = (f"\u201c{text}\u201d \u2014 click to change it" if text
+                else "Say what happens in the block under the playhead. Click and type")
+    elif it.id in ("generate", "connect"):
+        kind, text, _op = gate(context)
+        if kind == "blocked":
+            title, line = "Generate", text
+        elif kind == "sign_in":
+            title, line = "Sign in to Generate", "Sign in to your Animatica account, then the take is made"
+        elif kind == "offline":
+            title, line = "Allow Online Access", "Animatica makes the motion on its servers; this lets Blender reach them"
+        elif kind == "connect":
+            title, line = "Connect", "Connect to the Animatica server"
+    elif it.id == "model":
+        title = "Model"
+        line = f"{s.model_id} on {mmcp_client.get_mmcp_url()}. Click to pick another, or change the server"
+    elif it.id == "fetching":
+        title, line = "Fetching the Character", "Downloading it once; it is kept for next time"
+    return f"{title}\n{line}" if line else title
+
+
+def properties_live(s):
+    from . import properties
+    return properties._live_armature(s.target_armature)
+
+
+def _item(context, ident):
+    return next((it for it in items(context) if it.id == ident), None)
+
+
+class ANIMATICA_OT_bar_click(bpy.types.Operator):
+    """A button on the floating bar"""
+    bl_idname = "animatica.bar_click"
+    bl_label = "Animatica"
+    bl_options = {'INTERNAL'}
+
+    @classmethod
+    def description(cls, context, properties):
+        it = _item(context, hovered(context.area))
+        return tip(context, it) if it is not None else ""
+
+    def invoke(self, context, event):
+        it = _item(context, hovered(context.area))
+        if it is None or not it.op or not it.enabled:
+            return {'CANCELLED'}
+        group, name = it.op.split(".", 1)
+        result = getattr(getattr(bpy.ops, group), name)('INVOKE_DEFAULT', **it.props)
+        return {'CANCELLED'} if result == {'CANCELLED'} else {'FINISHED'}
 
 
 # ---------------------------------------------------------------------------
@@ -578,6 +797,83 @@ class ANIMATICA_OT_toolbar_model(bpy.types.Operator):
         return {'FINISHED'}
 
 
+_MENU_TIPS = {
+    "ANIMATICA_MT_examples": "Open an example scene: a character, prompts and poses, ready to Generate",
+    "ANIMATICA_MT_take_options": "How the next take comes back: as a loop, in place, how many versions",
+}
+
+
+class ANIMATICA_OT_toolbar_menu(bpy.types.Operator):
+    """Open a menu from the bar"""
+    bl_idname = "animatica.toolbar_menu"
+    bl_label = "Menu"
+    bl_options = {'INTERNAL'}
+
+    menu: StringProperty(options={'HIDDEN'})
+
+    @classmethod
+    def description(cls, context, properties):
+        return _MENU_TIPS.get(properties.menu, "")
+
+    def invoke(self, context, event):
+        # opened when the click is over: the bar acts on the press, and a menu
+        # opened then closed again on the release
+        if event.value == 'PRESS':
+            context.window_manager.modal_handler_add(self)
+            return {'RUNNING_MODAL'}
+        return self._open()
+
+    def modal(self, context, event):
+        if event.type == 'LEFTMOUSE' and event.value == 'RELEASE':
+            return self._open()
+        if event.type in {'ESC', 'RIGHTMOUSE'}:
+            return {'CANCELLED'}
+        return {'RUNNING_MODAL'}
+
+    def _open(self):
+        bpy.ops.wm.call_menu(name=self.menu)
+        return {'FINISHED'}
+
+
+class ANIMATICA_MT_take_options(bpy.types.Menu):
+    bl_idname = "ANIMATICA_MT_take_options"
+    bl_label = "Next Take"
+
+    def draw(self, context):
+        # the sidebar's options, as a menu: plain rows, not its split columns
+        from . import mmcp_client
+        s = context.scene.animatica
+        layout = self.layout
+        model = mmcp_client.cached_model(s.model_id) or {}
+        if model.get("supports_loop"):
+            row = layout.row()
+            row.active = len(s.prompt_blocks) == 1          # a loop is one block
+            row.prop(s, "loop", text="Loop" if row.active else "Loop (needs one block)")
+        layout.prop(s, "inplace", text="In Place")
+        if int((model.get("limits") or {}).get("max_num_samples") or 1) > 1:
+            layout.prop(s, "variations", text="Versions")
+        layout.separator()
+        row = layout.row()
+        row.active = False
+        row.label(text="More: sidebar (N) → Animatica")
+
+
+class ANIMATICA_OT_use_selected_rig(bpy.types.Operator):
+    """Animate the rig you have selected (an armature, or a character mesh bound to one)"""
+    bl_idname = "animatica.use_selected_rig"
+    bl_label = "Use Selected Rig"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        rig = _selected_rig(context)
+        if rig is None:
+            self.report({'WARNING'}, "Select your character's armature (or its mesh) first")
+            return {'CANCELLED'}
+        context.scene.animatica.target_armature = rig
+        self.report({'INFO'}, f"Animating {rig.name}")
+        return {'FINISHED'}
+
+
 class ANIMATICA_OT_toolbar_describe(bpy.types.Operator):
     """Describe a pose in words and key it at the playhead"""
     bl_idname = "animatica.toolbar_describe"
@@ -615,26 +911,50 @@ def _describe_blocker(context) -> str:
 
 
 class ANIMATICA_OT_toolbar_autoposer(bpy.types.Operator):
-    """Autoposer: drag hands, feet and hips and the body follows. Again to give the rig back"""
+    """Autoposer: drag hands, feet and hips and the body follows. Again to stop it"""
     bl_idname = "animatica.toolbar_autoposer"
     bl_label = "Autoposer"
     bl_options = {'INTERNAL'}
 
+    _download = False
+
     def invoke(self, context, event):
         from . import properties
-        from .autoposer import poser
+        from .autoposer import engine, poser
 
         arm = properties._live_armature(context.scene.animatica.target_armature)
         if arm is None:
             return {'CANCELLED'}
         if poser.has_controls(arm):
-            return bpy.ops.animatica.give_back_rig('INVOKE_DEFAULT')
+            # off: the handles go (giving the rig back first if it is held)
+            return bpy.ops.autoposer.remove_rig('EXEC_DEFAULT')
+        status = engine.status()
+        if not (status["runtime"] and status["model"]):
+            # Its download comes with its first use, asked once, rather than
+            # as a big button in the sidebar that read like a step to do first.
+            if engine.fetch_state()["running"] or engine.install_state()["running"]:
+                self.report({'INFO'}, f"Downloading the Autoposer… {engine.fetch_percent():.0f}%")
+                return {'CANCELLED'}
+            if not engine.online():
+                self.report({'WARNING'}, engine.offline_message())
+                return {'CANCELLED'}
+            self._download = True
+            return context.window_manager.invoke_confirm(
+                self, event, title="Download the Autoposer?",
+                message="It runs on your computer, so it is downloaded once (about 225 MB). "
+                        "Click the Autoposer again when it is done.",
+                confirm_text="Download", icon='IMPORT')
         return bpy.ops.autoposer.build_rig('INVOKE_DEFAULT')
+
+    def execute(self, context):
+        if self._download:
+            return bpy.ops.autoposer.download()
+        return {'CANCELLED'}
 
 
 class ANIMATICA_OT_toolbar_prompt_here(bpy.types.Operator):
     bl_idname = "animatica.toolbar_prompt_here"
-    bl_label = "Prompt"
+    bl_label = "What Happens Here"
     bl_options = {'INTERNAL', 'UNDO'}
 
     @classmethod
@@ -643,8 +963,8 @@ class ANIMATICA_OT_toolbar_prompt_here(bpy.types.Operator):
         here = block_at(s, context.scene.frame_current)
         text = (s.prompt_blocks[here].prompt or "").strip() if here >= 0 else ""
         if text:
-            return f"\u201c{text}\u201d \u2014 click to edit what happens in this block"
-        return "Say what happens here: the prompt of the block under the playhead, or a new block from it"
+            return f"\u201c{text}\u201d \u2014 click to change what happens in this block"
+        return "Say what happens here: type the prompt of the block under the playhead, or of a new block from it"
 
     def invoke(self, context, event):
         from .timeline_overlay import DEFAULT_BLOCK_LENGTH, get_sorted_blocks
@@ -662,7 +982,118 @@ class ANIMATICA_OT_toolbar_prompt_here(bpy.types.Operator):
             b.prompt, b.frame_start, b.frame_end, b.enabled = "", frame, end, True
             i = len(s.prompt_blocks) - 1
         s.active_block_index = i
-        return bpy.ops.animatica.edit_strip_prompt('INVOKE_DEFAULT', index=i)
+        # typed right in the field, as in any text box
+        bpy.ops.animatica.bar_prompt_edit('INVOKE_DEFAULT', index=i)
+        return {'FINISHED'}
+
+
+def _field_rect(context):
+    """The prompt field's rect on the bar in this region, or None."""
+    try:
+        _bar, rects, _d = layout(context, context.area, context.region)
+    except Exception:                           # noqa: BLE001
+        return None
+    return next((r for it, r in rects if it.width == "field"), None)
+
+
+def _item_at(context, x, y):
+    """The bar's button under ``(x, y)`` (region pixels), or None."""
+    try:
+        _bar, rects, _d = layout(context, context.area, context.region)
+    except Exception:                           # noqa: BLE001
+        return None
+    for it, (x0, y0, x1, y1) in rects:
+        if x0 <= x <= x1 and y0 <= y <= y1:
+            return it
+    return None
+
+
+from .timeline_operators import InlinePromptEditing  # noqa: E402
+
+
+class ANIMATICA_OT_bar_prompt_edit(InlinePromptEditing, bpy.types.Operator):
+    """Type the prompt in the bar's field: the Timeline block's own editing,
+    driven from the 3D view"""
+    bl_idname = "animatica.bar_prompt_edit"
+    bl_label = "Type the Prompt"
+    bl_options = {"REGISTER", "UNDO", "INTERNAL"}
+
+    index: bpy.props.IntProperty(name="Strip Index", default=0)
+
+    @classmethod
+    def poll(cls, context):
+        return context.area is not None and context.area.type == 'VIEW_3D'
+
+    #: the mouse moving, the wheel, the view turning: not typing, so not ours --
+    #: swallowed, the bar never saw the mouse reach the button clicked next
+    _PASS = {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE', 'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'MIDDLEMOUSE',
+             'TRACKPADPAN', 'TRACKPADZOOM', 'MOUSEROTATE', 'TIMER', 'TIMER_REPORT', 'WINDOW_DEACTIVATE'}
+
+    def modal(self, context, event):
+        if event.type in self._PASS:
+            return {"PASS_THROUGH"}
+        if event.type == "LEFTMOUSE" and event.value == "PRESS":
+            rect = _field_rect(context)
+            inside = rect is not None and rect[0] <= event.mouse_region_x <= rect[2] \
+                and rect[1] <= event.mouse_region_y <= rect[3]
+            if not inside:
+                # keep what was typed, and let the click do what it was for
+                # (Generate straight after typing generates). The bar's own
+                # buttons do not see a click while this has the keyboard, so
+                # one clicked is run from here.
+                self._commit(context)
+                it = _item_at(context, event.mouse_region_x, event.mouse_region_y)
+                if it is not None and it.op and it.enabled:
+                    group, name = it.op.split(".", 1)
+                    getattr(getattr(bpy.ops, group), name)('INVOKE_DEFAULT', **it.props)
+                    return {"FINISHED"}
+                return {"FINISHED", "PASS_THROUGH"}
+            self._place_cursor(event.mouse_region_x - rect[0])
+            _redraw_all(context)
+            return {"RUNNING_MODAL"}
+        result = super().modal(context, event)
+        _redraw_all(context)
+        return result
+
+    def _place_cursor(self, x):
+        from .timeline_overlay import inline_edit_state as st_
+        u = _ui()
+        blf.size(0, TEXT_SIZE * u)
+        text = st_["text"]
+        start = _field_trim(text, st_["cursor"])
+        x -= 10 * u
+        best, pos = None, start
+        for k in range(start, len(text) + 1):
+            d = abs(blf.dimensions(0, text[start:k])[0] - x)
+            if best is None or d < best:
+                best, pos = d, k
+        st_["cursor"] = pos
+        st_["selection_start"] = None
+
+    def _cancel(self, context):
+        super()._cancel(context)
+        _redraw_all(context)
+
+
+def _redraw_all(context):
+    for a in context.screen.areas:
+        if a.type in {'VIEW_3D', 'DOPESHEET_EDITOR'}:
+            a.tag_redraw()
+
+
+#: how far the field's text is scrolled, so the cursor stays in view
+_scroll = {"start": 0}
+
+
+def _field_trim(text, cursor, room=None):
+    """The first character shown in the field: scrolled only as far as the
+    cursor needs."""
+    start = min(_scroll["start"], cursor)
+    if room is not None:
+        while start < cursor and blf.dimensions(0, text[start:cursor])[0] > room:
+            start += 1
+    _scroll["start"] = start
+    return start
 
 
 # ---------------------------------------------------------------------------
@@ -672,7 +1103,9 @@ class ANIMATICA_OT_toolbar_prompt_here(bpy.types.Operator):
 _classes = (ANIMATICA_OT_toolbar_toggle, ANIMATICA_OT_toolbar_generate, ANIMATICA_OT_toolbar_redo,
             ANIMATICA_OT_toolbar_autoposer, ANIMATICA_OT_toolbar_describe,
             ANIMATICA_MT_toolbar_models, ANIMATICA_OT_toolbar_model,
-            ANIMATICA_OT_toolbar_prompt_here, ANIMATICA_GT_toolbar_bar, ANIMATICA_GGT_toolbar)
+            ANIMATICA_OT_toolbar_menu, ANIMATICA_MT_take_options, ANIMATICA_OT_use_selected_rig,
+            ANIMATICA_OT_toolbar_prompt_here, ANIMATICA_OT_bar_prompt_edit, ANIMATICA_OT_bar_click,
+            ANIMATICA_GT_toolbar_bar, ANIMATICA_GGT_toolbar)
 _NS = "_animatica_toolbar_handle"            # an older copy drew from a handler
 
 

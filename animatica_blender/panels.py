@@ -60,6 +60,8 @@ def _draw_signin_hint(layout, context) -> bool:
         return False
     from . import mmcp_client
 
+    if mmcp_client.offline():
+        return False            # the offline card says what comes first
     box = layout.box()
     # A session that ended by itself needs a reason, or signing in again looks
     # like the addon forgetting things at random.
@@ -69,9 +71,17 @@ def _draw_signin_hint(layout, context) -> bool:
         row.alert = True
         row.label(text=expired.capitalize(), icon='ERROR')
     else:
-        box.label(text="Sign in to Animatica to generate", icon='USER')
-    box.operator("animatica.signin", icon='IMPORT', text="Sign in")
+        note = box.row()
+        note.active = False
+        note.label(text="Generating needs an Animatica account")
+    row = box.row(align=True)
+    row.operator("animatica.signin", icon='USER', text="Sign in")
+    row.operator("wm.url_open", icon='URL', text="Create Account").url = SIGN_UP_URL
     return True
+
+
+#: Where an account is made: the add-on signs in, it does not sign up.
+SIGN_UP_URL = "https://app.animatica.ai/signup"
 
 
 def _draw_rig_held(layout, context, settings) -> None:
@@ -269,11 +279,13 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
             box = layout.box()
             err = mmcp_client.last_connection_error()
             if err == mmcp_client.OFFLINE_MESSAGE:
-                box.label(text="Not connected", icon='INTERNET_OFFLINE')
+                box.label(text="Animatica needs internet access", icon='INTERNET_OFFLINE')
                 col = box.column(align=True)
-                col.label(text=err)
-                col.operator("animatica.open_online_prefs", text="Open Preferences",
-                             icon='PREFERENCES')
+                col.active = False
+                col.label(text="Motion is made on Animatica's servers")
+                row = box.row()
+                row.scale_y = 1.3
+                row.operator("animatica.allow_online", icon='WORLD', text="Allow Online Access")
             elif mmcp_client.connecting() or not err:
                 box.label(text="Connecting…", icon='SORTTIME')
             else:
@@ -366,15 +378,16 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
         if batch.pending(settings):
             row.operator("animatica.generate_batch", text="Regenerate All",
                          icon='FILE_REFRESH').characters = json.dumps(batch.pending(settings))
+        elif mmcp_client.needs_sign_in() and not in_preview:
+            # the step that is missing, as the button: it signs in, then generates
+            gen.enabled = True
+            row.operator("animatica.signin_generate", text="Sign in to Generate", icon='USER')
+        elif blockers and not in_preview:
+            # greyed, and saying why instead of "Generate Motion" without a word
+            row.operator("animatica.generate", text=blockers[0])
         else:
             row.operator("animatica.generate",
                          text="Generate Again" if in_preview else "Generate Motion")
-        # With no prompt, the field above already says what is missing.
-        if blockers and has_prompt:
-            note = gen.row()
-            note.enabled = True         # readable while the button above is not
-            note.active = False
-            note.label(text=blockers[0], icon='INFO')
 
         _draw_take_options(layout, context, settings, model, in_preview or batch_waiting)
         if not in_preview and not batch_waiting:
@@ -710,6 +723,10 @@ _MAX_NAMED_DROPPED = 3
 class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
     bl_label = "Pose"
     bl_idname = "ANIMATICA_PT_pose"
+    # Folded in a new file: a first take needs a prompt and Generate, and a
+    # sidebar opening on the Autoposer's download and the fingers read as
+    # steps to do first. The floating bar has the posing tools anyway.
+    bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
         from .autoposer import engine, poser
@@ -718,7 +735,9 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
         settings = context.scene.animatica
         arm = properties._live_armature(settings.target_armature)
         if arm is None:
-            layout.label(text="Set a target armature first", icon='INFO')
+            note = layout.row()
+            note.active = False
+            note.label(text="Add a character first (above)", icon='INFO')
             return
 
         # --- the Autoposer: named, and said what it does, so it can be found

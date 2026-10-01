@@ -354,6 +354,17 @@ class ANIMATICA_OT_pick_ghost(Operator):
     bl_description = "Click a ghosted key pose to edit it"
     bl_options = {'REGISTER', 'UNDO'}
 
+    @classmethod
+    def poll(cls, context):
+        # Only where there are ghosts to pick: in a scene without a character
+        # this click (and its "Pick Key Pose Ghost" in the status bar) read as
+        # the add-on taking over the left mouse button.
+        from . import key_poses, properties
+        settings = _settings(context)
+        if settings is None or not key_poses.overlay_on(settings):
+            return False
+        return properties._live_armature(settings.target_armature) is not None
+
     def invoke(self, context, event):
         from . import key_poses
 

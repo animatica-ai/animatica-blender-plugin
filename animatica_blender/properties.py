@@ -469,6 +469,10 @@ class PromptBlock(PropertyGroup):
         description="Include this block when generating",
         default=True,
     )
+    selected: BoolProperty(
+        name="Selected", default=False, options={'SKIP_SAVE'},
+        description="Picked on the Timeline: moved, deleted and edited together",
+    )
     locked: BoolProperty(
         name="Locked",
         description=(
@@ -1093,7 +1097,7 @@ class AnimaticaSettings(PropertyGroup):
             "until you press Set Keyframe — the way to try a pose out without "
             "it landing in the action"
         ),
-        default=True,
+        default=False,       # off, as Blender's own auto-key starts
     )
     waypoint_heading: BoolProperty(
         name="Face along the path",

@@ -57,8 +57,6 @@ DOT_OFF = (1.0, 1.0, 1.0, 0.45)
 #: Above the head, where the Look-at handle is drawn (metres): it aims, it is not on the body.
 AIM_ABOVE = 0.22
 
-#: gizmos for the dots: one per handle, up to this many
-DOT_SLOTS = 32
 #: Adding: the handles the rig can still have, drawn where they would go.
 _adding = {"on": False}
 #: the last handle clicked, and when: a second click on it soon after switches it
@@ -354,9 +352,6 @@ def _mid(rect, size):
     return (rect[1] + rect[3]) / 2 - size * 0.36
 
 
-def _hot(live, name) -> bool:
-    return any(g.is_highlight for g in live.get(name, ()))
-
 
 def _slack_pos(value) -> float:
     """Where ``value`` sits along the slider, 0..1 (logarithmic: a millimetre
@@ -375,7 +370,7 @@ def _mm(v) -> str:
     return f"{v:.0f} mm" if v < 100 else f"{v / 10:.0f} cm"
 
 
-def draw_card(context):
+def draw_card(context, highlighted: bool = True):
     area, region = context.area, context.region
     arm = _arm(context)
     if arm is None:
@@ -387,7 +382,8 @@ def draw_card(context):
     if L is None:
         return
     _last[area.as_pointer()] = L
-    live = _live.get(area.as_pointer(), {})
+    _drawing["hot"] = _hover.get(area.as_pointer(), "") if highlighted else ""
+    live = None
     u = _ui()
     ctrls = _controls(arm)
     sel = [pb for pb in ctrls if pose_bone_is_selected(pb)]
@@ -567,15 +563,67 @@ def _describe(pb) -> str:
 # The gizmos: one draws the card, the rest take the clicks
 # ---------------------------------------------------------------------------
 
+#: what the mouse is over on the card, per area: "on", "dot:<bone>", "ghost:<control>", ...
+_hover: dict = {}
+MAX_PARTS = 64
+
+
+#: what is hot in the card being drawn
+_drawing = {"hot": ""}
+
+
+def _hot(_live, name) -> bool:
+    return _drawing["hot"] == name
+
+
+def _hit(L, x, y, u):
+    """What on the card is at ``(x, y)``: a key, or ''."""
+    if L is None or L.get("card") is None:
+        return ""
+    cx0, cy0, cx1, cy1 = L["card"]
+    if not (cx0 <= x <= cx1 and cy0 <= y <= cy1):
+        return ""
+    reach = DOT * u * 1.9
+    best, best_d = "", reach
+    for kind, marks in (("ghost", L.get("ghosts", {})), ("dot", L.get("dots", {}))):
+        for name, (px, py) in marks.items():
+            d = ((px - x) ** 2 + (py - y) ** 2) ** 0.5
+            if d < best_d:
+                best, best_d = f"{kind}:{name}", d
+    if best:
+        return best
+    for name in SLOTS:
+        rect = L.get(name)
+        if rect is None or (L["collapsed"] and name not in ("collapse", "add", "all", "close")):
+            continue
+        if name in ("slack_pos", "slack_rot"):
+            t = _track(rect, u)
+            rect = (t[0] - 4 * u, rect[1], t[2] + 4 * u, rect[3])
+        if rect[0] <= x <= rect[2] and rect[1] <= y <= rect[3]:
+            return name
+    return "card"          # on the card, not on anything: the click stays here
+
+
 class ANIMATICA_GT_picker_card(bpy.types.Gizmo):
-    """The card. Made last in its group, so it draws first, under the buttons."""
+    """The card: draws itself, and says what on it is under the mouse."""
     bl_idname = "ANIMATICA_GT_picker_card"
 
     def draw(self, context):
-        draw_card(context)
+        draw_card(context, bool(self.is_highlight))
 
     def test_select(self, context, location):
-        return -1
+        area, region = context.area, context.region
+        try:
+            L = layout(context, area, region)
+        except Exception:                       # noqa: BLE001
+            L = None
+        key = _hit(L, location[0], location[1], _ui())
+        if _hover.get(area.as_pointer()) != key:
+            _hover[area.as_pointer()] = key
+            area.tag_redraw()
+        if not key:
+            return -1
+        return abs(hash(key)) % (MAX_PARTS - 1) + 1
 
 
 _OPS = {
@@ -590,6 +638,16 @@ _OPS = {
     "slack_pos": ("animatica.picker_slack", {"which": 'POS'}),
     "slack_rot": ("animatica.picker_slack", {"which": 'ROT'}),
 }
+SLOTS = list(_OPS)
+
+
+def _op_for(key):
+    """``(operator, props)`` for what is at ``key`` on the card, or None."""
+    if key.startswith("dot:"):
+        return "animatica.picker_select", {"bone": key[4:]}
+    if key.startswith("ghost:"):
+        return "animatica.picker_add", {"control": key[6:]}
+    return _OPS.get(key)
 
 
 class ANIMATICA_GGT_picker(bpy.types.GizmoGroup):
@@ -603,100 +661,55 @@ class ANIMATICA_GGT_picker(bpy.types.GizmoGroup):
     def poll(cls, context):
         return shown(context)
 
-    def _button(self):
-        gz = self.gizmos.new("GIZMO_GT_button_2d")
-        gz.draw_options = set()
-        gz.show_drag = False
-        gz.use_tooltip = True
-        gz.icon = 'NONE'
-        gz.hide = True
-        return gz
-
     def setup(self, context):
-        self.dots = [[self._button(), None] for _k in range(DOT_SLOTS)]
-        self.ghosts = [[self._button(), None] for _k in range(DOT_SLOTS)]
-        self.cells = {}
-        for name, n in SLOTS.items():
-            row = [self._button() for _k in range(n)]
-            op, props = _OPS[name]
-            for gz in row:
-                p = gz.target_set_operator(op)
-                for key, value in props.items():
-                    setattr(p, key, value)
-            self.cells[name] = row
         self.card = self.gizmos.new(ANIMATICA_GT_picker_card.bl_idname)
-        self.card.hide_select = True
+        for part in range(MAX_PARTS):
+            self.card.target_set_operator("animatica.picker_click", index=part)
+        self.card.use_tooltip = True
 
-    def draw_prepare(self, context):
-        area, region = context.area, context.region
-        try:
-            L = layout(context, area, region)
-        except Exception:                   # noqa: BLE001
-            L = None
-        u = _ui()
-        arm = _arm(context)
-        have = arm is not None and bool(picked(arm))
-        for name, row in self.cells.items():
-            rect = L.get(name) if L else None
-            if rect is None or (L["collapsed"] and name not in ("collapse", "add", "all", "close")):
-                for gz in row:
-                    gz.hide = True
-                continue
-            if name in ("slack_pos", "slack_rot"):
-                rect = _track(rect, u)
-                rect = (rect[0], rect[1] - 8 * u, rect[2], rect[3] + 8 * u)
-            x0, y0, x1, y1 = rect
-            h = y1 - y0
-            n = len(row)
-            step = (x1 - x0 - h) / max(n - 1, 1)
-            for k, gz in enumerate(row):
-                cx = x0 + h / 2 + step * k
-                if n == 1:
-                    cx = (x0 + x1) / 2
-                gz.hide = cx > x1 - h / 2 + 1 and k > 0
-                gz.hide_select = name in ("on", "off", "rot", "remove", "slack_pos", "slack_rot") and not have
-                gz.scale_basis = h / 2
-                gz.matrix_basis = Matrix.Translation((cx, (y0 + y1) / 2, 0.0))
-        dots = (L or {}).get("dots", {}) if L and not L["collapsed"] else {}
-        names = list(dots)
-        for k, cell in enumerate(self.dots):
-            gz, bound = cell
-            if k >= len(names):
-                gz.hide = True
-                continue
-            name = names[k]
-            if bound != name:
-                p = gz.target_set_operator("animatica.picker_select")
-                p.bone = name
-                cell[1] = name
-            x, y = dots[name]
-            gz.hide = False
-            gz.scale_basis = DOT * u * 1.7
-            gz.matrix_basis = Matrix.Translation((x, y, 0.0))
-        ghosts = (L or {}).get("ghosts", {}) if L and not L["collapsed"] else {}
-        gnames = list(ghosts)
-        for k, cell in enumerate(self.ghosts):
-            gz, bound = cell
-            if k >= len(gnames):
-                gz.hide = True
-                continue
-            name = gnames[k]
-            if bound != name:
-                p = gz.target_set_operator("animatica.picker_add")
-                p.control = name
-                cell[1] = name
-            x, y = ghosts[name]
-            gz.hide = False
-            gz.scale_basis = DOT * u * 1.7
-            gz.matrix_basis = Matrix.Translation((x, y, 0.0))
-        live = {n: list(row) for n, row in self.cells.items()}
-        for gz, bound in self.ghosts:
-            if bound and not gz.hide:
-                live["ghost:" + bound] = [gz]
-        for gz, bound in self.dots:
-            if bound and not gz.hide:
-                live["dot:" + bound] = [gz]
-        _live[area.as_pointer()] = live
+
+class ANIMATICA_OT_picker_click(bpy.types.Operator):
+    """The handle picker"""
+    bl_idname = "animatica.picker_click"
+    bl_label = "Handle Picker"
+    bl_options = {'INTERNAL'}
+
+    @classmethod
+    def description(cls, context, properties):
+        key = _hover.get(context.area.as_pointer(), "") if context.area else ""
+        found = _op_for(key)
+        if not found:
+            return ""
+        op, props = found
+        group, name = op.split(".", 1)
+        cls_ = getattr(bpy.types, f"{group.upper()}_OT_{name}", None)
+        title = {"collapse": "Fold", "all": "Pick All", "add": "Add a Handle", "remove": "Remove Handles",
+                 "close": "Hide the Picker", "on": "Switch On", "off": "Switch Off", "rot": "Rotation",
+                 "slack_pos": "Slack", "slack_rot": "Turn Slack"}.get(key)
+        if cls_ is None:
+            return title or ""
+        if hasattr(cls_, "description"):
+            class _P:                                  # the operator's own properties, as it reads them
+                pass
+            p = _P()
+            for k, v in props.items():
+                setattr(p, k, v)
+            text = cls_.description(context, p)
+        else:
+            text = (cls_.__doc__ or "").strip()
+        return f"{title}\n{text}" if title else text
+
+    def invoke(self, context, event):
+        key = _hover.get(context.area.as_pointer(), "") if context.area else ""
+        found = _op_for(key)
+        if not found:
+            return {'CANCELLED'}
+        op, props = found
+        if op == "animatica.picker_select":
+            props = dict(props, extend=bool(event.shift))     # Shift: add or drop, as clicked
+        group, name = op.split(".", 1)
+        result = getattr(getattr(bpy.ops, group), name)('INVOKE_DEFAULT', **props)
+        return {'CANCELLED'} if result == {'CANCELLED'} else {'FINISHED'}
 
 
 # ---------------------------------------------------------------------------
@@ -715,6 +728,7 @@ class ANIMATICA_OT_picker_select(bpy.types.Operator):
     bl_options = {'INTERNAL', 'UNDO'}
 
     bone: StringProperty()
+    extend: bpy.props.BoolProperty(default=False, options={'HIDDEN', 'SKIP_SAVE'})
 
     @classmethod
     def description(cls, context, properties):
@@ -738,7 +752,8 @@ class ANIMATICA_OT_picker_select(bpy.types.Operator):
         before = _click["picked"]
         _click.update(bone="" if double else pb.name, at=now,
                       picked=tuple(p.name for p in picked(arm)))
-        if double and not event.shift:
+        shift = event.shift or self.extend
+        if double and not shift:
             # Double-click: on or off. The picked handles together when this
             # is one of them, so a whole limb goes in one go -- picked as they
             # were before the first click of the two, which picked this alone.
@@ -751,7 +766,7 @@ class ANIMATICA_OT_picker_select(bpy.types.Operator):
             switch(context, arm, bones, not pb.bone.ap_enabled)
             _redraw(context)
             return {'FINISHED'}
-        if event.shift:
+        if shift:
             now = not pose_bone_is_selected(pb)
             pose_bone_select_set(pb, now)
             if now:
@@ -998,7 +1013,8 @@ class ANIMATICA_OT_picker_close(bpy.types.Operator):
         return {'FINISHED'}
 
 
-_classes = (ANIMATICA_GT_picker_card, ANIMATICA_GGT_picker, ANIMATICA_OT_picker_select,
+_classes = (ANIMATICA_OT_picker_click, ANIMATICA_GT_picker_card, ANIMATICA_GGT_picker,
+            ANIMATICA_OT_picker_select,
             ANIMATICA_OT_picker_all, ANIMATICA_OT_picker_set, ANIMATICA_OT_picker_slack,
             ANIMATICA_OT_picker_collapse, ANIMATICA_OT_picker_close,
             ANIMATICA_OT_picker_adding, ANIMATICA_OT_picker_add,

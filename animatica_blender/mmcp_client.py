@@ -395,6 +395,19 @@ def get_refresh_token() -> str:
     return ((getattr(p, "refresh_token", "") or "").strip()) if p else ""
 
 
+def needs_sign_in() -> bool:
+    """True when generating will be refused for want of an account: pointed at
+    Animatica Cloud with no session. Self-hosted servers take no account."""
+    if not is_cloud_url(get_mmcp_url()):
+        return False
+    return not (get_access_token() or get_refresh_token())
+
+
+def offline() -> bool:
+    """True when Blender's online access is what keeps the add-on from the server."""
+    return cached_capabilities() is None and last_connection_error() == OFFLINE_MESSAGE
+
+
 def _auth_headers(url: str, extra: dict[str, str] | None = None) -> dict[str, str]:
     """Standard request headers, plus the Bearer token when signed in AND *url* is
     Animatica Cloud over https. A self-hosted server never sees the token."""

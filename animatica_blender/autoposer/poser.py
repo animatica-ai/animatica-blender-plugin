@@ -1777,6 +1777,59 @@ class AP_OT_remove_control(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class AP_OT_remove_rig(bpy.types.Operator):
+    bl_idname = "autoposer.remove_rig"
+    bl_label = "Stop the Autoposer"
+    bl_description = ("Take the Autoposer's handles off the rig and show its own bones again. "
+                      "The pose and the keys stay as they are")
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        arm = _armature(context)
+        return arm is not None and has_controls(arm)
+
+    def execute(self, context):
+        arm = _armature(context)
+        problem = edit_problem(arm)
+        if problem is not None:
+            self.report({"ERROR"}, problem)
+            return {"CANCELLED"}
+        # holding the rig (its action detached): give it back first
+        try:
+            if bpy.ops.animatica.give_back_rig.poll():
+                bpy.ops.animatica.give_back_rig()
+        except (AttributeError, RuntimeError):
+            pass
+        names = [b.name for b in _controls(arm)]
+        prev = arm.mode
+        context.view_layer.objects.active = arm
+        _clear_transform_flag(context)
+        keep = _preserve_pose(arm)
+        global _BUILDING
+        _BUILDING = True
+        try:
+            bpy.ops.object.mode_set(mode="EDIT")
+            try:
+                eb = arm.data.edit_bones
+                for name in names:
+                    b = eb.get(name)
+                    if b is not None:
+                        eb.remove(b)
+            finally:
+                bpy.ops.object.mode_set(mode="POSE" if prev == "POSE" else "OBJECT")
+        finally:
+            _BUILDING = False
+        _restore_pose(arm, keep, context)      # stopping must not move the character
+        _hide_deform_bones(arm, hide=False)    # the rig's own bones, as they were shown
+        coll = arm.data.collections.get(CTRL_COLL)
+        if coll is not None and not len(coll.bones):
+            arm.data.collections.remove(coll)
+        _show_controls_in_front(arm, on=False)
+        self.report({"INFO"}, f"Autoposer stopped: {len(names)} handles removed")
+        return {"FINISHED"}
+
+
 class AP_OT_key_pose(bpy.types.Operator):
     bl_idname = "autoposer.key_pose"
     bl_label = "Key Pose"
@@ -2069,7 +2122,7 @@ def skeleton_summary(arm) -> str:
     return f"{got} of {total} joints matched"
 
 
-CLASSES = (AP_OT_build_rig, AP_OT_add_control, AP_OT_remove_control, AP_OT_solve,
+CLASSES = (AP_OT_build_rig, AP_OT_add_control, AP_OT_remove_control, AP_OT_remove_rig, AP_OT_solve,
            AP_OT_snap_controls, AP_OT_rest, AP_OT_key_pose, AP_OT_take_over, AP_OT_release,
            AP_OT_detect_joints,
 )

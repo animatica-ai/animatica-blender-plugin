@@ -480,12 +480,7 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
                 self.report({'WARNING'}, f"{exc}; falling back to the SOMA30 rig")
             else:
                 settings.target_armature = arm_obj
-                try:
-                    context.view_layer.objects.active = arm_obj
-                    bpy.ops.object.mode_set(mode='POSE')
-                except Exception:                                    # noqa: BLE001
-                    # No 3D View context (headless / script) — import still fine.
-                    pass
+                settle_new_character(context, arm_obj)
                 self.report(
                     {'INFO'},
                     f"Imported the {CHARACTER_NAME} character "
@@ -558,15 +553,20 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
         msg = f"Imported {rig_name} ({len(joints)} joints)"
         if body_loaded:
             msg += " with body mesh"
-            try:
-                context.view_layer.objects.active = arm_obj
-                bpy.ops.object.mode_set(mode='POSE')
-            except Exception:
-                # No 3D View context (e.g. headless / script) — armature import
-                # still succeeded.
-                pass
+        settle_new_character(context, arm_obj)
         self.report({'INFO'}, msg)
         return {'FINISHED'}
+
+
+def settle_new_character(context, arm_obj) -> None:
+    """A character just added, ready to pose: the active object, in Pose
+    Mode, where the work starts. The view is left where the artist had it."""
+    try:
+        context.view_layer.objects.active = arm_obj
+        bpy.ops.object.mode_set(mode='POSE')
+    except Exception:                                               # noqa: BLE001
+        # No 3D View context (headless / script) — import still fine.
+        pass
 
 
 # ---------------------------------------------------------------------------

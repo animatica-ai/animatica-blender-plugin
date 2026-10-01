@@ -2274,14 +2274,20 @@ class ANIMATICA_OT_signin(Operator):
     # pre-fills it next time — the password must not outlive the dialog.
     password: StringProperty(name="Password", default="", subtype='PASSWORD',
                              options={'SKIP_SAVE', 'HIDDEN'})
+    then_generate: BoolProperty(default=False, options={'SKIP_SAVE', 'HIDDEN'})
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self, width=340)
 
     def draw(self, context):
+        from .panels import SIGN_UP_URL
         col = self.layout.column(align=True)
         col.prop(self, "email")
         col.prop(self, "password")
+        row = self.layout.row()
+        row.active = False
+        row.label(text="No account yet?")
+        row.operator("wm.url_open", text="Create One", icon='URL', emboss=False).url = SIGN_UP_URL
 
     def execute(self, context):
         if not self.email or not self.password:
@@ -2300,7 +2306,63 @@ class ANIMATICA_OT_signin(Operator):
         # rather than leaving the artist on a stale "cannot reach" or an empty
         # model list.
         mmcp_client.connect_async(force=True)
+        if self.then_generate:
+            import time as _time
+            started = _time.monotonic()
+            bpy.app.timers.register(lambda: _generate_when_connected(started), first_interval=0.5)
         self.report({'INFO'}, msg)
+        return {'FINISHED'}
+
+
+class ANIMATICA_OT_signin_generate(Operator):
+    """Sign in to your Animatica account, then make the take"""
+    bl_idname = "animatica.signin_generate"
+    bl_label = "Sign in to Generate"
+
+    def invoke(self, context, event):
+        return bpy.ops.animatica.signin('INVOKE_DEFAULT', then_generate=True)
+
+
+def _generate_when_connected(started: float):
+    """After a sign-in from the Generate button: the take it was pressed for,
+    once the server has answered again."""
+    import time as _time
+    from . import toolbar
+    if _time.monotonic() - started > 30:
+        return None
+    if mmcp_client.connecting() or mmcp_client.cached_capabilities() is None:
+        return 0.5
+    ctx = bpy.context
+    win = ctx.window_manager.windows[0] if ctx.window_manager.windows else None
+    area = next((a for a in win.screen.areas if a.type == 'VIEW_3D'), None) if win else None
+    region = next((r for r in area.regions if r.type == 'WINDOW'), None) if area else None
+    if region is None:
+        return None
+    with ctx.temp_override(window=win, screen=win.screen, area=area, region=region):
+        kind, text, _op = toolbar.gate(bpy.context)
+        if kind == "ready":
+            bpy.ops.animatica.generate('INVOKE_DEFAULT')
+        elif kind == "blocked":
+            # signed in; the take still needs something only the artist can give
+            print(f"[animatica] signed in; not generating yet: {text}")
+    return None
+
+
+class ANIMATICA_OT_allow_online(Operator):
+    """Animatica makes motion on its servers, so it needs Blender's online
+    access (Preferences > System > Allow Online Access). This turns it on"""
+    bl_idname = "animatica.allow_online"
+    bl_label = "Allow Online Access"
+
+    def execute(self, context):
+        try:
+            context.preferences.system.use_online_access = True
+        except (AttributeError, TypeError) as exc:
+            self.report({'ERROR'}, f"Could not turn online access on ({exc}): "
+                                   "Preferences > System > Allow Online Access")
+            return {'CANCELLED'}
+        mmcp_client.connect_async(force=True)
+        self.report({'INFO'}, "Online access on: connecting to Animatica")
         return {'FINISHED'}
 
 
@@ -2451,6 +2513,8 @@ _classes = (
     ANIMATICA_OT_reset_root_trajectory,
     ANIMATICA_OT_cancel_generation,
     ANIMATICA_OT_signin,
+    ANIMATICA_OT_signin_generate,
+    ANIMATICA_OT_allow_online,
     ANIMATICA_OT_signout,
     ANIMATICA_OT_open_upgrade,
     ANIMATICA_OT_quota_dialog,
