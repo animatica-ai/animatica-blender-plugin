@@ -44,6 +44,7 @@ import time
 
 import bpy
 import mathutils
+import numpy as np
 
 from . import engine, joint_map
 
@@ -1063,6 +1064,52 @@ def _pins(arm, eff, out, floor):
     return pins
 
 
+def floor_height(arm, eff) -> float:
+    """The floor under the pose, in the poser's frame (its Y).
+
+    The poser's floor is Y=0 of its frame -- the armature's base plane. A
+    character posed on a roof 0.6 m below that, or on a stair, had its feet
+    held at the base plane in the air. The ground under it is read from the
+    scene instead: a ray down at the hips (or the middle of the targets),
+    from just above them, past the character's own meshes -- not from above
+    the head, where a hat or a ledge being reached for is not the floor.
+    """
+    from .. import ground
+
+    pos = [e for e in eff if e.get("type") == "pos"]
+    if not pos or arm is None:
+        return 0.0
+    mw = arm.matrix_world
+    world = {e["joint"]: mw @ from_poser(arm, e["pos"]) for e in pos}
+    at = world.get("Hips")
+    if at is None:
+        at = sum(world.values(), mathutils.Vector()) / len(world)
+        at.z = min(v.z for v in world.values()) + 1.0      # about hip height over the lowest target
+    z = ground.surface_below_cached(bpy.context.scene, at.x, at.y, at.z + ground.RAY_HEADROOM, arm=arm)
+    if z is None:
+        return 0.0
+    return float(to_poser(arm, mw.inverted() @ mathutils.Vector((at.x, at.y, z))).y)
+
+
+def pose_on_ground(eng, arm, eff, **kw):
+    """``eng.pose`` with its floor on the ground under the pose (see
+    `floor_height`): the targets go down by it, the solve comes back up."""
+    lift = floor_height(arm, eff) if kw.get("floor", True) else 0.0
+    if abs(lift) < 1e-4:
+        return eng.pose(eff, **kw)
+    moved = []
+    for e in eff:
+        if "pos" in e:
+            e = dict(e, pos=[e["pos"][0], e["pos"][1] - lift, e["pos"][2]])
+        moved.append(e)
+    out = dict(eng.pose(moved, **kw))
+    up = np.array([0.0, lift, 0.0], dtype=np.float32)
+    out["joints"] = np.asarray(out["joints"], dtype=np.float32) + up
+    out["root"] = np.asarray(out["root"], dtype=np.float32) + up
+    out["floor_m"] = lift
+    return out
+
+
 def solve(context, report=None, *, moved: bool = False):
     """Solve and apply one pose.
 
@@ -1097,7 +1144,7 @@ def solve(context, report=None, *, moved: bool = False):
     t0 = time.perf_counter()
     try:
         floor = bool(context.scene.ap_floor)
-        out = eng.pose(eff, bone_lengths=_bone_lengths(arm),
+        out = pose_on_ground(eng, arm, eff, bone_lengths=_bone_lengths(arm),
                        ik_refine=context.scene.ap_use_ik,
                        # one switch: the floor is solid, or it is not there. The solver's own
                        # floor term stays on the feet — the set the checkpoint was trained

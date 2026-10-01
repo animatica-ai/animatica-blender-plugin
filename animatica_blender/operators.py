@@ -16,6 +16,7 @@ the server is).
 
 from __future__ import annotations
 
+import functools
 import random
 import threading
 import time
@@ -819,6 +820,59 @@ class ANIMATICA_OT_connect(Operator):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# A generation always ends by clearing is_generating
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: The modal operators that set ``is_generating`` while they run.
+GENERATION_OPERATORS = (
+    "animatica.generate", "animatica.generate_pose",
+    "animatica.regenerate_block", "animatica.generate_batch",
+)
+
+
+def _python_idname(idname: str) -> str:
+    """``ANIMATICA_OT_generate`` (as ``window.modal_operators`` lists it) ->
+    ``animatica.generate``."""
+    if "_OT_" in idname:
+        prefix, name = idname.split("_OT_", 1)
+        return f"{prefix.lower()}.{name}"
+    return idname
+
+
+def generation_running(context) -> bool:
+    """Whether a generation operator is actually running in some window."""
+    for window in context.window_manager.windows:
+        for op in window.modal_operators:
+            if _python_idname(op.bl_idname) in GENERATION_OPERATORS:
+                return True
+    return False
+
+
+def ends_cleanly(modal):
+    """Run a generation operator's ``cancel`` when its modal raises.
+
+    An exception ends a modal operator without ``cancel`` or the operator's
+    own cleanup running, which left ``is_generating`` set and the panel
+    stuck on Working... with nothing behind it. The operators also define
+    ``cancel``, which Blender calls when it ends them itself (a file load,
+    the add-on reloading mid-generation).
+    """
+    @functools.wraps(modal)
+    def wrapped(self, context, event):
+        try:
+            return modal(self, context, event)
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            try:
+                self.cancel(context)
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+            self.report({'ERROR'}, f"Generation failed: {exc}")
+            return {'CANCELLED'}
+    return wrapped
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Generate
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -923,9 +977,10 @@ def _bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int,
     #
     # Not routed through here for control rigs: splice_gltf_into_action has no
     # control-rig hand-off, only bake_gltf_to_armature does.
+    # However many blocks the take has: next to a locked block, a fresh bake
+    # would carry only the artist's own keys over and drop the locked motion.
     spliced = (
         splice_target is not None
-        and not block_ranges
         and not request_builder.is_control_rig(arm)
         and _action_has_keys_outside(splice_target, gen_start, gen_end)
     )
@@ -1026,6 +1081,9 @@ def _bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int,
                                                     int(context.scene.frame_end)])
             print(f"[animatica] loop: {cycle} frames, seam {done['seam_deg']:.1f} deg, "
                   f"turned {done['turned_deg']:.1f} deg straight")
+
+    # The frames this take covers: Accept locks the blocks in them.
+    arm["animatica_take_range"] = [int(gen_start), int(gen_end)]
 
     if block_ranges:
         # Stash split metadata for Accept. Blender's ID-property arrays are
@@ -1200,6 +1258,8 @@ class ANIMATICA_OT_generate(Operator):
             settings.prompt_blocks, arm, context.scene
         )
         self._gen_start_frame = gen_start
+        from . import timeline_overlay
+        timeline_overlay.activity["generating"] = (gen_start, gen_end)
         # And its end, as sent: the window depends on the keys either side of
         # the blocks (see compute_frame_range), which are not what they were
         # once the bake has swapped the rig's action.
@@ -1240,6 +1300,10 @@ class ANIMATICA_OT_generate(Operator):
             self._error = exc
 
     # ----- modal -----------------------------------------------------------
+    def cancel(self, context):
+        self._cleanup(context)
+
+    @ends_cleanly
     def modal(self, context, event):
         settings = context.scene.animatica
 
@@ -1437,6 +1501,14 @@ class ANIMATICA_OT_cancel_generation(Operator):
         s = context.scene.animatica
         if not s.is_generating:
             return {'CANCELLED'}
+        if not generation_running(context):
+            # Nothing is left to see the request: the flag outlived its
+            # operator. Clear it here, or the panel stays on Working...
+            s.is_generating = False
+            s.cancel_requested = False
+            s.generation_progress = 0.0
+            self.report({'INFO'}, "Cleared a generation that was no longer running")
+            return {'FINISHED'}
         s.cancel_requested = True
         return {'FINISHED'}
 
@@ -1465,12 +1537,49 @@ def _remove_orphan_takes(*, past_fake_user: bool = False) -> int:
     return len(gone)
 
 
+def _lock_take_blocks(settings, arm) -> int:
+    """Lock the blocks the take on *arm* covered. Returns how many."""
+    if arm is None:
+        return 0
+    span = arm.get("animatica_take_range")
+    if span is None or len(span) < 2:
+        # a take made before takes recorded their frames: the window it was
+        # made over, as the blocks still say
+        span = request_builder.compute_frame_range(settings.prompt_blocks, arm, bpy.context.scene)
+    lo, hi = int(span[0]), int(span[1])
+    n = 0
+    for b in settings.prompt_blocks:
+        if getattr(b, "enabled", True) and not b.locked and b.frame_start < hi and b.frame_end > lo:
+            b.locked = True
+            n += 1
+    if "animatica_take_range" in arm:
+        del arm["animatica_take_range"]
+    return n
+
+
+def _keep_as_own_action(arm, take, source) -> None:
+    """The accepted take becomes the artist's action: a plain action on the
+    rig, theirs to key, which the next Generate splices into.
+
+    It carries their own keys in already (see bake_take), so the action it
+    showed in place of is only kept, hidden, as it was."""
+    name = source.name if source is not None else f"{arm.name}Action"
+    if source is not None:
+        source.name = (".Animatica before: " + source.name)[:63]
+        source.use_fake_user = True
+    take.name = name[:63]
+    take.use_fake_user = False
+    for key in (_KEPT_KEY, "animatica_loop"):
+        if key in take:
+            del take[key]
+
+
 class ANIMATICA_OT_accept(Operator):
     bl_idname = "animatica.accept"
     bl_label = "Accept"
     bl_description = (
-        "Keep this take. It goes onto the NLA as a track of its own, above "
-        "the takes kept before, which stay; your own action is stashed there too"
+        "Keep this take and lock its blocks: the motion is yours to edit, "
+        "and Generate and Redo leave it as it is. Unlock a block to make it again"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -1511,11 +1620,12 @@ class ANIMATICA_OT_accept(Operator):
                 # and the next take's In place put those old keys back over it.
                 _keep_inplace(arm, [arm.animation_data.action])
                 preview_session.finish(context, arm, accepted=True)
+                locked = _lock_take_blocks(s, arm)
                 s.source_action_name = ""
                 s.is_previewing = False
                 _clear_quota_state(s)
-                self.report({'INFO'}, "Kept the generated frames in "
-                                      f"'{arm.animation_data.action.name}'")
+                self.report({'INFO'}, f"Kept in '{arm.animation_data.action.name}'"
+                                      + (f"; {locked} block{'s' if locked != 1 else ''} locked" if locked else ""))
                 return {'FINISHED'}
 
             pending_raw = arm.get("animatica_pending_block_ranges")
@@ -1551,6 +1661,25 @@ class ANIMATICA_OT_accept(Operator):
             # while it showed; make sure of it before it is split into blocks.
             if bool(getattr(s, "inplace", False)) and preview_action is not None:
                 _apply_inplace_constraint(arm, enabled=True)
+
+            loop = preview_action is not None and preview_action.get("animatica_loop") is not None
+            if preview_action is not None and _is_motion_bake_action(preview_action) and not loop:
+                # The take stays on the rig as the artist's own action: keys
+                # they can edit, locked against the next Generate.
+                _keep_inplace(arm, [preview_action])
+                if "animatica_pending_block_ranges" in arm:
+                    del arm["animatica_pending_block_ranges"]
+                preview_session.finish(context, arm, accepted=True)
+                # after the session lets go: it hands the old action its own
+                # fake-user flag back, and this one keeps it
+                _keep_as_own_action(arm, preview_action, source)
+                locked = _lock_take_blocks(s, arm)
+                s.source_action_name = ""
+                s.is_previewing = False
+                _remove_orphan_takes()
+                self.report({'INFO'}, f"Kept in '{preview_action.name}'"
+                                      + (f"; {locked} block{'s' if locked != 1 else ''} locked" if locked else ""))
+                return {'FINISHED'}
 
             if len(block_ranges) >= 2 and preview_action is not None:
                 # Multi-block: build the per-block actions from the preview's
@@ -2015,6 +2144,10 @@ class ANIMATICA_OT_generate_pose(Operator):
             self._error = exc
 
     # ----- modal -----------------------------------------------------------
+    def cancel(self, context):
+        self._cleanup(context)
+
+    @ends_cleanly
     def modal(self, context, event):
         s = context.scene.animatica
 

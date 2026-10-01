@@ -62,6 +62,7 @@ def _serialize_blocks(blocks) -> str:
             "color": list(b.color),
             "seed": int(getattr(b, "seed", 0)),
             "last_used_seed": int(getattr(b, "last_used_seed", 0)),
+            "locked": bool(getattr(b, "locked", False)),
         }
         for b in blocks
     ])
@@ -108,6 +109,7 @@ def load_blocks_from_armature(arm_obj, settings):
             # ``last_used_seed`` records the concrete seed of the last generation
             # (added with client-side seed recording); older scenes default to 0.
             b.last_used_seed = int(item.get("last_used_seed", 0))
+            b.locked = bool(item.get("locked", False))
         settings.active_block_index = int(arm_obj.get(_ACTIVE_KEY, 0))
         return
 
@@ -467,6 +469,15 @@ class PromptBlock(PropertyGroup):
         description="Include this block when generating",
         default=True,
     )
+    locked: BoolProperty(
+        name="Locked",
+        description=(
+            "Set in stone: this block's motion is yours, keys you can edit, and "
+            "Generate and Redo leave it as it is -- the blocks next to it are "
+            "generated to run into it"
+        ),
+        default=False,
+    )
     color: FloatVectorProperty(
         name="Color",
         description="Display color for this strip (0,0,0,0 = auto palette)",
@@ -715,6 +726,16 @@ def _model_id_items(self, context):
     return mmcp_client.cached_model_items()
 
 
+def _redraw_3d_views() -> None:
+    try:
+        for win in bpy.context.window_manager.windows:
+            for area in win.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+    except (AttributeError, ReferenceError):
+        pass
+
+
 class AnimaticaSettings(PropertyGroup):
     """Scene-level addon state."""
 
@@ -942,6 +963,16 @@ class AnimaticaSettings(PropertyGroup):
     # One switch for the whole overlay, so it can go away in a click instead
     # of three. It sits with the toggles it governs — the same switch in the
     # Pose panel's *header* read as switching posing off, which it never did.
+    show_toolbar: BoolProperty(
+        name="Toolbar",
+        description=(
+            "The floating bar at the bottom of the viewport: Generate, Accept and "
+            "Reject, posing and keying, the key poses, waypoints and pins, and the "
+            "take's switches, without the N panel"
+        ),
+        default=True,
+        update=lambda self, context: _redraw_3d_views(),
+    )
     key_pose_overlay: BoolProperty(
         name="Show Plan",
         description=(

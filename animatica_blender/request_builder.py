@@ -17,6 +17,8 @@ from . import constraints_ui, coords
 
 
 PROTOCOL_VERSION = "1.0"
+#: MMCP 1.3 added ``ground_height``; a request that carries one says so.
+GROUND_PROTOCOL_VERSION = "1.3"
 
 
 def _resolve_seed(value) -> int:
@@ -47,6 +49,61 @@ class BuildError(Exception):
 # Public entry point
 # ---------------------------------------------------------------------------
 
+def is_locked(block) -> bool:
+    """A block set in stone: its motion is the artist's, Generate leaves it."""
+    return bool(getattr(block, "locked", False))
+
+
+def generation_blocks(prompt_blocks, scene=None) -> list:
+    """The blocks the next Generate makes.
+
+    All of them until one is locked. After that, one stretch of unlocked
+    blocks between locked ones: the stretch under the playhead, else the
+    first. Each stretch is its own take, generated into the locked motion
+    either side of it, so working through a sequence a block or two at a
+    time never touches what was accepted before. Empty when every block is
+    locked.
+    """
+    blocks = list(prompt_blocks or ())
+    if not any(is_locked(b) for b in blocks):
+        return blocks
+    live = sorted((b for b in blocks if getattr(b, "enabled", True)),
+                  key=lambda b: int(b.frame_start))
+    runs, run = [], []
+    for b in live:
+        if is_locked(b):
+            if run:
+                runs.append(run)
+            run = []
+        else:
+            run.append(b)
+    if run:
+        runs.append(run)
+    if not runs:
+        return []
+    frame = int(getattr(scene, "frame_current", 0)) if scene is not None else None
+    if frame is not None:
+        for r in runs:
+            if int(r[0].frame_start) <= frame <= int(r[-1].frame_end):
+                return r
+    return runs[0]
+
+
+def locked_seams(prompt_blocks, lo: int, hi: int, margin: int = 0) -> tuple[bool, bool]:
+    """Whether a locked block meets the window ``lo..hi`` on its left, and on
+    its right (within ``margin`` frames): there the take starts, or ends, on
+    the locked block's pose instead of blending into it."""
+    left = right = False
+    for b in prompt_blocks or ():
+        if not (is_locked(b) and getattr(b, "enabled", True)):
+            continue
+        if lo - margin <= int(b.frame_end) <= lo:
+            left = True
+        if hi <= int(b.frame_start) <= hi + margin:
+            right = True
+    return left, right
+
+
 def generation_blockers(
     *,
     scene,
@@ -73,6 +130,10 @@ def generation_blockers(
     out: list[str] = []
 
     blocks = [b for b in prompt_blocks or () if getattr(b, "enabled", True)]
+    if blocks and all(is_locked(b) for b in blocks):
+        return ["Every block is locked: unlock one, or add one, to generate"]
+    # what the next Generate makes: locked blocks are left as they are
+    blocks = [b for b in generation_blocks(blocks, scene) if getattr(b, "enabled", True)]
     texts = [(b.prompt or "").strip() for b in blocks]
     written = [t for t in texts if t]
     has_constraint = bool(pose_frames) or bool(
@@ -154,6 +215,9 @@ def compute_frame_range(
     # seeds an empty block across the whole scene — left in the reckoning, it
     # widened every generation to the entire timeline and swept in keyframes
     # far outside the stretch the artist had actually asked about.
+    # Locked blocks are not generated (see generation_blocks).
+    all_blocks = prompt_blocks
+    prompt_blocks = generation_blocks(prompt_blocks, scene)
     speaking = [b for b in prompt_blocks or ()
                 if getattr(b, "enabled", True) and (b.prompt or "").strip()]
     considered = speaking or [b for b in prompt_blocks or ()
@@ -174,6 +238,9 @@ def compute_frame_range(
         # the first. Never past the scene the user set up, unless a block
         # already reaches beyond it (the block is the authority then).
         before, after = _keys_beyond(blend_action(armature_obj, scene), lo, hi)
+        # Not into a locked block: the take starts (ends) on its pose there.
+        held_left, held_right = locked_seams(all_blocks, lo, hi, margin)
+        before, after = before and not held_left, after and not held_right
         return (
             max(lo - margin, min(lo, int(scene.frame_start))) if before else lo,
             min(hi + margin, max(hi, int(scene.frame_end))) if after else hi,
@@ -296,7 +363,7 @@ def build_request(
         settings.last_used_seed = resolved_global
     except (AttributeError, TypeError):
         pass
-    for _b in prompt_blocks:
+    for _b in generation_blocks(prompt_blocks, scene):
         if not getattr(_b, "enabled", True):
             continue
         try:
@@ -328,8 +395,9 @@ def build_request(
         raise BuildError(blockers[0])
 
     frame_range = compute_frame_range(prompt_blocks, armature_obj, scene)
+    seams = locked_seams(prompt_blocks, *frame_range)
     segments = build_segments(
-        prompt_blocks,
+        generation_blocks(prompt_blocks, scene),
         frame_range,
         supports_segment_seed=supports_seg,
     )
@@ -349,6 +417,7 @@ def build_request(
         constraint_objects=constraint_objects,
         frame_range=frame_range,
         total_frames=total_frames,
+        locked_seams=seams,
     )
 
     if not segments and not constraints:
@@ -357,12 +426,14 @@ def build_request(
             "Add a prompt block on the timeline, draw a root path, or pin an effector"
         )
 
+    _add_ground(constraints, model_caps=model_caps, scene=scene, armature_obj=armature_obj)
+
     valid_joint_names = {j["name"] for j in request_skeleton.get("joints", [])}
     _validate_constraint_joints(constraints, valid_joint_names)
     _validate_constraint_count(constraints, model_caps)
 
     request: dict[str, Any] = {
-        "protocol_version": PROTOCOL_VERSION,
+        "protocol_version": _protocol_version(constraints),
         "model":            model_id,
         "skeleton":         request_skeleton,
         "options":          build_options(settings, seed=resolved_global),
@@ -592,6 +663,8 @@ def build_request_for_block(
     # source keys outside the preview's frame range, which by definition
     # don't apply to a per-block regen anyway.
 
+    _add_ground(constraints, model_caps=model_caps, scene=scene, armature_obj=armature_obj)
+
     valid_joint_names = {j["name"] for j in request_skeleton.get("joints", [])}
     _validate_constraint_joints(constraints, valid_joint_names)
     _validate_constraint_count(constraints, model_caps)
@@ -603,7 +676,7 @@ def build_request_for_block(
         options["seed"] = int(seed_override) if int(seed_override) > 0 else None
 
     request: dict[str, Any] = {
-        "protocol_version": PROTOCOL_VERSION,
+        "protocol_version": _protocol_version(constraints),
         "model":            model_id,
         "skeleton":         request_skeleton,
         "options":          options,
@@ -1185,6 +1258,7 @@ def _collect_constraints(
     constraint_objects: dict[str, list[bpy.types.Object]],
     frame_range: tuple[int, int],
     total_frames: int,
+    locked_seams: tuple[bool, bool] = (False, False),
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
 
@@ -1236,6 +1310,22 @@ def _collect_constraints(
                 frame_range=frame_range,
             )
         )
+
+    # Where a locked block meets the window, the take starts (or ends) on its
+    # pose: the whole body, where it stands, at the seam frame -- the same
+    # pin a single block's regenerate puts at its seams. A pose the artist
+    # keyed on that frame is already there, and is theirs.
+    if src is not None and any(locked_seams):
+        lo, hi = int(frame_range[0]), int(frame_range[1])
+        pinned = {c.get("frame") for c in out if c.get("type") == "pose_keyframe"}
+        for held, frame, at in ((locked_seams[0], lo, 0), (locked_seams[1], hi, hi - lo)):
+            if not held or at in pinned:
+                continue
+            c = constraints_ui.sample_pose_at_frame(
+                armature_obj, source_action=src, sample_frame=frame, request_frame=at,
+            )
+            if c is not None:
+                out.append(c)
 
     # Anchor the motion's start to wherever the user placed the character.
     # Without this, the generated motion begins at the model's default root
@@ -1434,6 +1524,32 @@ def _pins_frame_zero(c: dict[str, Any]) -> bool:
     if t == "pose_keyframe":
         return c.get("frame") == 0 and c.get("root_position") is not None
     return False
+
+
+def _add_ground(constraints: list[dict[str, Any]], *, model_caps: dict[str, Any],
+                scene, armature_obj) -> None:
+    """The ground along the take's route (MMCP 1.3 ``ground_height``), where
+    the server says it understands one. Without it the model walks a route
+    that drops off one roof onto a lower one at the old height, in the air."""
+    if "ground_height" not in (model_caps.get("supported_constraints") or ()):
+        return
+    from . import ground
+
+    try:
+        c = ground.ground_constraint(scene, armature_obj, constraints)
+    except Exception as exc:                                  # noqa: BLE001
+        # a scene the rays cannot read must not stop a generation
+        print(f"[animatica] ground not sent: {exc}")
+        return
+    if c is not None:
+        constraints.append(c)
+
+
+def _protocol_version(constraints: list[dict[str, Any]]) -> str:
+    """The protocol a request needs: 1.3 once it carries the ground."""
+    if any(c.get("type") == "ground_height" for c in constraints):
+        return GROUND_PROTOCOL_VERSION
+    return PROTOCOL_VERSION
 
 
 def _validate_constraint_joints(

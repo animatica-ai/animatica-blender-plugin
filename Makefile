@@ -25,7 +25,7 @@ p.read_text(), count=1, flags=re.M))'
 # macOS default Blender 5.x addon path. Override on Linux/Windows.
 BLENDER_ADDONS_DIR ?= $(HOME)/Library/Application Support/Blender/5.0/scripts/addons
 
-.PHONY: zip clean install uninstall info
+.PHONY: zip clean install uninstall info icons
 
 zip: $(ZIP)
 
@@ -49,6 +49,14 @@ zip-with-model:
 	@cd $(DIST)/.stage && zip -qr ../$(notdir $(ZIP)) $(ADDON) -x '*/__pycache__/*' -x '*.pyc'
 	@rm -rf $(DIST)/.stage
 	@echo "→ $(ZIP) (with model)"
+
+# The toolbar's icons: drawn as SVG in icons/src, shipped as 64 px PNGs (the
+# bar reads them itself, sized to the button). Needs rsvg-convert (librsvg).
+icons:
+	@for f in $(ADDON)/icons/src/*.svg; do \
+		rsvg-convert -w 64 -h 64 "$$f" -o "$(ADDON)/icons/$$(basename "$${f%.svg}").png" || exit 1; \
+	done
+	@echo "→ $(ADDON)/icons/*.png"
 
 # Staged rather than zipped in place, so the build can stamp its own release
 # tag into the copy without touching the working tree. The updater compares

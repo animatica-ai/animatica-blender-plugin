@@ -39,6 +39,7 @@ from bpy.props import BoolProperty, StringProperty
 from bpy.types import Operator
 
 from . import constraints_ui, mmcp_client, properties, request_builder, variations
+from .operators import ends_cleanly
 
 #: requests in flight at once; the rest queue behind them
 MAX_PARALLEL = 6
@@ -281,6 +282,10 @@ class ANIMATICA_OT_generate_batch(Operator):
         wm.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
+    def cancel(self, context):
+        self._finish(context, cancelled=True)
+
+    @ends_cleanly
     def modal(self, context, event):
         from . import operators
 

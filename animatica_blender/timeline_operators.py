@@ -20,17 +20,22 @@ import time
 import bpy
 from bpy.props import IntProperty, StringProperty
 
+from .operators import ends_cleanly
 from .timeline_overlay import (
     hit_test_strips,
     hit_test_lane_resize,
+    hit_test_waypoint_pin,
+    hit_test_key_pose,
     pixel_to_frame,
     find_neighbors,
     find_gap,
     inline_edit_state,
+    DEFAULT_BLOCK_LENGTH,
+    is_in_lane,
+    interaction,
+    track_hover,
     get_strip_height,
     set_strip_height,
-    STRIP_Y_OFFSET,
-    LANE_PADDING,
     MIN_STRIP_HEIGHT,
     MAX_STRIP_HEIGHT,
 )
@@ -45,11 +50,17 @@ _DOUBLE_CLICK_THRESHOLD: float = 0.35  # seconds
 _addon_keymaps = []
 
 
-def _is_in_lane(mouse_y):
-    """Check if mouse Y is within the Animatica strip lane area."""
-    lane_y0 = STRIP_Y_OFFSET - LANE_PADDING
-    lane_y1 = STRIP_Y_OFFSET + get_strip_height() + LANE_PADDING
-    return lane_y0 <= mouse_y <= lane_y1
+def _block_sharing_edge(prompt_blocks, idx, zone):
+    """The index of the block whose edge meets *idx*'s *zone* edge, or None."""
+    fr = prompt_blocks[idx]
+    for j, other in enumerate(prompt_blocks):
+        if j == idx:
+            continue
+        if zone == "edge_end" and other.frame_start == fr.frame_end:
+            return j
+        if zone == "edge_start" and other.frame_end == fr.frame_start:
+            return j
+    return None
 
 
 def _timeline_poll(context):
@@ -69,10 +80,11 @@ def _timeline_poll(context):
 # ---------------------------------------------------------------------------
 
 class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
-    """Click/drag Animatica timeline strips.
+    """Click/drag Animatica timeline strips and waypoint pins.
 
     Automatically invoked by keymap when clicking in the Timeline.
-    If the click lands on a strip, the operator handles select + drag.
+    If the click lands on a strip, the operator handles select + drag;
+    on a waypoint pin, dragging it retimes the waypoint.
     If not, it returns PASS_THROUGH so normal timeline scrubbing works.
     """
 
@@ -90,13 +102,44 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return (
-            _timeline_poll(context)
-            and len(context.scene.animatica.prompt_blocks) > 0
-        )
+        if not _timeline_poll(context):
+            return False
+        if len(context.scene.animatica.prompt_blocks) > 0:
+            return True
+        from . import key_poses, waypoints
+        return bool(waypoints.waypoints(context.scene)) or bool(key_poses.timeline_ticks(context.scene)[0])
 
     def invoke(self, context, event):
         global _last_click_time, _last_click_idx
+
+        # --- Key pose: drag its diamond to retime it, click to go to it ---
+        key = hit_test_key_pose(context, event.mouse_region_x, event.mouse_region_y)
+        if key is not None:
+            self._state = "DRAGGING_KEY_POSE"
+            self._key_from = int(key)
+            self._key_moved = False
+            interaction["key_drag"] = (self._key_from, self._key_from)
+            context.window.cursor_set("MOVE_X")
+            context.window_manager.modal_handler_add(self)
+            context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
+
+        # --- Waypoint pin: drag to retime. Checked before strips, since the
+        # pins sit on the lane's bottom edge, over the strips. ---
+        pin = hit_test_waypoint_pin(
+            context, event.mouse_region_x, event.mouse_region_y
+        )
+        if pin is not None:
+            self._state = "DRAGGING_WAYPOINT"
+            self._waypoint_name = pin.name
+            self._original_frame = int(pin.animatica_waypoint_frame)
+            context.window.cursor_set("MOVE_X")
+            context.window_manager.modal_handler_add(self)
+            context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
+
+        if len(context.scene.animatica.prompt_blocks) == 0:
+            return {"PASS_THROUGH"}
 
         # --- Lane resize (top edge of lane) ---
         if hit_test_lane_resize(
@@ -141,13 +184,28 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
 
         # --- Select strip ---
         props.active_block_index = idx
+        if fr.locked:
+            # Set in stone: its motion is where it is, so its frames stay too.
+            context.area.tag_redraw()
+            return {"FINISHED"}
 
         # --- Begin drag ---
         self._active_idx = idx
         self._original_start = fr.frame_start
         self._original_end = fr.frame_end
 
-        if zone == "edge_start":
+        shared = _block_sharing_edge(props.prompt_blocks, idx, zone)
+        if shared is not None:
+            # Two blocks meet here and the hit test can only name one, which
+            # left the other's edge out of reach. The drag's direction picks.
+            self._state = "DRAGGING_SHARED_EDGE"
+            self._shared_edge = (
+                (idx, shared) if zone == "edge_end" else (shared, idx)
+            )
+            self._shared_frame = (
+                fr.frame_end if zone == "edge_end" else fr.frame_start
+            )
+        elif zone == "edge_start":
             self._state = "DRAGGING_EDGE_START"
         elif zone == "edge_end":
             self._state = "DRAGGING_EDGE_END"
@@ -156,11 +214,21 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
             mouse_frame = pixel_to_frame(context, event.mouse_region_x)
             self._drag_offset = mouse_frame - fr.frame_start
 
+        interaction["drag"] = idx
         context.window_manager.modal_handler_add(self)
         context.area.tag_redraw()
         return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
+        result = self._modal(context, event)
+        if "RUNNING_MODAL" not in result:
+            interaction["drag"] = None
+            interaction["key_drag"] = None
+            if context.area is not None:
+                context.area.tag_redraw()
+        return result
+
+    def _modal(self, context, event):
         if context.area is None:
             return {"CANCELLED"}
 
@@ -172,6 +240,12 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
             return {"CANCELLED"}
 
         # Dispatch by state
+        if self._state == "DRAGGING_KEY_POSE":
+            return self._handle_key_pose_drag(context, event)
+        if self._state == "DRAGGING_WAYPOINT":
+            return self._handle_waypoint_drag(context, event)
+        if self._state == "DRAGGING_SHARED_EDGE":
+            return self._handle_shared_edge(context, event, props)
         if self._state == "DRAGGING_LANE_RESIZE":
             return self._handle_lane_resize(context, event)
         elif self._state == "DRAGGING_BODY":
@@ -200,6 +274,30 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
 
             context.area.tag_redraw()
             return {"RUNNING_MODAL"}
+
+        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+            context.window.cursor_set("DEFAULT")
+            return {"FINISHED"}
+
+        return {"RUNNING_MODAL"}
+
+    # -- Shared edge: wait for the drag to say which block it means -------
+
+    def _handle_shared_edge(self, context, event, props):
+        if event.type == "MOUSEMOVE":
+            frame = pixel_to_frame(context, event.mouse_region_x)
+            if frame == self._shared_frame:
+                return {"RUNNING_MODAL"}
+            left_idx, right_idx = self._shared_edge
+            if frame > self._shared_frame:
+                self._active_idx, self._state = right_idx, "DRAGGING_EDGE_START"
+            else:
+                self._active_idx, self._state = left_idx, "DRAGGING_EDGE_END"
+            fr = props.prompt_blocks[self._active_idx]
+            self._original_start = fr.frame_start
+            self._original_end = fr.frame_end
+            props.active_block_index = self._active_idx
+            return self._handle_edge_drag(context, event, props)
 
         if event.type == "LEFTMOUSE" and event.value == "RELEASE":
             context.window.cursor_set("DEFAULT")
@@ -241,6 +339,65 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
 
         return {"RUNNING_MODAL"}
 
+    # -- Key pose drag ----------------------------------------------------
+
+    def _handle_key_pose_drag(self, context, event):
+        from . import constraints_ui, key_poses
+
+        if event.type == "MOUSEMOVE":
+            frame = max(0, pixel_to_frame(context, event.mouse_region_x))
+            action = key_poses._action(key_poses._target(context.scene.animatica))
+            taken = set(constraints_ui.authored_pose_frames(action)[0]) - {self._key_from}
+            if frame not in taken:
+                interaction["key_drag"] = (self._key_from, frame)
+                self._key_moved = self._key_moved or frame != self._key_from
+            context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
+
+        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+            context.window.cursor_set("DEFAULT")
+            src, dst = interaction.get("key_drag") or (self._key_from, self._key_from)
+            if not self._key_moved:
+                context.scene.frame_set(src)            # a click: go to it
+                return {"CANCELLED"}                    # (nothing to undo)
+            if dst != src:
+                if key_poses.move_key_pose(context.scene, src, dst):
+                    context.scene.frame_set(dst)
+                    self.report({"INFO"}, f"Key pose moved to frame {dst}")
+            return {"FINISHED"}
+
+        return {"RUNNING_MODAL"}
+
+    # -- Waypoint drag ----------------------------------------------------
+
+    def _dragged_waypoint(self, context):
+        return context.scene.objects.get(getattr(self, "_waypoint_name", ""))
+
+    def _handle_waypoint_drag(self, context, event):
+        from . import waypoints
+
+        obj = self._dragged_waypoint(context)
+        if obj is None:
+            context.window.cursor_set("DEFAULT")
+            return {"CANCELLED"}
+
+        if event.type == "MOUSEMOVE":
+            frame = max(1, pixel_to_frame(context, event.mouse_region_x))
+            # One waypoint per frame: don't land on another one on the timeline.
+            taken = waypoints.at_frame(context.scene, frame)
+            if frame != obj.animatica_waypoint_frame and taken is None:
+                obj.animatica_waypoint_frame = frame
+                self._waypoint_name = obj.name  # renamed to "Path F<frame>"
+                waypoints.tag_redraw()
+            context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
+
+        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+            context.window.cursor_set("DEFAULT")
+            return {"FINISHED"}
+
+        return {"RUNNING_MODAL"}
+
     # -- Lane resize -----------------------------------------------------
 
     def _handle_lane_resize(self, context, event):
@@ -260,6 +417,19 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
     # -- Cancel -----------------------------------------------------------
 
     def _cancel_drag(self, context):
+        if self._state == "DRAGGING_KEY_POSE":
+            interaction["key_drag"] = None             # nothing moved yet
+            context.window.cursor_set("DEFAULT")
+            context.area.tag_redraw()
+            return
+        if self._state == "DRAGGING_WAYPOINT":
+            obj = self._dragged_waypoint(context)
+            if obj is not None:
+                obj.animatica_waypoint_frame = self._original_frame
+            context.window.cursor_set("DEFAULT")
+            context.area.tag_redraw()
+            return
+
         if self._state == "DRAGGING_LANE_RESIZE":
             set_strip_height(
                 getattr(self, "_resize_start_h", get_strip_height())
@@ -278,6 +448,27 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
 
     def cancel(self, context):
         self._cancel_drag(context)
+
+
+# ---------------------------------------------------------------------------
+# Hover: what the mouse is on, for the lane to light it up
+# ---------------------------------------------------------------------------
+
+class ANIMATICA_OT_timeline_hover(bpy.types.Operator):
+    """Track the mouse over the Animatica lane (never takes the event)"""
+
+    bl_idname = "animatica.timeline_hover"
+    bl_label = "Animatica Lane Hover"
+    bl_options = {"INTERNAL"}
+
+    @classmethod
+    def poll(cls, context):
+        return _timeline_poll(context) and context.region is not None and context.region.type == "WINDOW"
+
+    def invoke(self, context, event):
+        if track_hover(context, event.mouse_region_x, event.mouse_region_y):
+            context.area.tag_redraw()
+        return {"PASS_THROUGH"}
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +491,7 @@ class ANIMATICA_OT_timeline_strip_add_click(bpy.types.Operator):
 
     def invoke(self, context, event):
         # Only react if click is in the lane area
-        if not _is_in_lane(event.mouse_region_y):
+        if not is_in_lane(context, event.mouse_region_y):
             return {"PASS_THROUGH"}
 
         # Check if there's already a strip here — if so, pass through
@@ -348,9 +539,10 @@ class ANIMATICA_OT_timeline_strip_add_click(bpy.types.Operator):
             self.report({"WARNING"}, "No room for a new strip here")
             return {"CANCELLED"}
 
-        # Fill the entire gap
-        new_start = gap_start
-        new_end = gap_end
+        # Start at the click with the default length, shifted left if the
+        # gap ends first; a short gap is filled.
+        new_end = min(gap_end, max(gap_start, click_frame) + DEFAULT_BLOCK_LENGTH)
+        new_start = max(gap_start, new_end - DEFAULT_BLOCK_LENGTH)
 
         new_range = props.prompt_blocks.add()
         new_range.prompt = ""
@@ -531,7 +723,7 @@ class ANIMATICA_OT_timeline_strip_delete(bpy.types.Operator):
 
     def invoke(self, context, event):
         # Only intercept if the mouse is hovering over the strip lane
-        if not _is_in_lane(event.mouse_region_y):
+        if not is_in_lane(context, event.mouse_region_y):
             return {"PASS_THROUGH"}
 
         props = context.scene.animatica
@@ -577,7 +769,7 @@ class ANIMATICA_OT_timeline_strip_context_menu(bpy.types.Operator):
 
     def invoke(self, context, event):
         # Only show menu if click is in the lane area
-        if not _is_in_lane(event.mouse_region_y):
+        if not is_in_lane(context, event.mouse_region_y):
             return {"PASS_THROUGH"}
 
         # Check if right-click hit a strip
@@ -602,6 +794,13 @@ class ANIMATICA_OT_timeline_strip_context_menu(bpy.types.Operator):
         if self._hit_index is not None and 0 <= self._hit_index < len(props.prompt_blocks):
             fr = props.prompt_blocks[self._hit_index]
             layout.label(text=f"Strip: {fr.prompt or '(no prompt)'}")
+            op = layout.operator(
+                "animatica.timeline_strip_toggle_lock",
+                text="Unlock (generate it again)" if fr.locked else "Lock (keep this motion)",
+                icon="UNLOCKED" if fr.locked else "LOCKED",
+            )
+            op.index = self._hit_index
+            layout.separator()
             # Seed inspection + pin/unpin. A pinned block (seed > 0) keeps its
             # seed through a full Generate; an unpinned block inherits the
             # global Seed but still records the concrete seed it last ran with.
@@ -716,6 +915,31 @@ class ANIMATICA_OT_timeline_strip_toggle_enabled(bpy.types.Operator):
             for area in context.screen.areas:
                 if area.type == "DOPESHEET_EDITOR":
                     area.tag_redraw()
+        return {"FINISHED"}
+
+
+class ANIMATICA_OT_timeline_strip_toggle_lock(bpy.types.Operator):
+    """Lock a block to keep its motion: Generate and Redo leave it, and the
+    blocks next to it are made to run into it. Unlock it to make it again"""
+
+    bl_idname = "animatica.timeline_strip_toggle_lock"
+    bl_label = "Lock Block"
+    bl_options = {"REGISTER", "UNDO"}
+
+    index: IntProperty(name="Strip Index", default=-1)
+
+    def execute(self, context):
+        props = context.scene.animatica
+        i = self.index if self.index >= 0 else props.active_block_index
+        if not 0 <= i < len(props.prompt_blocks):
+            return {"CANCELLED"}
+        fr = props.prompt_blocks[i]
+        fr.locked = not fr.locked
+        self.report({"INFO"}, ("Locked: Generate leaves it as it is" if fr.locked
+                               else "Unlocked: the next Generate makes it again"))
+        for area in context.screen.areas:
+            if area.type in {"DOPESHEET_EDITOR", "VIEW_3D"}:
+                area.tag_redraw()
         return {"FINISHED"}
 
 
@@ -1227,6 +1451,9 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             self.report({'ERROR'}, "No prompt block selected")
             return {'CANCELLED'}
         block = s.prompt_blocks[idx]
+        if block.locked:
+            self.report({'WARNING'}, "This block is locked: unlock it to make it again")
+            return {'CANCELLED'}
         self.seed = int(block.seed) if int(block.seed) > 0 else int(s.seed)
         return context.window_manager.invoke_props_dialog(self, width=320)
 
@@ -1255,6 +1482,9 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         idx = self._resolve_block_index(context)
         if idx < 0:
             self.report({'ERROR'}, "No prompt block selected")
+            return {'CANCELLED'}
+        if s.prompt_blocks[idx].locked:
+            self.report({'WARNING'}, "This block is locked: unlock it to make it again")
             return {'CANCELLED'}
 
         if s.is_generating:
@@ -1339,6 +1569,8 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
                     anchor_frames.add(int(f) + fs)
 
         self._target_range = (fs, fe)
+        from . import timeline_overlay
+        timeline_overlay.activity["generating"] = (fs, fe)
         self._request_start_frame = fs
         self._anchor_frames = anchor_frames
         self._result = None
@@ -1368,6 +1600,10 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         except Exception as exc:                          # noqa: BLE001 — surfaced to UI
             self._error = exc
 
+    def cancel(self, context):
+        self._cleanup(context)
+
+    @ends_cleanly
     def modal(self, context, event):
         from . import gltf_to_blender
         from .operators import (
@@ -1506,6 +1742,14 @@ def register_keymaps():
     )
     _addon_keymaps.append((km, kmi))
 
+    # Mouse move — the lane lights up what the mouse is on
+    kmi = km.keymap_items.new(
+        "animatica.timeline_hover",
+        type="MOUSEMOVE",
+        value="ANY",
+    )
+    _addon_keymaps.append((km, kmi))
+
     # Right-click — context menu
     kmi = km.keymap_items.new(
         "animatica.timeline_strip_context_menu",
@@ -1543,6 +1787,8 @@ def unregister_keymaps():
 
 _classes = (
     ANIMATICA_OT_timeline_strip_action,
+    ANIMATICA_OT_timeline_hover,
+    ANIMATICA_OT_timeline_strip_toggle_lock,
     ANIMATICA_OT_timeline_strip_add_click,
     ANIMATICA_OT_add_strip_between_keyframes,
     ANIMATICA_OT_timeline_strip_delete,

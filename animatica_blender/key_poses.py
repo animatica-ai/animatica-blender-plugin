@@ -339,9 +339,14 @@ def _plan_signature(settings, arm, action, scene):
     from . import constraints_ui
 
     blocks = tuple(
-        (int(b.frame_start), int(b.frame_end), bool(b.enabled), bool((b.prompt or "").strip()))
+        (int(b.frame_start), int(b.frame_end), bool(b.enabled), bool((b.prompt or "").strip()),
+         bool(getattr(b, "locked", False)))
         for b in settings.prompt_blocks
     )
+    # With blocks locked, the next Generate makes the stretch under the
+    # playhead (request_builder.generation_blocks), so where it is counts.
+    if any(b[4] for b in blocks):
+        blocks += (("playhead", int(scene.frame_current)),)
     # How many keys there are: a pose keyed with Blender's own I, or by a path
     # that forgets to invalidate, changes it, where the action's name does not
     # -- a frame keyed that way got no ghost and no count until something else
@@ -424,6 +429,56 @@ def plan(scene=None) -> dict:
 def invalidate_plan() -> None:
     """Mark the plan stale; the next reader recomputes it."""
     _plan["dirty"] = True
+
+
+def move_key_pose(scene, src: int, dst: int) -> bool:
+    """Move the key pose on frame ``src`` to ``dst``: every key the artist set
+    on that frame (any channel; not the take's GENERATED samples), with its
+    handles and interpolation. A take's sample already on ``dst`` gives way.
+    Refused (False) onto a frame that holds a key pose of its own."""
+    from . import constraints_ui
+
+    settings = _settings(scene)
+    arm = _target(settings)
+    action = _action(arm)
+    src, dst = int(src), int(dst)
+    if action is None or src == dst:
+        return False
+    authored, _ = constraints_ui.authored_pose_frames(action)
+    if dst in authored or src not in authored:
+        return False
+    moved = 0
+    for fc in constraints_ui.iter_action_fcurves(action):
+        kps = fc.keyframe_points
+        mine = [i for i, k in enumerate(kps) if int(round(k.co.x)) == src and k.type != 'GENERATED']
+        if not mine:
+            continue
+        keep = []
+        for i in mine:
+            k = kps[i]
+            keep.append({
+                "value": k.co.y, "type": k.type, "interpolation": k.interpolation,
+                "easing": k.easing, "hl_type": k.handle_left_type, "hr_type": k.handle_right_type,
+                "hl": (k.handle_left.x - k.co.x, k.handle_left.y - k.co.y),
+                "hr": (k.handle_right.x - k.co.x, k.handle_right.y - k.co.y),
+            })
+        gone = mine + [i for i, k in enumerate(kps) if int(round(k.co.x)) == dst and k.type == 'GENERATED']
+        for i in sorted(set(gone), reverse=True):
+            kps.remove(kps[i], fast=True)
+        for kd in keep[:1]:                 # one key per channel per frame
+            k = kps.insert(dst, kd["value"], options={'FAST'}, keyframe_type=kd["type"])
+            k.interpolation, k.easing = kd["interpolation"], kd["easing"]
+            k.handle_left_type, k.handle_right_type = kd["hl_type"], kd["hr_type"]
+            k.handle_left = (dst + kd["hl"][0], kd["value"] + kd["hl"][1])
+            k.handle_right = (dst + kd["hr"][0], kd["value"] + kd["hr"][1])
+        fc.update()
+        moved += 1
+    if not moved:
+        return False
+    invalidate_plan()
+    clear()                                 # the ghosts re-bake where the pose now is
+    tag_redraw()
+    return True
 
 
 def dropped_frames(scene=None) -> list[int]:

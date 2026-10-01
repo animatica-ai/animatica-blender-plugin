@@ -319,8 +319,8 @@ def solve_drag(arm, frame_index: int, dragged_bone: str, target: Vector,
         raise engine.NotReady(
             "the trail follows fewer than three joints — the poser needs 3+")
     eng = engine.get()
-    return eng.pose(
-        effectors,
+    return _poser().pose_on_ground(
+        eng, arm, effectors,
         bone_lengths=_poser()._bone_lengths(arm),
         ik_refine=bool(bpy.context.scene.ap_use_ik),
         floor=bool(bpy.context.scene.ap_floor),

@@ -401,7 +401,10 @@ def _draw_prompt(layout, settings, has_prompt, in_preview) -> None:
     i = min(max(settings.active_block_index, 0), len(blocks) - 1)
     col = layout.column(align=True)
     label = "Prompt" if len(blocks) == 1 else f"Prompt · block {i + 1} of {len(blocks)}"
-    col.label(text=label)
+    head = col.row(align=True)
+    head.label(text=label)
+    head.prop(blocks[i], "locked", text="", emboss=False,
+              icon='LOCKED' if blocks[i].locked else 'UNLOCKED')
     col.prop(blocks[i], "prompt", text="", placeholder="e.g. a person waves hello")
     sub = col.row()
     sub.active = False
@@ -1009,6 +1012,10 @@ class ANIMATICA_PT_settings_viewport(AnimaticaPanelBase, Panel):
             note.label(text=f"Refreshing after {held}")
         parts.operator("animatica.key_poses_refresh", text="Refresh Ghosts", icon='FILE_REFRESH')
 
+        col = layout.column()
+        col.use_property_split = True
+        col.use_property_decorate = False
+        col.prop(settings, "show_toolbar", text="Floating Toolbar")
         arm = properties._live_armature(settings.target_armature)
         if arm is not None:
             col = layout.column()
