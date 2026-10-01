@@ -521,11 +521,12 @@ def root_path_on(settings) -> bool:
 def timeline_ticks(scene) -> tuple[list[tuple[int, bool]], tuple[int, int]]:
     """``([(frame, in_range), …], window)`` for the timeline lane overlay.
 
-    Returns nothing while the feature is switched off — the lane should not
-    grow marks the artist did not ask for.
+    Whatever the viewport shows: the ghost switch is about the viewport (the
+    poses, the trail, their numbers), and the timeline's marks are where the
+    key poses are -- what the next take is asked to hit, and the handles to
+    retime them by. Hidden with the ghosts, they went too.
     """
-    settings = _settings(scene)
-    if not overlay_on(settings):
+    if _settings(scene) is None:
         return [], (0, 0)
     p = plan(scene)
     return [(f, p["entries"][f]["in_range"]) for f in p["frames"]], p["range"]
