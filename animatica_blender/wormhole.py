@@ -36,6 +36,8 @@ MAX_PARTS = 96
 HANDLE_R = 4.5             # logical px
 HIT = 5.0
 DEPTH = 0.6                # of the spacing, into the view per slice
+RING_MIN = 1.2             # m: the loop's ring, never smaller than this across its middle
+RING_SPACING = 1.6         # the ring's slices this many Spacings apart (a body is wider than a step)
 
 
 def _label(context, bone) -> str:
@@ -122,7 +124,9 @@ def offset_of(context, s):
         # a zoetrope's drum, seen from just above
         period = span[1] - span[0]
         slices = max(4, len(key_poses.onion_frames(context.scene, s)) + 1)
-        radius = max(0.45, spacing * slices / (2 * math.pi))
+        # room for a body: a ghost a slice's width (1.6 x Spacing) from the
+        # next round the ring, and never tighter than a character's reach
+        radius = max(RING_MIN, RING_SPACING * spacing * slices / (2 * math.pi))
 
         # each slice spins in place: its travel along the ground taken out, so
         # a walking cycle turns round the character instead of trailing off
