@@ -1004,6 +1004,15 @@ class AnimaticaSettings(PropertyGroup):
         default=6, min=0, max=60,
         update=lambda self, context: _redraw_3d_views(),
     )
+    field_pose: BoolProperty(
+        name="Pose in Words",
+        description=(
+            "The bar's field describes this frame's pose, and Generate Pose makes it and keys it "
+            "at the playhead. Off: the field says what happens in the block, and Generate makes the take"
+        ),
+        default=False, options={'SKIP_SAVE'},
+        update=lambda self, context: _redraw_3d_views(),
+    )
     edit_strength: FloatProperty(
         name="Intensity",
         description=(

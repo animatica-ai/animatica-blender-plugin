@@ -1386,7 +1386,24 @@ def _overlay_gate(context):
     settings = _settings(context.scene)
     if not overlay_on(settings):
         return None
+    if _target(settings) is None:
+        # no character (deleted, or none picked): nothing to draw ghosts of --
+        # and what was cached of the last one is let go
+        _forget_ghosts()
+        return None
     return settings, plan(context.scene)
+
+
+def _forget_ghosts() -> None:
+    """Drop every cached ghost (the GPU batches with them)."""
+    if _onion["cache"] or _onion["stale"] or _onion["live"] or _onion["seed"]:
+        _onion.update(cache={}, stale={}, live={}, seed={}, sig=None, dirty=True)
+    if _ghosts.get("frames"):
+        _ghosts["frames"] = []
+        _ghosts["ghosts"] = {}
+        _ghosts["dirty"] = True
+    if _trail.get("frames"):
+        _trail.update(frames=[], points={}, bones=[], dirty=True)
 
 
 def _stale_ok(cache, arm) -> bool:

@@ -261,10 +261,15 @@ def _bar_items(context, arm) -> list:
                  badge=bool(_waypoint_hint(context))),
             Item("pin", "pin", "animatica.add_effector_target", enabled=can("pin"), group=3)]
     # 4 what happens: the block's prompt, and a pose of this frame in words at its end
-    out += [Item("prompt", "", "animatica.toolbar_prompt_here", label=_prompt_label(s, here),
-                 enabled=can("prompt"), group=4, width="field"),
-            Item("pose_text", "mode_pose", "animatica.toolbar_pose_prompt", on=_typing_pose(),
-                 enabled=can("describe") and not s.is_generating, group=4, width="field_btn")]
+    posing = bool(s.field_pose) and can("describe")
+    if posing:
+        out.append(Item("prompt", "", "animatica.toolbar_pose_prompt", label=(s.last_pose_prompt or "").strip(),
+                        group=4, width="field"))
+    else:
+        out.append(Item("prompt", "", "animatica.toolbar_prompt_here", label=_prompt_label(s, here),
+                        enabled=can("prompt"), group=4, width="field"))
+    out.append(Item("pose_text", "mode_pose", "animatica.toolbar_field_pose", on=posing or _typing_pose(),
+                    enabled=can("describe") and not s.is_generating, group=4, width="field_btn"))
     # 5-7 the take: Generate, or the take at work, or the take to judge
     kind, text, op = gate(context)
     busy = s.is_generating or s.is_previewing
@@ -279,6 +284,12 @@ def _bar_items(context, arm) -> list:
         out.append(_working(s))
     elif review:
         out += review
+    elif posing:
+        # the field describes this frame's pose: its Generate makes that
+        why = _describe_blocker(context)
+        words = (s.last_pose_prompt or "").strip()
+        out.append(Item("generate_pose", "generate", "animatica.toolbar_pose_generate",
+                        label="Generate Pose", primary=bool(words) and not why, enabled=not why, group=5))
     else:
         # blocked: the button says what is missing (short enough to read), the tooltip the rest
         if kind == "blocked" and len(text) <= 24:
@@ -811,7 +822,7 @@ def _draw_field(it, rect, u, size, hot, first, last, ground=None):
     x0, y0, x1, y1 = rect
     s = bpy.context.scene.animatica
     # the one field: the block's prompt, or -- typed from its pose button -- this frame's pose
-    pose = edit["active"] and edit["index"] == POSE_FIELD
+    pose = (edit["active"] and edit["index"] == POSE_FIELD) or it.op == "animatica.toolbar_pose_prompt"
     typing = edit["active"] and edit["index"] in (POSE_FIELD, block_at(s, bpy.context.scene.frame_current))
     box = ground or rect
     st.rounded(box, RADIUS * u, (0.07, 0.07, 0.075, 1.0 if it.enabled else 0.45), left=first, right=last)
@@ -960,7 +971,7 @@ TIPS = {
     "add_char": ("Add a Character", "A ready-made rigged character to animate"),
     "use_rig": ("Use Selected Rig", "Animate the armature you have selected (or the one its mesh is bound to)"),
     "examples": ("Examples", "Open an example scene, ready to Generate"),
-    "pose_text": ("Pose This Frame in Words", "Describe a pose and it is made and keyed at the playhead. Why: a key pose you can say is quicker to type than to pose"),
+    "pose_text": ("Pose This Frame in Words", "On: the field describes this frame's pose and Generate Pose makes it, keyed at the playhead. Off: back to the take's prompt and Generate. Why: a key pose you can say is quicker to type than to pose"),
     "pose_prompt": ("Describe a Pose", "A pose in words, keyed at the playhead. Click and type; Enter makes it. Why: a starting pose in seconds, to refine with the handles"),
     "generate_pose": ("Generate Pose", "Make the pose you described and key it at the playhead. Why: a starting pose in seconds, to refine with the handles"),
     "keep": ("Key This Frame", "Keep the take's pose here as a key pose. Why: the next Redo is steered through it, so a good moment survives the retry"),
@@ -1397,6 +1408,26 @@ class ANIMATICA_OT_toolbar_pose_prompt(bpy.types.Operator):
         return bpy.ops.animatica.bar_prompt_edit('INVOKE_DEFAULT', index=POSE_FIELD)
 
 
+class ANIMATICA_OT_toolbar_field_pose(bpy.types.Operator):
+    bl_idname = "animatica.toolbar_field_pose"
+    bl_label = "Pose This Frame in Words"
+    bl_description = ("The field describes this frame's pose, and Generate becomes Generate Pose. "
+                      "Click again to go back to the take")
+    bl_options = {'INTERNAL'}
+
+    def invoke(self, context, event):
+        s = context.scene.animatica
+        s.field_pose = not s.field_pose
+        _redraw_all(context)
+        if s.field_pose:
+            # straight to typing it
+            return bpy.ops.animatica.bar_prompt_edit('INVOKE_DEFAULT', index=POSE_FIELD)
+        from .timeline_overlay import inline_edit_state as edit
+        if edit["active"] and edit["index"] == POSE_FIELD:
+            edit["active"] = False
+        return {'FINISHED'}
+
+
 class ANIMATICA_OT_toolbar_pose_generate(bpy.types.Operator):
     bl_idname = "animatica.toolbar_pose_generate"
     bl_label = "Generate Pose"
@@ -1740,7 +1771,7 @@ _classes = (ANIMATICA_OT_toolbar_toggle, ANIMATICA_OT_toolbar_generate, ANIMATIC
             ANIMATICA_OT_toolbar_autoposer, ANIMATICA_OT_toolbar_pose_prompt,
 ANIMATICA_OT_toolbar_autokey, ANIMATICA_OT_toolbar_overlay,
             ANIMATICA_OT_toolbar_wormhole, ANIMATICA_PT_overlay,
-            ANIMATICA_OT_toolbar_pose_generate, ANIMATICA_PT_options,
+            ANIMATICA_OT_toolbar_pose_generate, ANIMATICA_OT_toolbar_field_pose, ANIMATICA_PT_options,
             ANIMATICA_MT_toolbar_models, ANIMATICA_OT_toolbar_model,
             ANIMATICA_OT_toolbar_menu, ANIMATICA_OT_use_selected_rig,
             ANIMATICA_OT_toolbar_prompt_here, ANIMATICA_OT_bar_prompt_edit, ANIMATICA_OT_bar_click,
