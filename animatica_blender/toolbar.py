@@ -975,35 +975,35 @@ class ANIMATICA_GGT_toolbar(bpy.types.GizmoGroup):
 
 #: what each button does: a title, then a line on it (the tooltip)
 TIPS = {
-    "autopose": ("Autopose", "Drag a hand, a foot, the hips or the head and the body follows; it adds nothing to your rig. Why: a believable pose in seconds, from where the limbs should be, not bone by bone"),
-    "picker": ("Handle Picker", "Your character with its handles: pick them, switch them on or off, set their slack. Why: a handle that is on holds its joint while you pose the rest"),
-    "key_prev": ("Previous Key Pose", "Jump to your key pose before the playhead (the take's own keys are skipped; Down Arrow stops on every key). Why: animators work key to key, checking each against its neighbours"),
-    "set_key": ("Set Key Pose  (I)", "Key the whole pose at this frame. Why: the take is steered through every key pose; key the moments that carry the action (a contact, a peak, a landing) and the model fills between"),
-    "key_next": ("Next Key Pose", "Jump to your key pose after the playhead (the take's own keys are skipped; Up Arrow stops on every key). Why: animators work key to key, checking each against its neighbours"),
-    "auto_key": ("Auto Keying", "Blender's record button. Why: on, every pose you make is kept; off, you choose what to keep with I"),
-    "onion": ("Onion Skin", "The motion around this frame as ghosts: green before, blue after. Why: a key pose has to fit what comes before and after it. Mode, opacity, colours: Pose Options"),
-    "reach": ("Reach \u00b7 Intensity", "How far an edit carries to the frames around it, and how strongly they follow. Drag sideways for Reach (frames either side), up or down for Intensity. Why: a wider reach makes a smooth change through the motion, a narrow one a local fix; the ghosts, the Timeline and the next edit follow as you drag"),
-    "wormhole": ("Zoetrope", "The onion skin spread out into a tunnel through time: earlier to the left, later to the right. Why: frames that overlap become readable side by side, and each can be posed without moving the playhead"),
-    "trail": ("Motion Trail", "The path the hands, feet, hips and head take. Why: good motion moves in arcs; the trail shows where it does not. Click a point, then drag: the frames around it follow"),
-    "smooth": ("Smooth Motion Here", "Even out the picked joint's path around the picked point. Why: a generated take can wobble; this fixes the arc without making a new take"),
-    "waypoint": ("Add Waypoint", "Where the character should be at this frame. Why: a prompt can say \u201cto the door\u201d but not where the door is; a waypoint does"),
-    "pin": ("Pin a Hand or Foot", "Hold a hand or foot to a target, like a rail or a door handle. Why: contact with the world stays put instead of sliding"),
-    "prompt": ("Prompt", "What happens in the block under the playhead. Click and type. Why: one action per block (\u201cwalks to the door\u201d, then \u201csits\u201d) is followed more closely than several in one"),
-    "generate": ("Generate", "Make the take. Why: one motion that goes through your key poses, follows your prompts and ends at your waypoints"),
-    "working": ("Cancel", "Stop the take being made"),
-    "redo": ("Redo", "Make the block under the playhead again (Shift: the whole take). Why: a different take, still steered through your key poses; Key This Frame first to keep a good moment"),
-    "reject": ("Discard", "Throw this take away and go back to what you had. Why: your key poses and prompts stay; change one and Generate again. (There is no Accept: the take is yours, and fine-tuning it keeps it)"),
-    "var_prev": ("Previous Version", "Show the take's previous version"),
-    "var_next": ("Next Version", "Show the take's next version"),
-    "options": ("Take Options", "Loop, in place, versions, and the Reach of a drag. Why: versions give you several takes to choose from in one go"),
-    "add_char": ("Add a Character", "A ready-made rigged character to animate"),
+    "autopose": ("Autopose", "Drag a hand, a foot, the hips or the head to pose the whole body. Nothing is added to your rig, and you don't have to pose bone by bone"),
+    "picker": ("Handle Picker", "Your character with its handles. Pick a handle, switch it on or off, or set its slack. A handle that is on holds its joint in place while you pose the rest"),
+    "key_prev": ("Previous Key Pose", "Jump to your previous key pose before the playhead. Keys inside the take are skipped (Down Arrow stops on every key)"),
+    "set_key": ("Set Key Pose  (I)", "Key the whole pose at this frame. Generate passes through every key pose, so key the moments that matter, like a foot contact, a peak or a landing, and the model fills in between"),
+    "key_next": ("Next Key Pose", "Jump to your next key pose after the playhead. Keys inside the take are skipped (Up Arrow stops on every key)"),
+    "auto_key": ("Auto Keying", "Blender's record button. When it is on, every pose you make is keyed. When it is off, press I to key the poses you want to keep"),
+    "onion": ("Onion Skin", "Show the motion around this frame as ghosts, green before and blue after, so you can check that a key pose fits what comes before and after it. Set the mode, opacity and colours in Pose Options"),
+    "reach": ("Reach \u00b7 Intensity", "How far an edit spreads to the frames around it, and how strongly they follow. Drag sideways to set Reach (frames on either side) and up or down to set Intensity. A wide reach makes a smooth change through the motion, a narrow one makes a local fix. The ghosts and the Timeline update as you drag, and your next edit uses the new values"),
+    "wormhole": ("Zoetrope", "Spread the onion skin out in space, earlier frames to the left and later ones to the right. Frames that overlap become readable side by side, and you can pose each one without moving the playhead"),
+    "trail": ("Motion Trail", "Show the path of the hands, feet, hips and head. Good motion moves in arcs, and the trail shows where it doesn't. Click a point on it and drag, and the frames around it follow"),
+    "smooth": ("Smooth Motion Here", "Even out the picked joint's path around the picked point. Use it when a generated take wobbles. It fixes the arc without making a new take"),
+    "waypoint": ("Add Waypoint", "Mark where the character should be at this frame. A prompt can say \u201cto the door\u201d, but only a waypoint says where the door is"),
+    "pin": ("Pin a Hand or Foot", "Hold a hand or foot to a target, like a rail or a door handle, so the contact stays put instead of sliding"),
+    "prompt": ("Prompt", "What happens in the block under the playhead (a block is a stretch of the timeline with its own prompt). Click and type. One action per block, like \u201cwalks to the door\u201d then \u201csits\u201d, is followed more closely than several in one"),
+    "generate": ("Generate", "Make the take, the generated motion. It passes through your key poses, follows your prompts and ends at your waypoints"),
+    "working": ("Cancel", "Stop generating the take"),
+    "redo": ("Redo", "Make the block under the playhead again (Shift: the whole take). The new take still passes through your key poses. To keep a good moment, use Key This Frame first"),
+    "reject": ("Discard", "Throw this take away and go back to what you had. Your key poses and prompts stay. There is no Accept button: a take is kept as soon as you start fine-tuning it"),
+    "var_prev": ("Previous Version", "Show the previous version of the take"),
+    "var_next": ("Next Version", "Show the next version of the take"),
+    "options": ("Take Options", "Set Loop, In Place, versions and the Reach of a drag. With versions, one Generate gives you several takes to choose from"),
+    "add_char": ("Add a Character", "Add a ready-made rigged character to animate"),
     "use_rig": ("Use Selected Rig", "Animate the armature you have selected (or the one its mesh is bound to)"),
     "examples": ("Examples", "Open an example scene, ready to Generate"),
-    "loop": ("Loop", "The next take as a seamless cycle: its last frame runs into its first and it repeats. Why: a walk, a run or an idle for a game has to come round without a seam; edits on it keep it one, and the zoetrope shows it as a ring"),
-    "pose_text": ("Pose This Frame in Words", "On: the field describes this frame's pose and Generate Pose makes it, keyed at the playhead. Off: back to the take's prompt and Generate. Why: a key pose you can say is quicker to type than to pose"),
-    "pose_prompt": ("Describe a Pose", "A pose in words, keyed at the playhead. Click and type; Enter makes it. Why: a starting pose in seconds, to refine with the handles"),
-    "generate_pose": ("Generate Pose", "Make the pose you described and key it at the playhead. Why: a starting pose in seconds, to refine with the handles"),
-    "keep": ("Key This Frame", "Keep the take's pose here as a key pose. Why: the next Redo is steered through it, so a good moment survives the retry"),
+    "loop": ("Loop", "Make the next take a seamless cycle: its last frame runs into its first and it repeats. Use it for a walk, run or idle in a game. Edits keep it a loop, and the zoetrope shows it as a ring"),
+    "pose_text": ("Pose This Frame in Words", "When on, describe this frame's pose in the field and Generate Pose makes it, keyed at the playhead. When off, the field goes back to the take's prompt and Generate. A pose you can describe is often quicker to type than to pose"),
+    "pose_prompt": ("Describe a Pose", "Describe a pose in words to key it at the playhead. Click and type, then press Enter. It gives you a starting pose to refine with the handles"),
+    "generate_pose": ("Generate Pose", "Make the pose you described and key it at the playhead. You can then refine it with the handles"),
+    "keep": ("Key This Frame", "Keep the take's pose at this frame as a key pose. The next Redo passes through it, so the moment stays when you retry"),
 }
 
 
@@ -1017,9 +1017,9 @@ def tip(context, it) -> str:
         arm = properties_live(s)
         from . import handles
         if arm is not None and handles.tool_active(context):
-            title, line = "Autopose (on)", "Back to Blender's Select tool; the pose and keys stay"
+            title, line = "Autopose (on)", "Go back to Blender's Select tool. The pose and keys stay"
     elif it.id == "loop" and not it.enabled:
-        line = "A loop is one block: remove or merge the others to make one. Why: the model samples one block as a cycle"
+        line = "A loop is a single block, because the model makes one block as a cycle. Remove or merge the other blocks first"
     elif it.id == "generate_pose":
         why = _describe_blocker(context)
         if why:
@@ -1029,23 +1029,24 @@ def tip(context, it) -> str:
                     f"{context.scene.frame_current}" if (s.last_pose_prompt or "").strip()
                     else "Describe the pose in the field first")
     elif it.id == "pose_prompt" and it.label:
-        line = f"\u201c{it.label}\u201d \u2014 click to change it; Enter makes it"
+        line = f"\u201c{it.label}\u201d. Click to change it, then press Enter to make it"
     elif it.id == "pose_prompt" and not it.enabled:
         line = _describe_blocker(context) or line
     elif it.id == "options" and pose_mode_on(context):
-        title, line = "Pose Options", ("Onion skin and zoetrope, and whether a described pose stands on the "
-                                       "ground. Why: onion skins show whether this pose fits the motion "
-                                       "around it; standing on the ground stops a described pose floating")
+        title, line = "Pose Options", ("Onion skin, zoetrope, and whether a described pose stands on the "
+                                       "ground. Onion skins show whether this pose fits the motion around "
+                                       "it. Standing on the ground keeps a described pose from floating")
     elif it.id in ("auto_key", "onion", "trail", "wormhole"):
         title += " (on)" if it.on else " (off)"
     elif it.id == "picker":
         title += " (open)" if s.show_picker else ""
     elif it.id == "prompt":
         text = it.label
-        line = (f"\u201c{text}\u201d \u2014 click to change it" if text
+        line = (f"\u201c{text}\u201d. Click to change it. One action per block is followed more closely "
+                "than several in one" if text
                 else "Say what happens in the block under the playhead. Click and type")
     elif it.id == "smooth" and not it.enabled:
-        line = "Click a point on the motion trail first, then this evens out the motion around it"
+        line = "Click a point on the motion trail first. This then evens out the motion around it"
     elif it.id == "keep" and not it.enabled:
         line = "This frame is already a key pose"
     elif it.id == "waypoint" and it.badge:
@@ -1053,14 +1054,14 @@ def tip(context, it) -> str:
     elif it.id == "accept":
         from . import key_poses
         n = len(key_poses.take_keys(context.scene))
-        line = f"Keep this take: it goes through your {n} key pose{'s' if n != 1 else ''}" if n else line
+        line = f"Keep this take. It passes through your {n} key pose{'s' if n != 1 else ''}" if n else line
     elif it.id in ("generate", "connect"):
         kind, text, _op = gate(context)
         from . import key_poses
         n = len(key_poses.take_keys(context.scene))
         if kind == "ready":
-            line = (f"Make the take, steered through your {n} key pose{'s' if n != 1 else ''}"
-                    if n else "No key poses yet: the model decides every pose. Make some in Pose first")
+            line = (f"Make the take. It passes through your {n} key pose{'s' if n != 1 else ''}"
+                    if n else "There are no key poses yet, so the model decides every pose. Press I with the Autopose tool to key one")
             hint = _waypoint_hint(context)
             if hint:
                 line += "\n" + hint
@@ -1069,9 +1070,9 @@ def tip(context, it) -> str:
         elif kind == "model":
             title, line = "Pick a Model", blockers(context)[0]
         elif kind == "sign_in":
-            title, line = "Sign in to Generate", "Sign in to your Animatica account, then the take is made"
+            title, line = "Sign in to Generate", "Sign in to your Animatica account to make the take"
         elif kind == "offline":
-            title, line = "Allow Online Access", "Animatica makes the motion on its servers; this lets Blender reach them"
+            title, line = "Allow Online Access", "Animatica makes the motion on its servers. This lets Blender connect to them"
         elif kind == "connect":
             title, line = "Connect", "Connect to the Animatica server"
     elif it.id == "hint":
@@ -1079,16 +1080,16 @@ def tip(context, it) -> str:
         h = guidance.next_step(context)
         title, line = "Next step", (h["why"] if h else "")
         if it.op == "animatica.hint_why":
-            line += "\nClick: the reason, in the status bar"
+            line += "\nClick to show the reason in the status bar"
         else:
-            line += "\nClick: do it"
+            line += "\nClick to do it"
     elif it.id == "hint_close":
-        title, line = "Hide this hint", "For the rest of the session. Hints on or off: Options"
+        title, line = "Hide this hint", "Hide it for the rest of the session. Turn hints on or off in Options"
     elif it.id == "model":
         title = "Model"
-        line = f"{s.model_id} on {mmcp_client.get_mmcp_url()}. Click to pick another, or change the server"
+        line = f"{s.model_id} on {mmcp_client.get_mmcp_url()}. Click to pick another model or change the server"
     elif it.id == "fetching":
-        title, line = "Fetching the Character", "Downloading it once; it is kept for next time"
+        title, line = "Fetching the Character", "Downloading the character. This happens once, and it is kept for next time"
     base_why = TIPS.get(it.id, ("", ""))[1].partition(" Why: ")[2]
     if base_why and "Why:" not in line:
         # a state rewrote the line (the prompt, a greyed button): the reason stays
@@ -1106,7 +1107,7 @@ def _waypoint_hint(context) -> str:
     s = context.scene.animatica
     text = " " + " ".join((b.prompt or "").lower() for b in s.prompt_blocks) + " "
     if any(p in text for p in _PLACES) and not list(waypoints.waypoints(context.scene)):
-        return "It goes somewhere: a Waypoint says where"
+        return "The prompt names a place. Add a Waypoint to say where it is"
     return ""
 
 
@@ -1144,14 +1145,14 @@ class ANIMATICA_OT_bar_click(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 
 _TOGGLE_TIPS = {
-    "loop": "Loop: the next take is a seamless cycle, its last frame running into its first. "
-            "One block; walk and run cycles work best at two to four seconds. Edits on a loop "
-            "keep it a loop, and the zoetrope turns into a ring",
-    "show_picker": "Handle picker: the character in T-pose with the Autoposer's handles on it. "
-                   "Pick them, switch them on or off, set their slack, add or remove them",
-    "auto_key_pose": "Auto-key: key the pose as you pose it. Off: only Set Key writes one",
+    "loop": "Make the next take a seamless cycle, its last frame running into its first. "
+            "A loop is a single block. Walk and run cycles work best at two to four seconds. "
+            "Edits keep it a loop, and the zoetrope turns into a ring",
+    "show_picker": "Show the character in T-pose with the Autoposer's handles on it. "
+                   "Pick handles, switch them on or off, set their slack, or add and remove them",
+    "auto_key_pose": "Key the pose as you pose it. When off, only Set Key adds a key",
     "key_pose_overlay": "Show the key poses, the trail and the frame numbers in the viewport. "
-                        "Off to judge the motion on its own",
+                        "Turn it off to judge the motion on its own",
 }
 
 
@@ -1184,7 +1185,7 @@ class ANIMATICA_OT_toolbar_generate(bpy.types.Operator):
     @classmethod
     def description(cls, context, properties):
         why = blockers(context)
-        return why[0] if why else "Make the take: motion from your prompts, key poses and waypoints"
+        return why[0] if why else "Make the take, motion from your prompts, key poses and waypoints"
 
     def invoke(self, context, event):
         # the take being judged is kept first: Generate makes the rest
@@ -1194,7 +1195,7 @@ class ANIMATICA_OT_toolbar_generate(bpy.types.Operator):
 
 
 class ANIMATICA_OT_toolbar_redo(bpy.types.Operator):
-    """Redo the block under the playhead. Shift: the whole take"""
+    """Make the block under the playhead again. Hold Shift to redo the whole take"""
     bl_idname = "animatica.toolbar_redo"
     bl_label = "Redo"
     bl_options = {'INTERNAL'}
@@ -1226,7 +1227,7 @@ class ANIMATICA_MT_toolbar_models(bpy.types.Menu):
 
 
 class ANIMATICA_OT_toolbar_model(bpy.types.Operator):
-    """The model that makes the takes. Click to pick another, or change the server"""
+    """The model that makes the takes. Click to pick another model or change the server"""
     bl_idname = "animatica.toolbar_model"
     bl_label = "Model"
     bl_options = {'INTERNAL'}
@@ -1236,7 +1237,7 @@ class ANIMATICA_OT_toolbar_model(bpy.types.Operator):
         from . import mmcp_client
         s = context.scene.animatica
         return (f"Model: {s.model_id}, on {mmcp_client.get_mmcp_url()}.\n"
-                "Click to pick another model, or change the server")
+                "Click to pick another model or change the server")
 
     def invoke(self, context, event):
         # The bar acts on the press. A menu opened then closed again on the
@@ -1259,8 +1260,8 @@ class ANIMATICA_OT_toolbar_model(bpy.types.Operator):
 
 
 _MENU_TIPS = {
-    "ANIMATICA_MT_examples": "Open an example scene: a character, prompts and poses, ready to Generate",
-    "ANIMATICA_PT_options": "How the next take comes back, how far an edit carries, the onion skin and the trail",
+    "ANIMATICA_MT_examples": "Open an example scene with a character, prompts and poses, ready to Generate",
+    "ANIMATICA_PT_options": "Settings for the next take, how far an edit spreads, the onion skin and the trail",
 }
 
 
@@ -1371,7 +1372,7 @@ class ANIMATICA_PT_options(_Popover, bpy.types.Panel):
 
 
 class ANIMATICA_OT_toolbar_wormhole(bpy.types.Operator):
-    """The zoetrope: the onion skin spread out into a tunnel you can pose"""
+    """Spread the onion skin out in space so you can see and pose each frame"""
     bl_idname = "animatica.toolbar_wormhole"
     bl_label = "Zoetrope"
     bl_options = {'INTERNAL'}
@@ -1393,7 +1394,7 @@ class ANIMATICA_OT_toolbar_wormhole(bpy.types.Operator):
 
 
 class ANIMATICA_OT_toolbar_autokey(bpy.types.Operator):
-    """Blender's Auto Keying: on, posing keys itself"""
+    """Turn Blender's Auto Keying on or off. When on, every pose you make is keyed"""
     bl_idname = "animatica.toolbar_autokey"
     bl_label = "Auto Keying"
     bl_options = {'INTERNAL'}
@@ -1410,7 +1411,7 @@ class ANIMATICA_OT_toolbar_autokey(bpy.types.Operator):
 
 
 class ANIMATICA_OT_toolbar_overlay(bpy.types.Operator):
-    """Show or hide part of what the viewport draws: the onion skins, or the trail"""
+    """Show or hide the onion skins or the motion trail in the viewport"""
     bl_idname = "animatica.toolbar_overlay"
     bl_label = "Show"
     bl_options = {'INTERNAL'}
@@ -1438,7 +1439,7 @@ class ANIMATICA_OT_toolbar_overlay(bpy.types.Operator):
 class ANIMATICA_OT_toolbar_pose_prompt(bpy.types.Operator):
     bl_idname = "animatica.toolbar_pose_prompt"
     bl_label = "Describe a Pose"
-    bl_description = "A pose in words, keyed at the playhead. Click and type; Enter makes it"
+    bl_description = "Describe a pose in words to key it at the playhead. Click and type, then press Enter"
     bl_options = {'INTERNAL'}
 
     def invoke(self, context, event):
@@ -1448,7 +1449,7 @@ class ANIMATICA_OT_toolbar_pose_prompt(bpy.types.Operator):
 class ANIMATICA_OT_toolbar_field_pose(bpy.types.Operator):
     bl_idname = "animatica.toolbar_field_pose"
     bl_label = "Pose This Frame in Words"
-    bl_description = ("The field describes this frame's pose, and Generate becomes Generate Pose. "
+    bl_description = ("Use the field to describe this frame's pose. Generate becomes Generate Pose. "
                       "Click again to go back to the take")
     bl_options = {'INTERNAL'}
 
@@ -1529,14 +1530,14 @@ def _describe_blocker(context) -> str:
         return "Connect to the server first"
     if "pose" not in (caps.get("supported_segments") or []):
         return (f"The model '{s.model_id}' on {mmcp_client.get_mmcp_url()} can't make a pose "
-                f"from words; pick a model (or a server) that can")
+                f"from words. Pick a model or server that can")
     if bpy.ops.animatica.generate_pose.poll():
         return ""
     return "Not available right now"
 
 
 class ANIMATICA_OT_toolbar_autoposer(bpy.types.Operator):
-    """Autoposer: drag hands, feet and hips and the body follows. Again to stop it"""
+    """Drag a hand, a foot or the hips to pose the whole body. Click again to stop"""
     bl_idname = "animatica.toolbar_autoposer"
     bl_label = "Autopose Tool"
     bl_options = {'INTERNAL', 'UNDO'}
@@ -1570,15 +1571,15 @@ class ANIMATICA_OT_toolbar_autoposer(bpy.types.Operator):
                 self, event, title="Download the Autoposer?",
                 message="It runs on your computer, so it is downloaded once (about 225 MB). "
                         "Click the Autoposer again when it is done.",
-                confirm_text="Download", icon='IMPORT')
+                confirm_text="Download", icon='INFO')  # invoke_confirm takes NONE, WARNING, QUESTION, ERROR or INFO only
         cleaned = False
         why = handles.activate(context)
         if why:
             self.report({'WARNING'}, why)
             return {'CANCELLED'}
         keyed = context.scene.tool_settings.use_keyframe_insert_auto
-        self.report({'INFO'}, "Autopose: drag a hand, foot, the hips or the head"
-                    + ("; Auto Keying keys each pose" if keyed else "; I keeps the pose"))
+        self.report({'INFO'}, "Autopose: drag a hand, a foot, the hips or the head"
+                    + (". Auto Keying keys each pose" if keyed else ". Press I to key the pose"))
         return {'FINISHED'}
 
     def execute(self, context):
@@ -1598,8 +1599,8 @@ class ANIMATICA_OT_toolbar_prompt_here(bpy.types.Operator):
         here = block_at(s, context.scene.frame_current)
         text = (s.prompt_blocks[here].prompt or "").strip() if here >= 0 else ""
         if text:
-            return f"\u201c{text}\u201d \u2014 click to change what happens in this block"
-        return "Say what happens here: type the prompt of the block under the playhead, or of a new block from it"
+            return f"\u201c{text}\u201d. Click to change what happens in this block"
+        return "Say what happens here. Type the prompt for the block under the playhead, or start a new block here"
 
     def invoke(self, context, event):
         from .timeline_overlay import DEFAULT_BLOCK_LENGTH, get_sorted_blocks
@@ -1647,8 +1648,8 @@ from .timeline_operators import InlinePromptEditing  # noqa: E402
 
 
 class ANIMATICA_OT_bar_prompt_edit(InlinePromptEditing, bpy.types.Operator):
-    """Type the prompt in the bar's field: the Timeline block's own editing,
-    driven from the 3D view"""
+    """Type the prompt in the bar's field. It edits the same block as the Timeline,
+    from the 3D view"""
     bl_idname = "animatica.bar_prompt_edit"
     bl_label = "Type the Prompt"
     bl_options = {"REGISTER", "UNDO", "INTERNAL"}

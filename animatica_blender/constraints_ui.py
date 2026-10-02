@@ -390,8 +390,8 @@ class ANIMATICA_OT_add_root_path(Operator):
     bl_label = "Add Root Path"
     bl_description = (
         "Create a Bezier curve on the floor plane that the character will follow. "
-        "Sample density and 'follow direction' (heading) are editable on the curve "
-        "object's properties"
+        "You can change the sampling and Follow Direction later in the "
+        "curve object's properties"
     )
     # Note: no ``UNDO`` flag. With UNDO enabled on a slotted-action scene,
     # Blender's undo snapshot diff was observed to drop unreferenced fcurves
@@ -402,12 +402,12 @@ class ANIMATICA_OT_add_root_path(Operator):
 
     match_direction: bpy.props.BoolProperty(
         name="Follow Direction",
-        description="Derive heading_radians from the curve tangent so the character faces along the path",
+        description="Turn the character to face along the curve as it walks the path",
         default=True,
     )
     sample_density: bpy.props.IntProperty(
         name="Sample Every N Frames",
-        description="One root_path constraint frame per N timeline frames",
+        description="Send one point of the path for every N frames of the timeline",
         default=10, min=1, max=60,
     )
 
@@ -716,8 +716,8 @@ class ANIMATICA_OT_add_effector_target(Operator):
     bl_idname = "animatica.add_effector_target"
     bl_label = "Add Effector Pin"
     bl_description = (
-        "Pin a named joint to a moving Blender Empty. Each location keyframe "
-        "on the empty becomes one effector_target constraint frame"
+        "Pin a joint to a moving Blender Empty. The joint is asked to reach the "
+        "Empty at each of the Empty's location keyframes"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -727,8 +727,8 @@ class ANIMATICA_OT_add_effector_target(Operator):
             ('EFFECTOR', "End effector",
              "The hand or foot joints the solver is meant to pin"),
             ('BONE', "Any bone",
-             "Pick a bone yourself — for rigs whose naming the addon cannot "
-             "match, or to pin something other than a limb tip"),
+             "Pick a bone yourself. Use this when the addon cannot match your "
+             "rig's bone names, or to pin something other than a hand or foot"),
         ],
         default='EFFECTOR',
     )
@@ -740,7 +740,7 @@ class ANIMATICA_OT_add_effector_target(Operator):
 
     bone: bpy.props.StringProperty(
         name="Bone",
-        description="Bone this pin constrains. Must be one the request sends",
+        description="The bone to pin. It must be a bone the addon sends to the server",
     )
 
     def invoke(self, context, event):
@@ -758,8 +758,8 @@ class ANIMATICA_OT_add_effector_target(Operator):
             # Say up front which bones are legal, rather than letting the
             # user pick a control bone and meet a build error later.
             if self.bone and self.bone not in _request_joint_names(arm):
-                col.label(text="Not sent in the request — see below", icon='ERROR')
-                col.label(text="control bones are not part of the skeleton")
+                col.label(text="This bone is not sent to the server", icon='ERROR')
+                col.label(text="Control bones are not part of the skeleton")
         else:
             col.prop(self, "joint")
 
@@ -782,8 +782,8 @@ class ANIMATICA_OT_add_effector_target(Operator):
                     {'ERROR'},
                     f"{chosen!r} is not part of the skeleton this rig sends, so "
                     f"the server would never see the pin"
-                    + (f" — try {hint!r}" if hint else
-                       " (control and helper bones are excluded; pin a deform bone)"),
+                    + (f". Try {hint!r}" if hint else
+                       ". Control and helper bones are left out, so pin a deform bone"),
                 )
                 return {'CANCELLED'}
             joint_name = chosen
@@ -838,7 +838,7 @@ class ANIMATICA_OT_add_effector_target(Operator):
 class ANIMATICA_OT_remove_constraint_object(Operator):
     bl_idname = "animatica.remove_constraint_object"
     bl_label = "Remove Constraint Object"
-    bl_description = "Delete the named constraint object from the scene"
+    bl_description = "Delete this constraint object from the scene"
     bl_options = {'REGISTER', 'UNDO'}
 
     name: bpy.props.StringProperty()
@@ -856,7 +856,7 @@ class ANIMATICA_OT_remove_constraint_object(Operator):
 class ANIMATICA_OT_focus_constraint_object(Operator):
     bl_idname = "animatica.focus_constraint_object"
     bl_label = "Focus Constraint Object"
-    bl_description = "Select and view-frame the named constraint object"
+    bl_description = "Select the constraint object and frame it in the view"
     bl_options = {'REGISTER', 'UNDO'}
 
     name: bpy.props.StringProperty()

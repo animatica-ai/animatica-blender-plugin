@@ -305,9 +305,9 @@ def _target(context):
 class ANIMATICA_OT_add_waypoint(bpy.types.Operator):
     bl_idname = "animatica.add_waypoint"
     bl_label = "Add Waypoint"
-    bl_description = ("Pin where the character stands at the current frame. Drag the circle "
-                      "to where it should be instead — the route between waypoints is the "
-                      "model's to plan")
+    bl_description = ("Pin where the character stands at the current frame. Then drag the "
+                      "circle to where it should be. The model plans the route between "
+                      "waypoints")
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
@@ -333,7 +333,7 @@ class ANIMATICA_OT_add_waypoint(bpy.types.Operator):
         obj.select_set(True)
         context.view_layer.objects.active = obj
         tag_redraw()
-        self.report({'INFO'}, f"waypoint at frame {frame} — drag it where the character should be")
+        self.report({'INFO'}, f"waypoint at frame {frame}. Drag it to where the character should be")
         return {'FINISHED'}
 
 
@@ -377,8 +377,9 @@ class ANIMATICA_OT_go_to_waypoint(bpy.types.Operator):
 class ANIMATICA_OT_curve_to_waypoints(bpy.types.Operator):
     bl_idname = "animatica.curve_to_waypoints"
     bl_label = "Convert to Waypoints"
-    bl_description = ("Replace this root-path curve with waypoints along it, one a second, "
-                      "timed by distance — so the route is kept and the timing becomes yours")
+    bl_description = ("Replace this root-path curve with waypoints along it, one per second "
+                      "and timed by distance. The route stays the same, and you can then "
+                      "change the timing")
     bl_options = {'REGISTER', 'UNDO'}
 
     name: bpy.props.StringProperty()
@@ -648,16 +649,16 @@ def register():
         description="Which way the character faces on this waypoint",
         items=[
             ('PATH', "Along path",
-             "Face the way the route goes — sent only with Face along the path on"),
+             "Face the way the route goes. Sent only when Face along the path is on"),
             ('SET', "Set",
-             "Face the angle given here, always sent: turned round at the end of a "
-             "walk, sideways to a counter"),
+             "Face the angle given here. Always sent. Use it to turn round at the end "
+             "of a walk or stand sideways to a counter"),
         ],
         default='PATH',
     )
     bpy.types.Object.animatica_waypoint_facing = bpy.props.FloatProperty(
         name="Angle",
-        description="Facing, turned counter-clockwise from the way the rig faces at rest",
+        description="The facing angle, counter-clockwise from the way the rig faces at rest",
         subtype='ANGLE',
         default=0.0,
     )

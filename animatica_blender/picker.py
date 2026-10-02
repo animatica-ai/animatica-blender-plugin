@@ -756,10 +756,10 @@ class ANIMATICA_OT_picker_select(bpy.types.Operator):
         if pb is None:
             return "Pick this handle"
         b = pb.bone
-        state = (f"on, {_mm(b.ap_tol_m)} slack" + (", keeps its turn" if b.ap_rot else "")
-                 if b.ap_enabled else "off: the pose decides this joint")
-        return (f"{_label(pb)}: {state}.\nClick to pick it, Shift-click to add it or drop it, "
-                "double-click to switch it on or off")
+        state = (f"on, {_mm(b.ap_tol_m)} slack" + (", keeps its rotation" if b.ap_rot else "")
+                 if b.ap_enabled else "off, so the pose decides this joint")
+        return (f"{_label(pb)}: {state}.\nClick to pick it, Shift-click to add it to or remove it "
+                "from the picks, and double-click to switch it on or off")
 
     def invoke(self, context, event):
         arm = _arm(context)
@@ -802,7 +802,7 @@ class ANIMATICA_OT_picker_select(bpy.types.Operator):
 
 
 class ANIMATICA_OT_picker_all(bpy.types.Operator):
-    """Pick every handle; again to pick none"""
+    """Pick every handle. Click again to pick none"""
     bl_idname = "animatica.picker_all"
     bl_label = "Pick All Handles"
     bl_options = {'INTERNAL', 'UNDO'}
@@ -847,10 +847,10 @@ class ANIMATICA_OT_picker_set(bpy.types.Operator):
     @classmethod
     def description(cls, context, properties):
         return {
-            'ON': "Switch the picked handles on: their joints go where the handles are",
-            'OFF': "Switch the picked handles off: the pose decides those joints",
-            'ROT': "The picked handles keep their joints' turn as well as their place. "
-                   "Again to hand the turn back to the pose",
+            'ON': "Switch the picked handles on, so their joints go where the handles are",
+            'OFF': "Switch the picked handles off, so the pose decides those joints",
+            'ROT': "Make the picked handles hold their joints' rotation as well as their position. "
+                   "Click again to let the pose decide the rotation",
         }[properties.what]
 
     def execute(self, context):
@@ -869,8 +869,8 @@ class ANIMATICA_OT_picker_set(bpy.types.Operator):
 
 
 class ANIMATICA_OT_picker_slack(bpy.types.Operator):
-    """How strictly the pose keeps to the picked handles. Drag: left is tight
-    (the joint goes exactly there), right is loose (a hint the pose may overrule)"""
+    """How strictly the pose keeps to the picked handles. Drag left to tighten (the
+    joint goes exactly there) or right to loosen (the pose may move it a little)"""
     bl_idname = "animatica.picker_slack"
     bl_label = "Handle Slack"
     bl_options = {'INTERNAL', 'UNDO'}
@@ -933,8 +933,8 @@ def _spec_label(spec) -> str:
 
 
 class ANIMATICA_OT_picker_adding(bpy.types.Operator):
-    """Add a handle: every one this rig can still have shows on the figure, where
-    it would go. Click one to add it; + again to stop without adding"""
+    """Add a handle. Every handle this rig can still have shows on the figure where
+    it would go. Click one to add it, or click + again to stop without adding"""
     bl_idname = "animatica.picker_adding"
     bl_label = "Add Handles"
     bl_options = {'INTERNAL'}
@@ -946,13 +946,13 @@ class ANIMATICA_OT_picker_adding(bpy.types.Operator):
 
 
 class ANIMATICA_OT_picker_add(bpy.types.Operator):
-    """Add this handle to the rig, where its joint is now: nothing moves until you drag it"""
+    """Add this handle to the rig where its joint is now. Nothing moves until you drag it"""
 
     @classmethod
     def description(cls, context, properties):
         from .autoposer import poser
         spec = next((sp for sp in poser.rig_def() if sp["name"] == properties.control), None)
-        return (f"Add {_spec_label(spec)}: it starts where the joint is now, and nothing "
+        return (f"Add {_spec_label(spec)}. It starts where the joint is now, and nothing "
                 "moves until you drag it") if spec else "Add this handle"
 
     bl_idname = "animatica.picker_add"
@@ -978,8 +978,8 @@ class ANIMATICA_OT_picker_add(bpy.types.Operator):
 
 
 class ANIMATICA_OT_picker_remove(bpy.types.Operator):
-    """Remove the picked handles from the rig: the pose decides those joints again.
-    The + in the picker's title adds them back"""
+    """Remove the picked handles from the rig, so the pose decides those joints again.
+    Use the + in the picker's title to add them back"""
     bl_idname = "animatica.picker_remove"
     bl_label = "Remove Handles"
     bl_options = {'INTERNAL', 'UNDO'}
@@ -1008,14 +1008,14 @@ class ANIMATICA_OT_picker_collapse(bpy.types.Operator):
 
 
 class ANIMATICA_OT_picker_close(bpy.types.Operator):
-    """Hide the handle picker. The picker button on the floating bar brings it back"""
+    """Hide the handle picker. Use the picker button on the floating bar to show it again"""
     bl_idname = "animatica.picker_close"
     bl_label = "Hide Handle Picker"
     bl_options = {'INTERNAL'}
 
     def execute(self, context):
         context.scene.animatica.show_picker = False
-        self.report({'INFO'}, "Handle picker hidden: the picker button on the floating bar brings it back")
+        self.report({'INFO'}, "Handle picker hidden. Use the picker button on the floating bar to show it again")
         return {'FINISHED'}
 
 

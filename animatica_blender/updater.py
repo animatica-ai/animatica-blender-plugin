@@ -353,17 +353,17 @@ def _friendly(exc: Exception, doing: str) -> str:
         return OFFLINE_MESSAGE
     if isinstance(exc, urllib.error.HTTPError):
         if exc.code in (403, 429):
-            return "GitHub is limiting update checks right now — try again later"
+            return "GitHub is limiting update checks right now. Try again later"
         if exc.code == 404:
-            return "not found on GitHub — try again later"
-        return f"GitHub answered with an error ({exc.code}) — try again later"
+            return "not found on GitHub. Try again later"
+        return f"GitHub answered with an error ({exc.code}). Try again later"
     if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError)):
-        return "could not reach GitHub — check your internet connection"
+        return "could not reach GitHub. Check your internet connection"
     if isinstance(exc, OSError):
         # A disk problem, not a network one: say which, and where.
         where = f" ({exc.filename})" if getattr(exc, "filename", None) else ""
         return f"{doing} failed: {exc.strerror or exc}{where}"
-    return f"{doing} failed — try again later"
+    return f"{doing} failed. Try again later"
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +431,7 @@ def _check_worker(allow_prerelease: bool):
             releases = None
         if not isinstance(releases, list):
             print(f"Animatica updater: the releases page sent {body[:200]!r}")
-            result["error"] = "GitHub sent something other than a release list — try again later"
+            result["error"] = "GitHub sent something other than a release list. Try again later"
         else:
             found = _pick(releases, allow_prerelease=allow_prerelease)
             if found is None:
@@ -673,13 +673,13 @@ def _install_worker(url: str, tag: str, size: int, addons: str, purge_backups: b
             _download(url, pathlib.Path(tmp), size)
         except ValueError as exc:
             print(f"Animatica updater: {exc}")
-            raise _Refused("the download did not complete — try again") from exc
+            raise _Refused("the download did not complete. Try again") from exc
         except Exception as exc:            # noqa: BLE001
             raise _Refused(_friendly(exc, "the download")) from exc
         why = validate_zip(tmp)
         if why:
             print(f"Animatica updater: refusing {url}: {why}")
-            raise _Refused(f"{tag} is not a valid build — nothing was changed")
+            raise _Refused(f"{tag} is not a valid build. Nothing was changed")
         addons_dir = pathlib.Path(addons)
         for old in addons_dir.glob(".animatica-update-*"):
             # From an attempt Blender did not survive. One that still holds
@@ -694,8 +694,8 @@ def _install_worker(url: str, tag: str, size: int, addons: str, purge_backups: b
                 zf.extractall(stage / "new")
         except OSError as exc:
             print(f"Animatica updater: cannot write to {addons_dir}: {exc!r}")
-            raise _Refused(f"cannot write to the add-ons folder ({exc.strerror or exc}) — "
-                           f"nothing was changed: {addons_dir}") from exc
+            raise _Refused(f"cannot write to the add-ons folder ({exc.strerror or exc}). "
+                           f"Nothing was changed: {addons_dir}") from exc
         _results.put(("downloaded", (str(stage), tag)))
         stage = None                        # the main thread owns it now
     except _Refused as exc:
@@ -762,14 +762,14 @@ def _swap(stage: str, tag: str):
     _state["waiting"] = False
 
     if is_development_checkout():
-        _fail("this is a linked development checkout — update it with git", stage)
+        _fail("this is a linked development checkout. Update it with git", stage)
         return None
 
     target = addon_dir()
     new = stage / "new" / module
     backup = stage / "old"
     if not new.is_dir() or not target.is_dir():
-        _fail("the update could not be unpacked — nothing was changed", stage)
+        _fail("the update could not be unpacked. Nothing was changed", stage)
         return None
 
     try:
@@ -777,7 +777,7 @@ def _swap(stage: str, tag: str):
     except Exception:                       # noqa: BLE001
         traceback.print_exc()
         _try_enable(module)
-        _fail("could not unload the current version — nothing was changed", stage)
+        _fail("could not unload the current version. Nothing was changed", stage)
         return None
 
     try:
@@ -785,7 +785,7 @@ def _swap(stage: str, tag: str):
     except OSError:
         traceback.print_exc()
         _try_enable(module)
-        _fail("could not move the current version aside — nothing was changed", stage)
+        _fail("could not move the current version aside. Nothing was changed", stage)
         return None
     try:
         os.rename(new, target)
@@ -795,7 +795,7 @@ def _swap(stage: str, tag: str):
             _stranded(backup, target, "could not put the new version in place")
             return None
         _try_enable(module)
-        _fail("could not put the new version in place — nothing was changed", stage)
+        _fail("could not put the new version in place. Nothing was changed", stage)
         return None
 
     # Written before enabling, because the new copy reads it in its register().
@@ -807,7 +807,7 @@ def _swap(stage: str, tag: str):
 
     # The new version did not load. Put the old one back as it was.
     print(f"Animatica updater: {tag} did not load; restoring the previous version")
-    message = f"{tag} would not load, so your previous version is back — restart Blender"
+    message = f"{tag} would not load, so your previous version is back. Restart Blender"
     _save_config(outcome={"tag": tag, "ok": False, "time": time.time(), "message": message})
     try:
         addon_utils.disable(module, default_set=False)
@@ -827,7 +827,7 @@ def _swap(stage: str, tag: str):
         _stranded(backup, target, f"{tag} would not load")
         return None
     if not _try_enable(module):
-        _fail("the previous version would not load again — restart Blender", stage)
+        _fail("the previous version would not load again. Restart Blender", stage)
         return None
     shutil.rmtree(stage, ignore_errors=True)
     return None
@@ -863,7 +863,7 @@ def _stranded(backup: pathlib.Path, target: pathlib.Path, what: str) -> None:
     the next update leaves it alone.
     """
     message = (f"{what}, and the previous version could not be put back. It is safe in "
-               f"{backup} — move that folder to {target} and restart Blender")
+               f"{backup}. Move that folder to {target} and restart Blender")
     print(f"Animatica updater: {message}")
     _save_config(recovery={"backup": str(backup), "target": str(target), "time": time.time()},
                  outcome={"tag": "", "ok": False, "time": time.time(), "message": message})
@@ -904,8 +904,8 @@ def _recover() -> None:
     if isinstance(rec, dict):
         backup = _text(rec.get("backup"))
         if backup and os.path.isdir(backup):
-            _state["error"] = (f"a previous version is still in {backup} — it is not needed "
-                               "now, and the next update clears it")
+            _state["error"] = (f"a previous version is still in {backup}. It is no longer "
+                               "needed, and the next update clears it")
         _save_config(recovery=None)
 
 
@@ -992,7 +992,7 @@ class ANIMATICA_OT_update(bpy.types.Operator):
                           + (f" ({mb:.1f} MB)" if mb else "") + "?", icon='IMPORT')
         col = layout.column(align=True)
         col.active = False
-        col.label(text="Your scene is untouched — only the addon is replaced.")
+        col.label(text="Only the addon is replaced. Your scene stays as it is.")
         col.label(text="Restart Blender afterwards to finish the update.")
 
     def execute(self, context):
@@ -1001,20 +1001,20 @@ class ANIMATICA_OT_update(bpy.types.Operator):
             self.report({'ERROR'}, OFFLINE_MESSAGE)
             return {'CANCELLED'}
         if generating_anywhere():
-            self.report({'ERROR'}, "a generation is running — let it finish first")
+            self.report({'ERROR'}, "wait for the running generation to finish first")
             return {'CANCELLED'}
         if is_development_checkout():
             self.report({'ERROR'},
-                        "this is a linked development checkout — update it with git, "
-                        "not from here")
+                        "this is a linked development checkout. Update it with git "
+                        "instead")
             return {'CANCELLED'}
         if not _state["url"]:
-            self.report({'ERROR'}, "no build to install — check for updates first")
+            self.report({'ERROR'}, "no build to install. Check for updates first")
             return {'CANCELLED'}
         addons = str(addon_dir().parent)
         if not os.access(addons, os.W_OK | os.X_OK):
             # Said before downloading anything, and said as what it is.
-            self.report({'ERROR'}, f"the add-ons folder is read-only — cannot update: {addons}")
+            self.report({'ERROR'}, f"cannot update because the add-ons folder is read-only: {addons}")
             return {'CANCELLED'}
         _state.update({"downloading": True, "error": ""})
         threading.Thread(target=_install_worker,
@@ -1029,8 +1029,8 @@ class ANIMATICA_OT_update(bpy.types.Operator):
 class ANIMATICA_OT_open_online_prefs(bpy.types.Operator):
     bl_idname = "animatica.open_online_prefs"
     bl_label = "Open Preferences"
-    bl_description = ("Open Preferences > System, where Allow Online Access is. Nothing the "
-                      "addon does reaches the network until it is on")
+    bl_description = ("Open Preferences > System, where you can turn on Allow Online Access. "
+                      "The addon uses the network only when it is on")
 
     def execute(self, context):
         try:

@@ -298,10 +298,10 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
     bl_idname = "animatica.import_canonical_skeleton"
     bl_label = "Import Rig"
     bl_description = (
-        "Build a Blender armature to animate on. Defaults to the Animatica "
-        "rig (SOMA30) bundled with the addon — the same rig for every model, "
-        "retargeted server-side. Switch the source to use the selected "
-        "model's own canonical skeleton instead"
+        "Build a Blender armature to animate on. By default it is the Animatic "
+        "character bundled with the addon, which works with every model because "
+        "the server retargets the motion to it. Switch Rig to build the bare "
+        "SOMA30 rig or the selected model's own skeleton instead"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -312,9 +312,9 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
             ('CHARACTER', "Animatic character",
              "The rigged, textured Animatic body bundled with the addon. Animate on this"),
             ('DEFAULT', "Animatica rig (SOMA30)",
-             "The bare 30-joint rig bundled with the addon. Works with every model; the server retargets"),
+             "The bare 30-joint rig bundled with the addon. Works with every model, because the server retargets the motion to it"),
             ('CANONICAL', "Model's canonical",
-             "The skeleton the selected model generates on. No retargeting, but it differs per model"),
+             "The skeleton the selected model generates on. Needs no retargeting, but it is different for each model"),
         ],
         default='CHARACTER',
     )
@@ -323,9 +323,9 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
         name="Include body mesh",
         description=(
             "Also import the SOMA77 reference body mesh, skinned to the "
-            "imported armature. Weights for joints not present on the "
-            "armature (fingers, jaw) get redistributed to their nearest "
-            "ancestor — fingers don't curl, but the body shape is preserved"
+            "imported armature. Joints the armature lacks, like the fingers "
+            "and jaw, pass their weights to the nearest parent joint, so the "
+            "fingers don't curl but the body keeps its shape"
         ),
         default=True,
     )
@@ -398,7 +398,7 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
 
         state = download_state()
         text = (
-            f"Downloading the {CHARACTER_NAME} character — "
+            f"Downloading the {CHARACTER_NAME} character: "
             f"{remote_asset.format_bytes(state['got'])} of "
             f"{remote_asset.format_bytes(state['total'])} "
             f"({state['percent']}%) · {remote_asset.format_rate(state['speed'])} · "
@@ -477,7 +477,7 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
                     raise ValueError("the Animatic character is not available")
                 arm_obj, mesh_obj = load_character(context)
             except ValueError as exc:
-                self.report({'WARNING'}, f"{exc}; falling back to the SOMA30 rig")
+                self.report({'WARNING'}, f"{exc}. Using the SOMA30 rig instead")
             else:
                 settings.target_armature = arm_obj
                 settle_new_character(context, arm_obj)
@@ -494,12 +494,12 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
             try:
                 rig_name, joints = load_default_rig()
             except ValueError as exc:
-                self.report({'WARNING'}, f"{exc}; falling back to the model's canonical")
+                self.report({'WARNING'}, f"{exc}. Using the model's canonical skeleton instead")
 
         if joints is None:
             model_id = settings.model_id
             if not model_id:
-                self.report({'ERROR'}, "Pick a model first (Animatica panel → Connect, then choose a Model)")
+                self.report({'ERROR'}, "Pick a model first: in the Animatica panel, Connect, then choose a Model")
                 return {'CANCELLED'}
 
             # Re-fetch /capabilities before building. The process-wide cache
@@ -512,11 +512,11 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
                 caps = mmcp_client.MmcpClient(url, timeout=30).capabilities(refresh=True)
                 mmcp_client.store_capabilities(caps)
             except Exception as exc:                                 # noqa: BLE001
-                self.report({'WARNING'}, f"Could not refresh capabilities from {url} ({exc}); using cached")
+                self.report({'WARNING'}, f"Could not refresh the model list from {url} ({exc}). Using the saved copy")
 
             model = mmcp_client.cached_model(model_id)
             if model is None:
-                self.report({'ERROR'}, f"Model {model_id!r} not in the cached capabilities; reconnect first")
+                self.report({'ERROR'}, f"Model {model_id!r} is not in the saved model list. Connect again first")
                 return {'CANCELLED'}
             joints = (model.get("canonical_skeleton") or {}).get("joints") or []
             if not joints:
@@ -548,7 +548,7 @@ class ANIMATICA_OT_import_canonical_skeleton(bpy.types.Operator):
                 body_loaded = body_obj is not None
             except Exception as exc:                                 # noqa: BLE001
                 # Mesh is a nice-to-have; never fail the armature import on it.
-                self.report({'WARNING'}, f"Imported armature but body mesh failed: {exc}")
+                self.report({'WARNING'}, f"Imported the armature, but the body mesh failed: {exc}")
 
         msg = f"Imported {rig_name} ({len(joints)} joints)"
         if body_loaded:

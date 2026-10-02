@@ -17,7 +17,7 @@ bl_info = {
     "version": (0, 7, 0),
     "blender": (5, 0, 0),
     "location": "View3D > Sidebar > Animatica",
-    "description": "AI motion generation — select armature, set keyframes, generate",
+    "description": "AI motion generation: select an armature, set keyframes and generate",
     "category": "Animation",
 }
 

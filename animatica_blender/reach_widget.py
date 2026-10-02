@@ -34,8 +34,8 @@ def _redraw(context):
 
 
 class ANIMATICA_OT_reach_drag(bpy.types.Operator):
-    """How far an edit carries to the frames around it, and how strongly they follow:
-    drag sideways for Reach, up or down for Intensity. Esc puts them back"""
+    """How far an edit spreads to the frames around it, and how strongly they follow.
+    Drag sideways for Reach, up or down for Intensity. Esc restores the old values"""
     bl_idname = "animatica.reach_drag"
     bl_label = "Reach and Intensity"
     bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
@@ -72,7 +72,7 @@ class ANIMATICA_OT_reach_drag(bpy.types.Operator):
             if context.area:
                 context.area.header_text_set(
                     f"Reach ±{s.trail_radius} frames · Intensity {round(s.edit_strength * 100)}%"
-                    "   |   sideways: Reach, up or down: Intensity   |   Esc: put them back")
+                    "   |   Sideways: Reach   |   Up/Down: Intensity   |   Esc: Restore")
             _redraw(context)
             return {'RUNNING_MODAL'}
         if event.type == 'LEFTMOUSE' and event.value == 'RELEASE':

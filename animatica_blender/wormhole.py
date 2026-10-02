@@ -433,9 +433,9 @@ class ANIMATICA_GGT_wormhole(bpy.types.GizmoGroup):
 
 
 class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
-    """Pose this frame where its slice is: drag a hand, foot, the hips or the head and the
-    Autoposer moves that frame's body, its switched-on handles holding. The frames around it
-    follow with the falloff (wheel: how far). Keyed at that frame; the playhead stays where it is"""
+    """Pose this frame on its slice. Drag a hand, a foot, the hips or the head to move that
+    frame's body, while the handles that are on hold their joints. The frames around it follow
+    (the mouse wheel sets how far). The pose is keyed at that frame and the playhead stays put"""
     bl_idname = "animatica.wormhole_drag"
     bl_label = "Pose a Zoetrope Slice"
     bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
@@ -469,7 +469,7 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
         canon = poser.canonical_joint(arm, bone)
         h = next((x for x in hs if x.ap_joint == canon and x.ap_ety != 2 and x.ap_kind != "root"), None)
         if h is None:
-            self.report({'WARNING'}, f"No handle drives {_label(context, bone)}: add one (Shift A) to pose it")
+            self.report({'WARNING'}, f"No handle drives {_label(context, bone)}. Add one (Shift A) to pose it")
             return {'CANCELLED'}
         self._arm, self._frame, self._bone, self._off, self._name = arm, f, bone, off.copy(), h.name
         self._was_on = bool(h.ap_enabled)     # Esc puts it back as it was
@@ -505,8 +505,8 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
 
     def _header(self, context):
         context.area.header_text_set(
-            f"Pose frame {self._frame}: {_label(context, self._bone)}, the body follows"
-            f"   |   \u00b1{self._radius} frames follow (wheel)   |   Shift: the whole body   |   Esc: put it back"
+            f"Posing frame {self._frame}: {_label(context, self._bone)}"
+            f"   |   Wheel: \u00b1{self._radius} frames follow   |   Shift: Whole Body   |   Esc: Cancel"
             + (f"   |   {self._error}" if self._error else ""))
 
     def _solve(self, context, event):
@@ -603,7 +603,7 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
             context.scene.frame_set(cur)        # the frame on show was in reach: show it as keyed
         key_poses.flash_keyed(self._frame)
         self.report({'INFO'}, edit_report(self._carry, spread)
-                    + f"; the playhead stayed at {context.scene.frame_current}")
+                    + f". The playhead stayed at {context.scene.frame_current}")
         return {'FINISHED'}
 
 
@@ -718,10 +718,10 @@ def _keep_trail(over) -> None:
 
 def edit_report(c, n) -> str:
     """What a kept edit did, in a sentence."""
-    around = f", {n} frames around it followed" if n else ""
+    around = f", and {n} frames around it followed" if n else ""
     if getattr(c, "key_type", 'KEYFRAME') == 'GENERATED':
-        return f"The take reshaped at frame {c.f0}{around}"
-    return f"Key pose at frame {c.f0}{around}"
+        return f"Changed the take at frame {c.f0}{around}"
+    return f"Keyed a pose at frame {c.f0}{around}"
 
 
 def clear_propagation() -> None:

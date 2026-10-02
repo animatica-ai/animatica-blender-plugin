@@ -22,8 +22,8 @@ from .vendor import autoposer_runtime as apr
 class AP_OT_install_runtime(bpy.types.Operator):
     bl_idname = "autoposer.install_runtime"
     bl_label = "Install Runtime"
-    bl_description = ("Put onnxruntime in the addon's data directory (~75 MB). Needed once per "
-                      "machine, unless the addon was built with the wheels inside it")
+    bl_description = ("Install onnxruntime into the addon's data folder (~75 MB). Needed once per "
+                      "machine, unless this build of the addon already includes it")
 
     def execute(self, context):
         if engine.runtime_needs_network() and not engine.online():
@@ -33,19 +33,19 @@ class AP_OT_install_runtime(bpy.types.Operator):
         try:
             apr.ortsetup.install(cache_dir=d)
         except Exception as e:                                 # noqa: BLE001
-            self.report({"ERROR"}, f"install failed: {e}")
+            self.report({"ERROR"}, f"Couldn't install the runtime: {e}")
             return {"CANCELLED"}
         if not apr.ortsetup.activate(cache_dir=d):
-            self.report({"ERROR"}, "installed, but onnxruntime will not import")
+            self.report({"ERROR"}, "Installed, but onnxruntime won't load")
             return {"CANCELLED"}
-        self.report({"INFO"}, "inference runtime ready")
+        self.report({"INFO"}, "Inference runtime ready")
         return {"FINISHED"}
 
 
 class AP_OT_get_model(bpy.types.Operator):
     bl_idname = "autoposer.get_model"
     bl_label = "Download Model"
-    bl_description = ("Fetch the model for the selected source and verify it against its own "
+    bl_description = ("Download the model from the selected source and check it against its "
                       "published checksums (~150 MB, once)")
 
     def execute(self, context):
@@ -53,25 +53,25 @@ class AP_OT_get_model(bpy.types.Operator):
         # froze Blender for as long as the download took.
         src, _token = engine.source()
         if src and not str(src).startswith("hf://"):
-            self.report({"INFO"}, f"the model comes from a folder ({src}) — nothing to download")
+            self.report({"INFO"}, f"The model comes from a folder ({src}), so there is nothing to download")
             return {"CANCELLED"}
         if not engine.online():
             self.report({"ERROR"}, engine.offline_message())
             return {"CANCELLED"}
         if engine.fetch_state()["running"]:
-            self.report({"WARNING"}, "the model is already downloading")
+            self.report({"WARNING"}, "The model is already downloading")
             return {"CANCELLED"}
         engine.ensure_model(force=True, redownload=True)
-        self.report({"INFO"}, "downloading the model…")
+        self.report({"INFO"}, "Downloading the model…")
         return {"FINISHED"}
 
 
 class AP_OT_download(bpy.types.Operator):
     bl_idname = "autoposer.download"
     bl_label = "Download Autoposer"
-    bl_description = ("Download what the Autoposer runs on — the inference runtime (~75 MB) and "
-                      "the model (~150 MB) — once, in the background. Nothing is fetched until "
-                      "you press this")
+    bl_description = ("Download what the Autoposer needs: the inference runtime (~75 MB) and "
+                      "the model (~150 MB). This happens once, in the background. Nothing is "
+                      "downloaded until you press this")
 
     @classmethod
     def poll(cls, context):
@@ -82,16 +82,16 @@ class AP_OT_download(bpy.types.Operator):
 
     def execute(self, context):
         engine.download_all()
-        self.report({"INFO"}, "downloading the Autoposer…")
+        self.report({"INFO"}, "Downloading the Autoposer…")
         return {"FINISHED"}
 
 
 class AP_OT_check(bpy.types.Operator):
     bl_idname = "autoposer.check"
     bl_label = "Load and Self-Test"
-    bl_description = ("Load the model and run the stored IK problem it ships with. A graph can "
-                      "be miscompiled by the runtime on this machine and still return "
-                      "plausible-looking wrong poses, so this checks a known answer")
+    bl_description = ("Load the model and run the test problem it ships with, which has a known "
+                      "answer. The runtime on some machines can miscompile the model and still "
+                      "return wrong poses that look plausible, and this catches that")
 
     def execute(self, context):
         engine.unload()
@@ -105,7 +105,7 @@ class AP_OT_check(bpy.types.Operator):
         ok, err = eng.selftest()
         m = engine.meta()
         self.report({"INFO" if ok else "ERROR"},
-                    f"self-test {'passed' if ok else 'FAILED'} ({err:.3f} cm) — "
+                    f"Self-test {'passed' if ok else 'FAILED'} ({err:.3f} cm), "
                     f"{m.get('njoints', '?')} joints, checkpoint step {m.get('step', '?')}")
         return {"FINISHED"}
 
@@ -113,7 +113,7 @@ class AP_OT_check(bpy.types.Operator):
 class AP_OT_forget_model(bpy.types.Operator):
     bl_idname = "autoposer.forget_model"
     bl_label = "Delete Cached Model"
-    bl_description = "Remove the downloaded model from this machine (it can be fetched again)"
+    bl_description = "Remove the downloaded model from this machine. You can download it again"
 
     def execute(self, context):
         import shutil
@@ -121,7 +121,7 @@ class AP_OT_forget_model(bpy.types.Operator):
         engine.unload()
         d = Path(engine.data_dir()) / "current"
         shutil.rmtree(d, ignore_errors=True)
-        self.report({"INFO"}, f"removed {d}")
+        self.report({"INFO"}, f"Removed {d}")
         return {"FINISHED"}
 
 
@@ -139,44 +139,44 @@ PROPERTIES = {
     'auto_install_runtime': bpy.props.BoolProperty(
         name="Set the poser up automatically",
         default=False,
-        description="Fetch what the poser needs — the inference runtime and "
-                    "the model — in the background the first time they are "
-                    "missing, instead of waiting for Download Autoposer. About "
-                    "225 MB in total, once per machine. Needs online access"),
+        description="Download the inference runtime and the model in the "
+                    "background the first time they are missing, instead of "
+                    "waiting for Download Autoposer. About 225 MB in total, "
+                    "once per machine. Needs online access"),
     'model_source': bpy.props.EnumProperty(
         name="Model from",
         items=[("HF", "Hugging Face", "Download from a Hugging Face repo (private repos "
                                       "need an access token)"),
-               ("LOCAL", "Folder", "A bundle directory holding poser.onnx, ik.onnx and "
+               ("LOCAL", "Folder", "A folder holding poser.onnx, ik.onnx and "
                                    "meta.json"),
                ("AUTO", "Already installed", "Whatever this machine already has: the "
-                                             "cached download, or a location named by "
-                                             "the environment")],
+                                             "cached download, or a location set by an "
+                                             "environment variable")],
         default="HF"),
     'hf_repo': bpy.props.StringProperty(name="Repo", default="Animatica-ai/autoposer"),
     'hf_subfolder': bpy.props.StringProperty(name="Subfolder", default="onnx"),
     'hf_revision': bpy.props.StringProperty(
         name="Revision", default="",
-        description="A commit of the repo. Empty = the one this addon build is pinned to and "
-                    "carries the checksums of; anything else is verified only against the "
-                    "repo's own meta.json"),
+        description="A commit of the repo. Leave empty for the one this addon build is pinned "
+                    "to, whose checksums it carries. Any other commit is checked only against "
+                    "the repo's own meta.json"),
     'hf_token': bpy.props.StringProperty(
         name="Access token", default="", subtype="PASSWORD",
-        description="A Hugging Face token with read access, sent to huggingface.co only. Leave "
-                    "empty for the public model; a token already set up on this machine "
+        description="A Hugging Face token with read access, sent only to huggingface.co. Leave "
+                    "it empty for the public model. A token already set up on this machine "
                     "($HF_TOKEN, or huggingface-cli login) is used only if the repo refuses "
-                    "without one"),
+                    "access without one"),
     'local_path': bpy.props.StringProperty(
         name="Bundle folder", default="", subtype="DIR_PATH",
-        description="A directory holding poser.onnx, ik.onnx and meta.json"),
+        description="A folder holding poser.onnx, ik.onnx and meta.json"),
     'cache_dir': bpy.props.StringProperty(
         name="Data folder", default="", subtype="DIR_PATH",
-        description="Where the model and the runtime are kept. Empty = Blender's own user data "
-                    "directory, under the addon's name"),
+        description="Where the model and the runtime are kept. Leave empty to use Blender's "
+                    "user data folder, under the addon's name"),
     'threads': bpy.props.IntProperty(
         name="Threads", default=0, min=0, max=32,
-        description="Threads onnxruntime may use per solve. 0 lets it decide; 1 or 2 keeps a "
-                    "drag responsive on a busy machine"),
+        description="Threads onnxruntime may use per solve. 0 lets it decide. 1 or 2 keeps "
+                    "dragging responsive on a busy machine"),
 }
 
 

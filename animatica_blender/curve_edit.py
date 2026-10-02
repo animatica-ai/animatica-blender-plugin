@@ -591,10 +591,10 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
     bl_idname = "animatica.drag_motion_curve"
     bl_label = "Drag Motion Curve"
     bl_description = (
-        "Drag a point on a motion trail: that end effector moves at that "
-        "frame, the Autoposer solves the body around it, and releasing keys "
-        "the pose. The playhead does not move. Hold Shift to carry the whole "
-        "pose instead of the one joint"
+        "Drag a point on a motion trail to move that hand, foot, hip or head at "
+        "that frame. The Autoposer poses the body around it, and the pose is "
+        "keyed when you let go. The playhead does not move. Hold Shift to move "
+        "the whole pose instead of the one joint"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -602,14 +602,14 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
     frame: bpy.props.IntProperty()
     whole_pose: bpy.props.BoolProperty(
         name="Whole Pose",
-        description="Carry the whole pose instead of moving one end effector",
+        description="Move the whole pose instead of one hand, foot, hip or head",
         default=False,
     )
     axis: bpy.props.StringProperty(
         name="Constraint",
         description=(
-            "What the move is confined to: one world axis (X, Y, Z), a world "
-            "plane (XY, YZ, ZX), or empty for the plane facing the viewer"
+            "Limit the move to one world axis (X, Y, Z) or a world plane "
+            "(XY, YZ, ZX). Leave it empty to move in the plane facing the viewer"
         ),
         default="",
     )
@@ -673,8 +673,8 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         context.area.header_text_set(
             f"Move {_canonical(self._arm, self.bone)} at frame {self.frame}"
             + (f" along {self.axis}" if self.axis else "")
-            + f"   |   ±{self._radius} frames follow (wheel)"
-            + "   |   Shift: whole pose   |   Esc: cancel")
+            + f"   |   Wheel: ±{self._radius} frames follow"
+            + "   |   Shift: Whole Pose   |   Esc: Cancel")
 
     def _mode(self, event) -> bool:
         """Whether this drag carries the whole pose, read from the modifiers.
@@ -776,7 +776,7 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             context.area.header_text_set(None)
             context.area.tag_redraw()
             if out is None:
-                self.report({'WARNING'}, error or "nothing to key")
+                self.report({'WARNING'}, error or "Nothing to key")
                 return {'CANCELLED'}
             last, origin = getattr(self, "_last_target", None), getattr(self, "_origin", None)
             delta = last - origin if last is not None and origin is not None else None
@@ -791,10 +791,10 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             key_poses.request_rebuild()
             from .operators import keep_take
             keep_take(context)          # fine-tuning a take is keeping it
-            what = "whole pose moved" if whole else f"{_canonical(self._arm, self.bone)} moved"
+            what = "Moved the whole pose" if whole else f"Moved {_canonical(self._arm, self.bone)}"
             self.report({'INFO'}, f"{what} at frame {frame}"
-                        + (f", and {spread} frames around it" if spread else "")
-                        + (" — the take reshaped" if key_type == 'GENERATED' else " — keyed as a key pose"))
+                        + (f" and {spread} frames around it" if spread else "")
+                        + (". The take was updated" if key_type == 'GENERATED' else ". Keyed as a key pose"))
             return {'FINISHED'}
 
         return {'RUNNING_MODAL'}
@@ -927,9 +927,9 @@ class ANIMATICA_GGT_curve_point(bpy.types.GizmoGroup):
 
 
 class ANIMATICA_OT_smooth_trail(bpy.types.Operator):
-    """Smooth the motion around the picked trail point: that joint's path over
-    the Reach frames either side is evened out, each frame solved and
-    keyed. Again for more"""
+    """Smooth the motion around the picked trail point. The joint's path is evened
+    out over the Reach frames on either side, and each frame is posed and keyed.
+    Run it again to smooth more"""
     bl_idname = "animatica.smooth_trail"
     bl_label = "Animatica: Smooth Motion Here"
     bl_options = {'REGISTER', 'UNDO'}

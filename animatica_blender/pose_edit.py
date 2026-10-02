@@ -370,8 +370,8 @@ def clear_kept(arm) -> None:
 
 
 class ANIMATICA_OT_keep_frame(Operator):
-    """Keep the take's pose at this frame: it becomes a key pose, and the next
-    Redo (or Generate) holds it while it remakes the rest"""
+    """Keep the take's pose at this frame as a key pose. The next Redo or
+    Generate keeps this pose and remakes the rest"""
     bl_idname = "animatica.keep_frame"
     bl_label = "Keep This Frame"
     bl_options = {'REGISTER', 'UNDO'}
@@ -392,7 +392,7 @@ class ANIMATICA_OT_keep_frame(Operator):
         key_poses.flash_keyed(frame)
         key_poses.invalidate_plan()
         key_poses.request_rebuild()
-        self.report({'INFO'}, f"Kept frame {frame}: the next take holds this pose")
+        self.report({'INFO'}, f"Kept frame {frame}. The next take keeps this pose")
         return {'FINISHED'}
 
 
@@ -422,9 +422,9 @@ class ANIMATICA_OT_edit_key_pose(Operator):
     bl_idname = "animatica.edit_key_pose"
     bl_label = "Edit Key Pose"
     bl_description = (
-        "Go to this key pose and start editing it. Hands the pose to the "
-        "Autoposer when it is driving this rig; Apply writes the result back "
-        "onto this frame's keyframe"
+        "Go to this key pose and start editing it. If the Autoposer is driving "
+        "this rig, the pose goes to the Autoposer, and Apply writes the result "
+        "back to this frame's keyframe"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -545,8 +545,9 @@ class ANIMATICA_OT_pick_ghost(Operator):
                 key_poses.tag_redraw()
                 self.report(
                     {'INFO'},
-                    f"{curve_edit._canonical(key_poses._target(settings), bone)} at frame {curve_frame}: "
-                    "drag a handle (the wheel sets how many frames follow), or Smooth on the bar",
+                    f"{curve_edit._canonical(key_poses._target(settings), bone)} at frame {curve_frame}. "
+                    "Drag a handle to reshape it (the mouse wheel sets how many frames "
+                    "around it move too), or use Smooth on the bar",
                 )
                 return {'FINISHED'}
 
@@ -588,9 +589,9 @@ class ANIMATICA_OT_give_back_rig(Operator):
     bl_idname = "animatica.give_back_rig"
     bl_label = "Give Back Rig"
     bl_description = (
-        "Hand the rig back from the Autoposer, which detached its action to "
-        "hold the pose. Re-attaches what it stashed — or, if something has "
-        "bound an action since, keeps that and just lets go"
+        "Take the rig back from the Autoposer, which set its action aside to "
+        "hold the pose. The action is put back, unless another action has been "
+        "assigned since. In that case the new action is kept"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -621,7 +622,7 @@ class ANIMATICA_OT_give_back_rig(Operator):
             for track in arm.animation_data.nla_tracks:
                 if track.name in muted:
                     track.mute = False
-            self.report({'INFO'}, f"Autoposer let go — {kept} kept")
+            self.report({'INFO'}, f"Autoposer let go of the rig. Kept {kept}")
         else:
             try:
                 bpy.ops.autoposer.release()
@@ -638,11 +639,10 @@ class ANIMATICA_OT_set_key_pose(Operator):
     bl_idname = "animatica.set_key_pose"
     bl_label = "Set Key Pose"
     bl_description = (
-        "Key the pose you are looking at as one of yours, so the next "
-        "generation is asked to hit it. Not the same as pressing I: Blender "
-        "keeps a keyframe's existing type when you key over one, so a pose "
-        "set on top of a generated take would otherwise read as the model's "
-        "own output and be left out of the request"
+        "Key the pose you see as your own key pose, so the next generation "
+        "passes through it. Pressing I is different: Blender keeps the type of "
+        "a keyframe you key over, so a pose keyed on top of a generated take "
+        "would still count as generated and be left out of the request"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -667,8 +667,8 @@ class ANIMATICA_OT_set_key_pose(Operator):
 
         if is_rest_pose(arm):
             # the T-pose keyed is the worst first take: it is hit, exactly, arms out
-            self.report({'WARNING'}, "That is the rest pose (T-pose): pose the character first, "
-                                     "or Describe a pose")
+            self.report({'WARNING'}, "That is the rest pose (T-pose). Pose the character first, "
+                                     "or use Describe a pose")
             return {'CANCELLED'}
         written = _write_pose_to_action(arm, action, frame)
         if not written:
@@ -681,7 +681,7 @@ class ANIMATICA_OT_set_key_pose(Operator):
         key_poses.invalidate_plan()
         key_poses.request_rebuild()
         n = len(key_poses.take_keys(context.scene))
-        self.report({'INFO'}, f"Key pose set at frame {frame}: the take is steered through {n} key pose"
+        self.report({'INFO'}, f"Key pose set at frame {frame}. Generate will pass through {n} key pose"
                               + ("s" if n != 1 else ""))
         return {'FINISHED'}
 

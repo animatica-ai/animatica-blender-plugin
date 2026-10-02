@@ -653,8 +653,8 @@ _tidied: set = set()
 
 
 class ANIMATICA_OT_handle_drag(bpy.types.Operator):
-    """Drag: the body follows, the other handles hold. Shift: the whole body.
-    Ctrl-click: switch the handle on or off. Click: pick it (Shift adds)"""
+    """Drag to pose the body while the other handles hold. Shift-drag moves the whole body.
+    Ctrl-click switches the handle on or off. Click picks it (Shift-click adds to the picks)"""
     bl_idname = "animatica.handle_drag"
     bl_label = "Drag Handle"
     bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
@@ -671,10 +671,11 @@ class ANIMATICA_OT_handle_drag(bpy.types.Operator):
         from .autoposer import poser
         h = hs[properties.index]
         label = poser.control_label(h.ap_joint, h.ap_kind)
-        state = ("on: the pose keeps this joint here" + (", turn and all" if h.ap_rot else "")
-                 if h.ap_enabled else "off: the pose decides this joint")
-        return (f"{label}, {state}.\nDrag to move it, the body follows; Shift-drag moves the whole body. "
-                "Click picks it (then G moves, R turns, or use its gizmo); Ctrl-click switches it on or off")
+        state = ("on, so the pose keeps this joint here" + (", rotation included" if h.ap_rot else "")
+                 if h.ap_enabled else "off, so the pose decides where this joint goes")
+        return (f"{label}, {state}.\nDrag to move it and pose the body. Shift-drag moves the whole body. "
+                "Click to pick it, then press G to move or R to turn, or use its gizmo. "
+                "Ctrl-click switches it on or off")
 
     def invoke(self, context, event):
         arm = _arm(context)
@@ -731,10 +732,10 @@ class ANIMATICA_OT_handle_drag(bpy.types.Operator):
         from .autoposer import poser
         h = self._item(context)
         what = poser.control_label(h.ap_joint, h.ap_kind) if h else "Handle"
-        reach = (f"   |   through time: \u00b1{self._radius} frames follow (wheel)"
+        reach = (f"   |   Wheel: \u00b1{self._radius} frames follow"
                  if getattr(self, "_through", False) else "")
         context.area.header_text_set(
-            f"Move {what}: the body follows   |   Shift: the whole body{reach}   |   Esc: put it back"
+            f"Move {what}   |   Shift: Whole Body{reach}   |   Esc: Cancel"
             + (f"   |   {err}" if err else ""))
 
     def _item(self, context):
@@ -906,9 +907,9 @@ def picked_items(scene, arm) -> list:
 
 
 class ANIMATICA_OT_handle_transform(bpy.types.Operator):
-    """Move (G) or turn (R) the picked handles, the body following, as Blender's
-    own G and R do: X, Y or Z locks an axis (Shift: the plane across it), a
-    click or Enter keeps it, Esc or a right-click puts it back"""
+    """Move (G) or turn (R) the picked handles to pose the body, like Blender's own
+    G and R. Press X, Y or Z to lock an axis (Shift locks the plane across it). Click
+    or press Enter to confirm, and press Esc or right-click to cancel"""
     bl_idname = "animatica.handle_transform"
     bl_label = "Move Handles"
     bl_options = {'REGISTER', 'UNDO'}
@@ -985,8 +986,8 @@ class ANIMATICA_OT_handle_transform(bpy.types.Operator):
         what = "Move" if self.mode == 'MOVE' else "Rotate"
         lock = f" along {self._axis}" if len(self._axis) == 1 else (f" in {self._axis}" if self._axis else "")
         context.area.header_text_set(f"{what} {len(self._names)} handle{'s' if len(self._names) != 1 else ''}"
-                                     f"{lock}   |   X Y Z: axis, Shift: plane   |   Click/Enter: keep   "
-                                     f"|   Esc/Right-click: cancel" + (f"   |   {self._error}" if self._error else ""))
+                                     f"{lock}   |   X/Y/Z: Axis   |   Shift: Plane   |   Click/Enter: Confirm   "
+                                     f"|   Esc/Right-click: Cancel" + (f"   |   {self._error}" if self._error else ""))
 
     def _apply(self, context, event):
         co = (event.mouse_region_x, event.mouse_region_y)
@@ -1165,7 +1166,7 @@ class ANIMATICA_GGT_handle_xform(bpy.types.GizmoGroup):
 
 
 class ANIMATICA_OT_handles_deselect(bpy.types.Operator):
-    """A click off the handles: they let go, as a click on nothing does in Blender"""
+    """Unpick the handles when you click away from them, as a click on empty space does in Blender"""
     bl_idname = "animatica.handles_deselect"
     bl_label = "Unpick Handles"
     bl_options = {'INTERNAL'}
@@ -1184,7 +1185,7 @@ class ANIMATICA_OT_handles_deselect(bpy.types.Operator):
 
 
 class ANIMATICA_OT_handle_add(bpy.types.Operator):
-    """Add this handle: it starts on its joint, and nothing moves until you drag it"""
+    """Add this handle. It starts on its joint, and nothing moves until you drag it"""
     bl_idname = "animatica.handle_add"
     bl_label = "Add Handle"
     bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
@@ -1223,9 +1224,9 @@ class ANIMATICA_TL_autopose(bpy.types.WorkSpaceTool):
     bl_context_mode = 'POSE'
     bl_idname = TOOL_ID
     bl_label = "Autopose"
-    bl_description = ("Drag a hand, a foot, the hips or the head: the body follows, and the other "
-                      "handles hold. Shift-drag moves the whole body; Ctrl-click switches a handle "
-                      "on or off. Adds nothing to the rig")
+    bl_description = ("Drag a hand, a foot, the hips or the head to pose the body while the other "
+                      "handles hold. Shift-drag moves the whole body, and Ctrl-click switches a handle "
+                      "on or off. Nothing is added to the rig")
     # a figure reaching up, posed by its handles (icons/src/make_tool_icon.py)
     bl_icon = os.path.join(os.path.dirname(__file__), "icons", "tool", "ops.animatica.autopose")
     # off the handles, the tool picks bones as Blender's Select Box does

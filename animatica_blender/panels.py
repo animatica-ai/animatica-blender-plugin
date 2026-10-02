@@ -102,9 +102,9 @@ def _draw_rig_held(layout, context, settings) -> None:
     note = box.row()
     note.active = False
     if pose_edit.stash_is_stale(arm):
-        note.label(text="its action has changed since — giving back keeps yours")
+        note.label(text="Its action has changed since. Giving it back keeps yours")
     else:
-        note.label(text="its animation is detached while it poses")
+        note.label(text="Its animation is detached while you pose")
     box.operator("animatica.give_back_rig", icon='LOOP_BACK', text="Give Back Rig")
 
 
@@ -207,14 +207,14 @@ def _draw_duration_hint(layout, context, settings) -> None:
         row = layout.row()
         row.alert = True
         row.label(
-            text=f"Clip {seconds:.1f}s exceeds model max {float(hard):g}s",
+            text=f"Clip is {seconds:.1f}s, over the model's {float(hard):g}s limit",
             icon='ERROR',
         )
     elif rec is not None and seconds > float(rec):
         row = layout.row()
         row.alert = True
         row.label(
-            text=f"Clip {seconds:.1f}s over recommended {float(rec):g}s",
+            text=f"Clip is {seconds:.1f}s, over the recommended {float(rec):g}s",
             icon='ERROR',
         )
 
@@ -580,7 +580,7 @@ def _draw_next_take(layout, context) -> None:
             shown += f" +{len(dropped) - _MAX_NAMED_DROPPED}"
         warn = layout.row()
         warn.alert = True
-        warn.label(text=f"Outside the range, not sent: {shown}", icon='ERROR')
+        warn.label(text=f"Not sent, outside the frame range: {shown}", icon='ERROR')
 
 
 def _draw_kept(layout, arm) -> None:
@@ -634,7 +634,7 @@ def _draw_review(layout, context, settings, arm) -> None:
     if single and key_poses.trail_on(settings):
         # The lines drawn through the body are a tool, not Blender's own
         # motion paths, and nothing else says so where they are seen.
-        info.label(text="Blue trail: drag it to repose the body", icon='CURVE_PATH')
+        info.label(text="Drag the blue trail to repose the body", icon='CURVE_PATH')
 
     # A row a character: its version, and (several) keep / throw away / again.
     col = box.column(align=True)
@@ -750,14 +750,14 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
         head.label(text="Autoposer", icon='OUTLINER_OB_ARMATURE')
         sub = layout.row()
         sub.active = False
-        sub.label(text="Drag hands, feet or hips; the body follows")
+        sub.label(text="Drag a hand, a foot or the hips to pose the body")
         from . import key_poses
         if key_poses.trail_on(settings):
             # The trail is a handle too; said where posing is, not in the
             # settings that switch it on.
             sub = layout.row()
             sub.active = False
-            sub.label(text="Or in Motion: click a trail point, then drag it")
+            sub.label(text="Or click a point on the motion trail and drag it")
         status = engine.status()
         if not (status["runtime"] and status["model"]):
             box = layout.box()
@@ -785,7 +785,7 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
                 row.scale_y = 1.2
                 row.operator("autoposer.download", icon='IMPORT',
                              text=engine.download_label())
-            box.label(text="Preferences → Animatica for detail")
+            box.label(text="Details in Preferences → Animatica")
         else:
             from . import handles
             problem = handles.problem(context, arm)
@@ -848,8 +848,8 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
         n = sum(1 for f in plan["frames"] if plan["entries"][f]["in_range"])
         note = layout.row()
         note.active = False
-        note.label(text=(f"{n} key pose{'' if n == 1 else 's'} the next take will hit" if n
-                         else "Keyed poses are ones the next take will hit"))
+        note.label(text=(f"The next take passes through {n} key pose{'' if n == 1 else 's'}" if n
+                         else "The next take passes through every pose you key"))
 
         # --- the fingers: the model has none of its own --------------------
         layout.separator()
@@ -893,8 +893,8 @@ class ANIMATICA_PT_paths(AnimaticaPanelBase, Panel):
         if not marks and not root_paths and not effectors:
             note = layout.column(align=True)
             note.active = False
-            note.label(text="Waypoint: where to stand, at this frame")
-            note.label(text="Pin: hold a hand or foot somewhere")
+            note.label(text="A waypoint sets where to stand at this frame")
+            note.label(text="A pin holds a hand or foot in place")
             return
 
         # The route: one row per waypoint, frame editable in place — retiming

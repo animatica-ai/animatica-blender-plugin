@@ -856,10 +856,10 @@ class MmcpClient:
                         resp = _post()
                     except HTTPError as retry_exc:
                         if retry_exc.code == 401:
-                            expire_session("your session expired — sign in again")
+                            expire_session("your session expired. Sign in again")
                         raise
                 else:
-                    expire_session("your session expired — sign in again")
+                    expire_session("your session expired. Sign in again")
                     raise
             with resp:
                 if resp.status == 200:
@@ -936,7 +936,7 @@ class MmcpClient:
                         refreshed = True
                         retry_after = 0.0
                         continue
-                    expire_session("your session expired — sign in again")
+                    expire_session("your session expired. Sign in again")
                 raise MmcpError.from_response(exc.code, exc.read()) from exc
         raise MmcpError(code="timeout", message=f"async job at {url} did not complete in {self.timeout}s")
 
@@ -962,10 +962,10 @@ class MmcpClient:
                         resp = _get()
                     except HTTPError as retry_exc:
                         if retry_exc.code == 401:
-                            expire_session("your session expired — sign in again")
+                            expire_session("your session expired. Sign in again")
                         raise
                 else:
-                    expire_session("your session expired — sign in again")
+                    expire_session("your session expired. Sign in again")
                     raise
             with resp:
                 if resp.status != 200:

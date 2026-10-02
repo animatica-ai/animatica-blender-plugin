@@ -656,7 +656,7 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 
 class ANIMATICA_OT_timeline_hover(bpy.types.Operator):
-    """Track the mouse over the Animatica lane (never takes the event)"""
+    """Highlight what the mouse is over in the Animatica lane"""
 
     bl_idname = "animatica.timeline_hover"
     bl_label = "Animatica Lane Hover"
@@ -677,7 +677,7 @@ class ANIMATICA_OT_timeline_hover(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 
 class ANIMATICA_OT_timeline_strip_add_click(bpy.types.Operator):
-    """Double-click on empty timeline area to add a new strip at that position."""
+    """Double-click an empty part of the Animatica lane to add a prompt block there."""
 
     bl_idname = "animatica.timeline_strip_add_click"
     bl_label = "Add Strip at Click"
@@ -801,8 +801,8 @@ def _get_armature_keyframes(armature):
 
 
 class ANIMATICA_OT_add_strip_between_keyframes(bpy.types.Operator):
-    """Add a new strip spanning between the two nearest keyframes around the
-    click position on the source armature's timeline."""
+    """Add a prompt block that fills the space between the source armature's
+    two keyframes on either side of the click."""
 
     bl_idname = "animatica.add_strip_between_keyframes"
     bl_label = "Add Strip Between Keyframes"
@@ -828,7 +828,7 @@ class ANIMATICA_OT_add_strip_between_keyframes(bpy.types.Operator):
 
         kf_list = _get_armature_keyframes(armature)
         if len(kf_list) < 2:
-            self.report({"WARNING"}, "Source armature has fewer than 2 keyframes")
+            self.report({"WARNING"}, "The source armature needs at least 2 keyframes")
             return {"CANCELLED"}
 
         click = self.frame
@@ -909,12 +909,11 @@ class ANIMATICA_OT_add_strip_between_keyframes(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 
 class ANIMATICA_OT_timeline_strip_delete(bpy.types.Operator):
-    """Delete a Animatica strip (Backspace/Delete).
+    """Delete an Animatica prompt block (Backspace/Delete).
 
-    Prefers the strip under the cursor; otherwise removes the active strip when
-    the cursor is in the Animatica lane. Writes back to the target armature so
-    deleted strips do not reappear after switching rigs. Passes through outside
-    the lane so Blender can handle keyframe deletion.
+    Deletes the block under the mouse, or the active block when the mouse is
+    in the Animatica lane. Outside the lane, the keys delete keyframes as
+    usual.
     """
 
     bl_idname = "animatica.timeline_strip_delete"
@@ -967,7 +966,7 @@ class ANIMATICA_OT_timeline_strip_delete(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 
 class ANIMATICA_OT_timeline_strip_context_menu(bpy.types.Operator):
-    """Right-click context menu for Animatica timeline strips."""
+    """Show the right-click menu for Animatica prompt blocks."""
 
     bl_idname = "animatica.timeline_strip_context_menu"
     bl_label = "Animatica Strip Menu"
@@ -1101,7 +1100,7 @@ class ANIMATICA_OT_timeline_strip_context_menu(bpy.types.Operator):
 
 
 class ANIMATICA_OT_block_to_playhead(bpy.types.Operator):
-    """Move the block so it starts at the playhead (as far as its neighbours allow)"""
+    """Move the block so it starts at the playhead, or as close as the blocks next to it allow"""
     bl_idname = "animatica.block_to_playhead"
     bl_label = "Move Block to Playhead"
     bl_options = {"REGISTER", "UNDO"}
@@ -1134,7 +1133,7 @@ class ANIMATICA_OT_block_to_playhead(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 
 class ANIMATICA_OT_timeline_strip_toggle_enabled(bpy.types.Operator):
-    """Toggle enabled state of a strip."""
+    """Turn a prompt block on or off."""
 
     bl_idname = "animatica.timeline_strip_toggle_enabled"
     bl_label = "Toggle Strip Enabled"
@@ -1163,8 +1162,9 @@ class ANIMATICA_OT_timeline_strip_toggle_enabled(bpy.types.Operator):
 
 
 class ANIMATICA_OT_timeline_strip_toggle_lock(bpy.types.Operator):
-    """Lock a block to keep its motion: Generate and Redo leave it, and the
-    blocks next to it are made to run into it. Unlock it to make it again"""
+    """Lock a block to keep its motion. Generate and Redo leave it as it is,
+    and the blocks next to it are made to blend into it. Unlock it to generate
+    it again"""
 
     bl_idname = "animatica.timeline_strip_toggle_lock"
     bl_label = "Lock Block"
@@ -1179,8 +1179,8 @@ class ANIMATICA_OT_timeline_strip_toggle_lock(bpy.types.Operator):
             return {"CANCELLED"}
         fr = props.prompt_blocks[i]
         fr.locked = not fr.locked
-        self.report({"INFO"}, ("Locked: Generate leaves it as it is" if fr.locked
-                               else "Unlocked: the next Generate makes it again"))
+        self.report({"INFO"}, ("Locked. Generate leaves this block as it is" if fr.locked
+                               else "Unlocked. The next Generate makes this block again"))
         for area in context.screen.areas:
             if area.type in {"DOPESHEET_EDITOR", "VIEW_3D"}:
                 area.tag_redraw()
@@ -1192,10 +1192,10 @@ class ANIMATICA_OT_timeline_strip_toggle_lock(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 
 class ANIMATICA_OT_reuse_block_seed(bpy.types.Operator):
-    """Lock a block's last-generated seed into its Seed field.
+    """Pin the seed this block was last generated with.
 
-    Copies ``last_used_seed`` into ``seed`` so the next generation reproduces
-    this block's motion instead of rolling a fresh random seed.
+    The next generation then reproduces this block's motion instead of using
+    a new random seed.
     """
 
     bl_idname = "animatica.reuse_block_seed"
@@ -1214,7 +1214,7 @@ class ANIMATICA_OT_reuse_block_seed(bpy.types.Operator):
             return {"CANCELLED"}
         block = props.prompt_blocks[self.index]
         if int(getattr(block, "last_used_seed", 0)) <= 0:
-            self.report({"WARNING"}, "This block has no recorded seed yet — generate it first")
+            self.report({"WARNING"}, "This block has no recorded seed yet. Generate it first")
             return {"CANCELLED"}
         block.seed = int(block.last_used_seed)
         from .properties import save_blocks_to_armature
@@ -1500,7 +1500,7 @@ class InlinePromptEditing:
 
 
 class ANIMATICA_OT_timeline_strip_inline_edit(InlinePromptEditing, bpy.types.Operator):
-    """Edit strip prompt text directly on the timeline strip."""
+    """Edit a block's prompt directly on the timeline."""
 
     bl_idname = "animatica.timeline_strip_inline_edit"
     bl_label = "Inline Edit Strip Prompt"
@@ -1518,7 +1518,7 @@ class ANIMATICA_OT_timeline_strip_inline_edit(InlinePromptEditing, bpy.types.Ope
 # ---------------------------------------------------------------------------
 
 class ANIMATICA_OT_edit_strip_prompt(bpy.types.Operator):
-    """Edit the prompt text for a frame range strip."""
+    """Edit the prompt of a block."""
 
     bl_idname = "animatica.edit_strip_prompt"
     bl_label = "Edit Strip Prompt"
@@ -1579,7 +1579,7 @@ class ANIMATICA_OT_edit_strip_prompt(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 
 class ANIMATICA_OT_add_prompt_block(bpy.types.Operator):
-    """Add a new prompt block in the first available gap."""
+    """Add a prompt block in the first free gap on the timeline."""
 
     bl_idname = "animatica.add_prompt_block"
     bl_label = "Add Prompt Block"
@@ -1633,13 +1633,12 @@ class ANIMATICA_OT_remove_prompt_block(bpy.types.Operator):
 
 
 class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
-    """Regenerate just one prompt block while keeping the rest of the preview.
+    """Generate one prompt block again and keep the rest of the preview.
 
-    Pre-Accept only — operates on the live preview action. The two frames
-    immediately before/after the block (when present in the preview) are sent
-    as ``pose_keyframe`` observations so the new motion latches onto its
-    neighbours at the seams. Honours the current Seed setting, so the typical
-    workflow is "bump seed, right-click block, regenerate".
+    Works only on a preview that is still waiting. The frames just before and
+    after the block are sent too, so the new motion joins its neighbours
+    smoothly. Uses the current Seed, so a common way to work is to change the
+    seed, right-click the block and regenerate.
     """
 
     bl_idname = "animatica.regenerate_block"
@@ -1647,16 +1646,15 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
 
     block_index: IntProperty(
         name="Block Index",
-        description="Which prompt block to regenerate (-1 = active block)",
+        description="The prompt block to regenerate. -1 means the active block",
         default=-1,
     )
     seed: IntProperty(
         name="Seed",
         description=(
-            "Seed for this regeneration. 0 = server picks a random seed; "
-            "any positive value is reproducible. The chosen value is saved "
-            "onto the block so the next regenerate of the same strip "
-            "pre-fills with it"
+            "Seed for this regeneration. 0 lets the server pick a random seed. "
+            "Any other value gives the same result each time. The value is "
+            "saved on the block and filled in the next time you regenerate it"
         ),
         default=0, min=0, max=999999,
     )
@@ -1722,7 +1720,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
                 layout.label(text=f"Last generated with seed: {block.last_used_seed}")
         layout.separator()
         layout.prop(self, "seed")
-        layout.label(text="0 = roll a fresh seed and pin it to this block", icon='INFO')
+        layout.label(text="0 picks a new random seed and pins it to this block", icon='INFO')
 
     def execute(self, context):
         from . import constraints_ui, gltf_to_blender, mmcp_client, request_builder
@@ -1739,7 +1737,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             return {'CANCELLED'}
 
         if s.is_generating:
-            self.report({'WARNING'}, "Already generating — wait or click Cancel")
+            self.report({'WARNING'}, "Already generating. Wait, or click Cancel")
             return {'CANCELLED'}
 
         if not s.is_previewing:
@@ -1764,7 +1762,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         if preview_action is None or not preview_action.name.startswith(
             request_builder._GENERATED_ACTION_PREFIXES
         ):
-            self.report({'ERROR'}, "Active action isn't a Animatica preview — generate first")
+            self.report({'ERROR'}, "The active action is not an Animatica preview. Generate first")
             return {'CANCELLED'}
 
         from . import preview_session
@@ -1868,7 +1866,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
 
         if event.type == 'ESC' or s.cancel_requested:
             self._cleanup(context)
-            self.report({'INFO'}, "Regenerate cancelled (request still runs server-side)")
+            self.report({'INFO'}, "Regenerate cancelled. The request still finishes on the server")
             return {'CANCELLED'}
 
         if event.type != 'TIMER':
@@ -1888,7 +1886,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
 
         if self._result is None:
             self._cleanup(context)
-            self.report({'ERROR'}, "Worker exited with no result")
+            self.report({'ERROR'}, "The regeneration stopped without a result")
             return {'CANCELLED'}
 
         _clear_quota_state(s)
@@ -1896,7 +1894,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         arm = _live_target_armature_or_clear(s)
         if arm is None:
             self._cleanup(context)
-            self.report({'ERROR'}, "Target armature missing — regenerate aborted")
+            self.report({'ERROR'}, "The target armature is gone. Regenerate stopped")
             return {'CANCELLED'}
 
         preview_action = (
@@ -1906,7 +1904,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         )
         if preview_action is None:
             self._cleanup(context)
-            self.report({'ERROR'}, "Preview action vanished mid-regen")
+            self.report({'ERROR'}, "The preview action was removed during the regeneration")
             return {'CANCELLED'}
 
         from . import preview_session

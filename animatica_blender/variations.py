@@ -99,13 +99,13 @@ def show(context, arm, index: int) -> None:
 class ANIMATICA_OT_show_variation(Operator):
     bl_idname = "animatica.show_variation"
     bl_label = "Show Variation"
-    bl_description = "Show another version of this take. No new generation"
+    bl_description = "Show another version of this take, without generating again"
     bl_options = {'REGISTER', 'UNDO'}
 
     step: IntProperty(default=1)
     character: StringProperty(
         default="",
-        description="The character whose take to switch: empty for the active one, "
+        description="The character whose take to switch. Leave empty for the active one, or use "
                     "\"*\" for every character in the batch review",
     )
 
@@ -138,7 +138,7 @@ class ANIMATICA_OT_show_variation(Operator):
             try:
                 show(context, arm, take_of(arm).index + self.step)
             except Exception as exc:  # noqa: BLE001 — surfaced to the UI
-                self.report({'ERROR'}, f"{arm.name}: could not switch: {exc}")
+                self.report({'ERROR'}, f"Could not switch the take of {arm.name}: {exc}")
                 return {'CANCELLED'}
         return {'FINISHED'}
 

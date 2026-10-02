@@ -487,11 +487,11 @@ class ANIMATICA_OT_edit_root_trajectory(Operator):
     bl_idname = "animatica.edit_root_trajectory"
     bl_label = "Edit Root Trajectory"
     bl_description = (
-        "Turn the take's root trajectory into a Bezier curve on the floor. "
-        "Editing it re-paths the take: with In place off the character moves "
-        "along the curve, live as you edit (the timing along it stays the "
-        "take's); with In place on the pose is unchanged and the curve is the "
-        "root motion a game export gives it. Sharp new bends slide the feet"
+        "Turn the take's root trajectory into a Bezier curve on the floor, and "
+        "edit the curve to change the path. With In place off, the character "
+        "follows the curve live as you edit, keeping the take's timing. With In "
+        "place on, the pose doesn't change and the curve is the root motion a "
+        "game export gets. Sharp new bends make the feet slide"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -511,7 +511,7 @@ class ANIMATICA_OT_edit_root_trajectory(Operator):
         if created:
             obj = root_edit.create(arm, action, context.scene)
         if obj is None:
-            self.report({'INFO'}, "This take stays on the spot: there is no root trajectory to edit")
+            self.report({'INFO'}, "This take stays on the spot, so there is no root trajectory to edit")
             return {'CANCELLED'}
         s.key_pose_overlay = True
         s.key_pose_root_path = True
@@ -525,8 +525,8 @@ class ANIMATICA_OT_edit_root_trajectory(Operator):
         bpy.ops.object.mode_set(mode='EDIT')
         if created:
             root_edit.refresh(context.scene)
-        self.report({'INFO'}, "Editing the root trajectory: move its points and handles to re-path the take; "
-                              "Tab to finish")
+        self.report({'INFO'}, "Editing the root trajectory. Move its points and handles to change the path, "
+                              "then press Tab to finish")
         return {'FINISHED'}
 
 
@@ -784,8 +784,8 @@ class ANIMATICA_OT_connect(Operator):
     bl_idname = "animatica.connect"
     bl_label = "Connect"
     bl_description = (
-        "Fetch GET /capabilities from the configured MMCP server. "
-        "Populates the model dropdown with what the server hosts"
+        "Connect to the Animatica server (or your own, set in Preferences) and "
+        "list its models in the model dropdown"
     )
 
     def execute(self, context):
@@ -1141,14 +1141,14 @@ class ANIMATICA_OT_generate(Operator):
         )
 
         if settings.is_generating:
-            self.report({'WARNING'}, "Already generating — wait or click Cancel")
+            self.report({'WARNING'}, "Already generating. Wait, or click Cancel")
             return {'CANCELLED'}
 
         arm = _live_target_armature_or_clear(settings)
         if arm is None:
             self.report(
                 {'ERROR'},
-                "Set a target armature first (or the previous rig was deleted)",
+                "Set a target armature first (the previous rig may have been deleted)",
             )
             return {'CANCELLED'}
         if _refuse_in_tweak_mode(self, [arm]):
@@ -1245,10 +1245,10 @@ class ANIMATICA_OT_generate(Operator):
                 and (model_caps or {}).get("supports_loop")):
             gen_range = request_builder.compute_frame_range(settings.prompt_blocks, arm, context.scene)
             if request_builder.will_splice(arm, gen_range):
-                self.report({'WARNING'}, "Loop is off for a generation into a gap between "
-                                         "your keys; generating without it")
+                self.report({'WARNING'}, "Loop doesn't work when generating into a gap between "
+                                         "your keys. Generating without it")
             else:
-                self.report({'WARNING'}, "Loop needs a single prompt block; generating without it")
+                self.report({'WARNING'}, "Loop needs a single prompt block. Generating without it")
 
         # Save the source action for Accept / Reject (no-op if already saved).
         _stash_source_action_name(settings, arm)
@@ -1309,7 +1309,7 @@ class ANIMATICA_OT_generate(Operator):
 
         if event.type == 'ESC' or settings.cancel_requested:
             self._cleanup(context)
-            self.report({'INFO'}, "Generation cancelled (request still runs server-side)")
+            self.report({'INFO'}, "Generation cancelled (the request still finishes on the server)")
             return {'CANCELLED'}
 
         if event.type != 'TIMER':
@@ -1330,7 +1330,7 @@ class ANIMATICA_OT_generate(Operator):
 
         if self._result is None:
             self._cleanup(context)
-            self.report({'ERROR'}, "Worker exited with no result")
+            self.report({'ERROR'}, "Generation stopped without a result")
             return {'CANCELLED'}
 
         # Successful run — clear any stale quota banner.
@@ -1341,7 +1341,7 @@ class ANIMATICA_OT_generate(Operator):
             self._cleanup(context)
             self.report(
                 {'ERROR'},
-                "Target armature is missing or was deleted before the bake finished",
+                "The target armature is missing or was deleted before the take was applied",
             )
             return {'CANCELLED'}
 
@@ -1413,7 +1413,7 @@ class ANIMATICA_OT_generate(Operator):
         if skipped:
             self.report(
                 {'WARNING'},
-                f"Done — skipped {len(skipped)} unmatched joint(s){msg_suffix}",
+                f"Done. Skipped {len(skipped)} joint(s) that don't match your rig{msg_suffix}",
             )
         else:
             self.report({'INFO'}, f"Generation complete{msg_suffix}")
@@ -1493,8 +1493,8 @@ class ANIMATICA_OT_cancel_generation(Operator):
     bl_idname = "animatica.cancel"
     bl_label = "Cancel"
     bl_description = (
-        "Stop waiting on the in-flight generation. The HTTP request continues "
-        "server-side; the addon discards whatever comes back"
+        "Stop waiting for the current generation. The request still finishes "
+        "on the server, and the add-on throws away whatever comes back"
     )
 
     def execute(self, context):
@@ -1598,8 +1598,8 @@ class ANIMATICA_OT_accept(Operator):
     bl_idname = "animatica.accept"
     bl_label = "Accept"
     bl_description = (
-        "Keep this take and lock its blocks: the motion is yours to edit, "
-        "and Generate and Redo leave it as it is. Unlock a block to make it again"
+        "Keep this take and lock its blocks. You can edit the motion, and "
+        "Generate and Redo leave it as it is. Unlock a block to make it again"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -1651,7 +1651,7 @@ class ANIMATICA_OT_accept(Operator):
                 s.is_previewing = False
                 _clear_quota_state(s)
                 self.report({'INFO'}, f"Kept in '{arm.animation_data.action.name}'"
-                                      + (f"; {locked} block{'s' if locked != 1 else ''} locked" if locked else ""))
+                                      + (f", {locked} block{'s' if locked != 1 else ''} locked" if locked else ""))
                 return {'FINISHED'}
 
             pending_raw = arm.get("animatica_pending_block_ranges")
@@ -1706,7 +1706,7 @@ class ANIMATICA_OT_accept(Operator):
                 s.is_previewing = False
                 _remove_orphan_takes()
                 self.report({'INFO'}, f"Kept in '{preview_action.name}'"
-                                      + (f"; {locked} block{'s' if locked != 1 else ''} locked" if locked else ""))
+                                      + (f", {locked} block{'s' if locked != 1 else ''} locked" if locked else ""))
                 return {'FINISHED'}
 
             if len(block_ranges) >= 2 and preview_action is not None:
@@ -1753,7 +1753,7 @@ class ANIMATICA_OT_accept(Operator):
         s.is_previewing = False
         _remove_orphan_takes()
         names = ", ".join(f"'{t.name}'" for t in tracks)
-        self.report({'INFO'}, f"Take kept: it plays from the NLA ({names})" if tracks
+        self.report({'INFO'}, f"Take kept. It plays from the NLA ({names})" if tracks
                     else "Take kept")
         return {'FINISHED'}
 
@@ -1785,7 +1785,7 @@ class ANIMATICA_OT_reject(Operator):
         if arm is None:
             self.report(
                 {'ERROR'},
-                "Target armature is missing or was deleted — choose an armature again",
+                "The target armature is missing or was deleted. Choose an armature again",
             )
             return {'CANCELLED'}
 
@@ -1846,7 +1846,7 @@ class ANIMATICA_OT_reject(Operator):
             s.is_previewing = False
             _clear_quota_state(s)
             self.report({'INFO'},
-                        (f"Removed {removed} generated sample(s); " if removed is not None else "")
+                        (f"Removed {removed} generated sample(s). " if removed is not None else "")
                         + f"'{name}' is back as it was")
             return {'FINISHED'}
 
@@ -1890,7 +1890,7 @@ class ANIMATICA_OT_reject(Operator):
         if is_motion_preview and source is not None:
             self.report(
                 {'INFO'},
-                f"Restored {source.name!r}; kept {len(kept)} key(s) you edited, "
+                f"Restored {source.name!r}. Kept {len(kept)} key(s) you edited and "
                 f"removed {n_rm} generated sample(s)",
             )
         elif is_motion_preview:
@@ -1898,7 +1898,7 @@ class ANIMATICA_OT_reject(Operator):
         elif source is not None:
             self.report({'INFO'}, f"Restored source action {source.name!r}")
         else:
-            self.report({'INFO'}, "Discarded preview")
+            self.report({'INFO'}, "Discarded the take")
         return {'FINISHED'}
 
 
@@ -1954,9 +1954,8 @@ class ANIMATICA_OT_generate_pose(Operator):
     bl_idname = "animatica.generate_pose"
     bl_label = "Generate Pose at Current Frame"
     bl_description = (
-        "Generate a single pose from text and insert it as a keyframe at the "
-        "current scene frame. Requires a server that advertises the 'pose' "
-        "segment type (Animatica Cloud). Non-destructive — undo with Ctrl+Z"
+        "Generate a single pose from text and key it at the current frame. "
+        "Needs a server that can make poses (Animatica Cloud). Undo with Ctrl+Z"
     )
 
     prompt: StringProperty(
@@ -1972,37 +1971,36 @@ class ANIMATICA_OT_generate_pose(Operator):
     on_ground: BoolProperty(
         name="Stand on the ground",
         description=(
-            "Put the pose's lowest point on the ground under the character. Off: "
-            "the height the model gave it, over that ground -- for a pose that "
-            "should be in the air, like a jump"
+            "Put the pose's lowest point on the ground under the character. Turn it "
+            "off to keep the height the model gave it above the ground, for a pose "
+            "that should be in the air, like a jump"
         ),
         default=True,
     )
     preserve_height: BoolProperty(
         name="Preserve height",
         description=(
-            "Keep the root's current world height. When unchecked (default), "
-            "the root's world Z is overridden by the generated pose's height "
-            "(XY stays put), so a 'crouching' pose actually drops the character "
-            "toward the floor and a 'jumping' pose lifts them"
+            "Keep the root's current world height. When off (the default), the "
+            "root's height comes from the generated pose and its X and Y stay put, "
+            "so a crouching pose lowers the character and a jumping pose lifts it"
         ),
         default=False,
     )
     pose_apply_scope: EnumProperty(
         name="Apply pose to",
-        description="Which bones receive keyframes from the generated pose",
+        description="Which bones get keys from the generated pose",
         items=(
             (
                 "ALL",
                 "All bones",
-                "Keyframe every joint in the server response",
+                "Key every joint in the generated pose",
             ),
             (
                 "SELECTED",
                 "Selected bones",
-                "Only keyframe bones that are selected on the target armature in "
-                "Pose mode (IK / control handles on a Mixamo rig expand to their "
-                "driving deform bones)",
+                "Only key the bones selected on the target armature in Pose Mode. "
+                "On a Mixamo rig, a selected IK or control handle also keys the "
+                "deform bones it drives",
             ),
         ),
         default="ALL",
@@ -2076,14 +2074,14 @@ class ANIMATICA_OT_generate_pose(Operator):
     def execute(self, context):
         s = context.scene.animatica
         if s.is_generating:
-            self.report({'WARNING'}, "Already generating — wait or click Cancel")
+            self.report({'WARNING'}, "Already generating. Wait, or click Cancel")
             return {'CANCELLED'}
 
         arm = _live_target_armature_or_clear(s)
         if arm is None:
             self.report(
                 {'ERROR'},
-                "Set a target armature first (or the previous rig was deleted)",
+                "Set a target armature first (the previous rig may have been deleted)",
             )
             return {'CANCELLED'}
 
@@ -2094,7 +2092,7 @@ class ANIMATICA_OT_generate_pose(Operator):
 
         if "pose" not in (model_caps.get("supported_segments") or []):
             self.report({'ERROR'},
-                        "Server does not advertise the 'pose' segment type. "
+                        "This server can't make poses. "
                         "Pose generation is an Animatica Cloud feature.")
             return {'CANCELLED'}
 
@@ -2113,9 +2111,9 @@ class ANIMATICA_OT_generate_pose(Operator):
             missing = canonical_joints - {pb.name for pb in arm.pose.bones}
             if missing:
                 self.report({'ERROR'},
-                            f"Server does not support retargeting and the armature is "
-                            f"missing {len(missing)} canonical joint(s). Re-import via "
-                            f"'Import canonical skeleton'")
+                            f"The server can't retarget, and the armature is missing "
+                            f"{len(missing)} joint(s) of its skeleton. Import it again "
+                            f"with 'Import canonical skeleton'")
                 return {'CANCELLED'}
             request_skeleton = model_caps["canonical_skeleton"]
 
@@ -2149,8 +2147,8 @@ class ANIMATICA_OT_generate_pose(Operator):
             if not selected:
                 self.report(
                     {"ERROR"},
-                    'Pose scope is "Selected bones" but no bones are selected on '
-                    "the target armature — open Pose mode and select one or more bones",
+                    'Apply pose to is "Selected bones", but no bones are selected on '
+                    "the target armature. Select one or more bones in Pose Mode",
                 )
                 return {"CANCELLED"}
             self._pose_joint_filter = frozenset(
@@ -2213,7 +2211,7 @@ class ANIMATICA_OT_generate_pose(Operator):
 
         if self._result is None:
             self._cleanup(context)
-            self.report({'ERROR'}, "Worker exited with no result")
+            self.report({'ERROR'}, "Generation stopped without a result")
             return {'CANCELLED'}
 
         # Successful run — clear any stale quota banner.
@@ -2224,14 +2222,14 @@ class ANIMATICA_OT_generate_pose(Operator):
             self._cleanup(context)
             self.report(
                 {'ERROR'},
-                "Target armature is missing or was deleted before the pose bake finished",
+                "The target armature is missing or was deleted before the pose was applied",
             )
             return {'CANCELLED'}
 
         n_frames = gltf_to_blender.sample_frame_count(self._result, sample_index=0)
         if n_frames < 1:
             self._cleanup(context)
-            self.report({'ERROR'}, "Response had no frames")
+            self.report({'ERROR'}, "The server sent back no frames")
             return {'CANCELLED'}
 
         # PoseSegment yields exactly 1 frame from the server — no
@@ -2256,8 +2254,8 @@ class ANIMATICA_OT_generate_pose(Operator):
             self._cleanup(context)
             self.report(
                 {"WARNING"},
-                "No pose channels matched the selected bones (names must match "
-                "skeleton joints in the response) — nothing keyframed",
+                "None of the selected bones match a joint in the generated pose, "
+                "so nothing was keyed",
             )
             return {"CANCELLED"}
 
@@ -2267,7 +2265,7 @@ class ANIMATICA_OT_generate_pose(Operator):
         key_poses.flash_keyed(self._target_frame)
 
         self._cleanup(context)
-        self.report({'INFO'}, f"Inserted pose: {written} channels @ frame {self._target_frame}")
+        self.report({'INFO'}, f"Keyed the pose at frame {self._target_frame} ({written} channels)")
         return {'FINISHED'}
 
     def _cleanup(self, context) -> None:
@@ -2294,9 +2292,8 @@ class ANIMATICA_OT_signin(Operator):
     bl_idname = "animatica.signin"
     bl_label = "Sign in to Animatica"
     bl_description = (
-        "Exchange email + password for an Animatica session token. Only "
-        "needed when pointing at Animatica Cloud — self-hosted servers "
-        "don't require sign-in"
+        "Sign in with your email and password. Only needed for Animatica "
+        "Cloud, since self-hosted servers don't require sign-in"
     )
 
     email: StringProperty(name="Email", default="")
@@ -2321,7 +2318,7 @@ class ANIMATICA_OT_signin(Operator):
 
     def execute(self, context):
         if not self.email or not self.password:
-            self.report({'ERROR'}, "Email and password required")
+            self.report({'ERROR'}, "Enter your email and password")
             return {'CANCELLED'}
         try:
             data = mmcp_client.sign_in(self.email, self.password)
@@ -2379,8 +2376,8 @@ def _generate_when_connected(started: float):
 
 
 class ANIMATICA_OT_allow_online(Operator):
-    """Animatica makes motion on its servers, so it needs Blender's online
-    access (Preferences > System > Allow Online Access). This turns it on"""
+    """Turn on Blender's online access (Preferences > System > Allow Online
+    Access). Animatica makes motion on its servers, so it needs this"""
     bl_idname = "animatica.allow_online"
     bl_label = "Allow Online Access"
 
@@ -2388,18 +2385,18 @@ class ANIMATICA_OT_allow_online(Operator):
         try:
             context.preferences.system.use_online_access = True
         except (AttributeError, TypeError) as exc:
-            self.report({'ERROR'}, f"Could not turn online access on ({exc}): "
+            self.report({'ERROR'}, f"Could not turn online access on ({exc}). Turn it on in "
                                    "Preferences > System > Allow Online Access")
             return {'CANCELLED'}
         mmcp_client.connect_async(force=True)
-        self.report({'INFO'}, "Online access on: connecting to Animatica")
+        self.report({'INFO'}, "Online access is on. Connecting to Animatica")
         return {'FINISHED'}
 
 
 class ANIMATICA_OT_signout(Operator):
     bl_idname = "animatica.signout"
     bl_label = "Sign out"
-    bl_description = "Forget the cached Animatica session tokens"
+    bl_description = "Sign out of Animatica on this computer"
 
     def execute(self, context):
         mmcp_client.sign_out()
@@ -2417,7 +2414,7 @@ class ANIMATICA_OT_signout(Operator):
 class ANIMATICA_OT_open_upgrade(Operator):
     bl_idname = "animatica.open_upgrade"
     bl_label = "Upgrade"
-    bl_description = "Open the upgrade URL in your browser"
+    bl_description = "Open the upgrade page in your browser"
 
     def execute(self, context):
         url = (context.scene.animatica.quota_upgrade_url or "").strip()
@@ -2432,7 +2429,7 @@ DISCORD_HELP_URL = "https://discord.com/invite/A8CrURBewz"
 
 
 class ANIMATICA_OT_quota_dialog(Operator):
-    """Out of generations: what happened, and one click to get more.
+    """You're out of generations. Shows what happened, with a link to get more.
 
     Opened by ``_announce_quota`` the moment a generation is refused. The
     sidebar banner stays behind it for whoever closes the dialog first.
@@ -2475,7 +2472,7 @@ class ANIMATICA_OT_open_discord_help(Operator):
 class ANIMATICA_OT_dismiss_quota(Operator):
     bl_idname = "animatica.dismiss_quota"
     bl_label = "Dismiss"
-    bl_description = "Hide the quota-exceeded banner"
+    bl_description = "Hide the generation limit banner"
 
     def execute(self, context):
         _clear_quota_state(context.scene.animatica)
@@ -2508,7 +2505,7 @@ class ANIMATICA_OT_lock_global_seed(Operator):
         s = context.scene.animatica
         last = int(getattr(s, "last_used_seed", 0) or 0)
         if last <= 0:
-            self.report({'WARNING'}, "No recorded seed yet — generate once first")
+            self.report({'WARNING'}, "No seed recorded yet. Generate once first")
             return {'CANCELLED'}
         s.seed = last
         self.report({'INFO'}, f"Locked seed {last}")

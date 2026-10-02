@@ -522,10 +522,10 @@ def driven_joints(arm, *, fresh: bool = False):
 
 
 #: what the artist is told when the Autoposer cannot work on a rig, instead of a traceback
-NO_MODEL = "The Autoposer model isn't downloaded yet — see Preferences > Add-ons > Animatica"
+NO_MODEL = "The Autoposer model isn't downloaded yet. Get it in Preferences > Add-ons > Animatica"
 UNSUPPORTED = "The Autoposer couldn't find a humanoid body on this rig"
 CONTROL_RIG = ("This rig's bones are driven by a control rig, which the Autoposer can't pose "
-               "yet — pose its deform skeleton instead")
+               "yet. Pose its deform skeleton instead")
 LINKED = ("This rig is linked from another file, so its controls can't be added or removed "
           "here (make it local first)")
 
@@ -560,7 +560,7 @@ def rig_problem(arm):
         names = ", ".join(control_label(j) for j in missing[:4])
         more = f" and {len(missing) - 4} more" if len(missing) > 4 else ""
         it = "it" if len(missing) == 1 else "them"
-        return f"Couldn't find the {names}{more} on this rig — set {it} under Skeleton"
+        return f"Couldn't find the {names}{more} on this rig. Set {it} under Skeleton"
     if _constrained(arm):
         return CONTROL_RIG
     try:
@@ -1158,7 +1158,7 @@ def solve(context, report=None, *, moved: bool = False):
     n_pos = sum(1 for e in eff if e["type"] == "pos")
     if n_pos < 3:
         if report:
-            report({"WARNING"}, f"{n_pos} position control(s) enabled — the poser was trained on 3+")
+            report({"WARNING"}, f"Only {n_pos} position control(s) on. The poser was trained with 3 or more")
         if n_pos == 0:
             return False
     try:
@@ -1190,7 +1190,7 @@ def solve(context, report=None, *, moved: bool = False):
         return False
     except Exception as e:                                    # noqa: BLE001
         if report:
-            report({"ERROR"}, f"solve failed: {e}")
+            report({"ERROR"}, f"Couldn't solve the pose: {e}")
         return False
 
     _BUSY = True
@@ -1646,12 +1646,13 @@ def _snap(arm, context, names=None):
 class AP_OT_build_rig(bpy.types.Operator):
     bl_idname = "autoposer.build_rig"
     bl_label = "Build Rig"
-    bl_description = "Create the control rig (default-on controls) from the sidecar's taxonomy"
+    bl_description = ("Add the Autoposer's handles (control bones) to the rig. Adds the default "
+                      "set unless All controls is on")
     bl_options = {"REGISTER", "UNDO"}
 
     all_controls: bpy.props.BoolProperty(
         name="All controls", default=False,
-        description="Create every control in the taxonomy, not just the default set")
+        description="Add every available control, not just the default set")
 
     def execute(self, context):
         arm = _armature(context)
@@ -1661,7 +1662,7 @@ class AP_OT_build_rig(bpy.types.Operator):
         try:
             rig = rig_def(refresh=True)
         except Exception as e:
-            self.report({"ERROR"}, f"cannot read /rig from the sidecar: {e}")
+            self.report({"ERROR"}, f"Couldn't read the list of controls: {e}")
             return {"CANCELLED"}
         # Every check before the first change: a build that stops leaves the rig as it was.
         problem = edit_problem(arm) or rig_problem(arm)
@@ -1699,7 +1700,7 @@ class AP_OT_build_rig(bpy.types.Operator):
         skipped = len(have) - len(drivable)
         self.report({"INFO"}, f"{len(made)} controls, driving {len(drivable)} joints"
                               + (f", {skipped} mapped bones left alone" if skipped else "")
-                              + " — grab them in Pose Mode")
+                              + ". Grab them in Pose Mode")
         return {"FINISHED"}
 
 
@@ -1720,7 +1721,7 @@ DEFAULT_CONTROLS = {
 class AP_OT_add_control(bpy.types.Operator):
     bl_idname = "autoposer.add_control"
     bl_label = "Add Control"
-    bl_description = "Add one control from the rig taxonomy"
+    bl_description = "Add one more control to the rig"
     bl_options = {"REGISTER", "UNDO"}
 
     def _items(self, context):
@@ -1731,7 +1732,7 @@ class AP_OT_add_control(bpy.types.Operator):
             return [("NONE", "sidecar unreachable", "")]
         have = {b.name for b in _controls(arm)} if arm else set()
         out = [(s["name"], control_label(s["joint"], s["kind"]),
-                f"{s['name']} — {s['joint']}, {s['kind']}")
+                f"{s['name']}: {s['joint']}, {s['kind']}")
                for s in rig if s["name"] not in have]
         return out or [("NONE", "all controls already present", "")]
 
@@ -1750,7 +1751,7 @@ class AP_OT_add_control(bpy.types.Operator):
             return {"CANCELLED"}
         spec = next((s for s in rig_def() if s["name"] == self.control), None)
         if spec is None or joint_bone(arm, spec["joint"]) is None:
-            self.report({"ERROR"}, "control not in this armature's taxonomy")
+            self.report({"ERROR"}, "This rig has no joint for that control")
             return {"CANCELLED"}
         global _BUILDING
         _BUILDING = True
@@ -1764,14 +1765,14 @@ class AP_OT_add_control(bpy.types.Operator):
         # should not move the character (see _on_enabled). It joins in on the next drag.
         _snap(arm, context, names={name})
         sync_state(arm)          # ...and the live timer must not read the new handle as a drag
-        self.report({"INFO"}, f"added {name}")
+        self.report({"INFO"}, f"Added {name}")
         return {"FINISHED"}
 
 
 class AP_OT_remove_control(bpy.types.Operator):
     bl_idname = "autoposer.remove_control"
     bl_label = "Remove Control"
-    bl_description = "Delete this control bone (the poser fills that joint from its prior)"
+    bl_description = "Delete this control bone. The poser then places that joint on its own"
     bl_options = {"REGISTER", "UNDO"}
 
     name: bpy.props.StringProperty()
@@ -1786,7 +1787,7 @@ class AP_OT_remove_control(bpy.types.Operator):
             return {"CANCELLED"}
         target = self.name or (arm.data.bones.active.name if arm.data.bones.active else "")
         if not target or target not in arm.data.bones or not _is_ctrl(arm.data.bones[target]):
-            self.report({"ERROR"}, "not a control bone")
+            self.report({"ERROR"}, "That isn't a control bone")
             return {"CANCELLED"}
         prev = arm.mode
         context.view_layer.objects.active = arm
@@ -1801,7 +1802,7 @@ class AP_OT_remove_control(bpy.types.Operator):
         finally:
             bpy.ops.object.mode_set(mode="POSE" if prev == "POSE" else "OBJECT")
         _restore_pose(arm, keep, context)     # deleting a control must not move the character
-        self.report({"INFO"}, f"removed {target}")
+        self.report({"INFO"}, f"Removed {target}")
         return {"FINISHED"}
 
 
@@ -1861,16 +1862,15 @@ class AP_OT_remove_rig(bpy.types.Operator):
 class AP_OT_key_pose(bpy.types.Operator):
     bl_idname = "autoposer.key_pose"
     bl_label = "Key Pose"
-    bl_description = ("Commit the solved pose as keyframes on the current frame: a rotation key on "
-                      "every deform bone and a location key on the root. This is how the pose "
-                      "SURVIVES frame and mode changes, and it is the form Proscenium reads for a "
-                      "blockout pose")
+    bl_description = ("Key the solved pose at the current frame: a rotation key on every deform "
+                      "bone and a location key on the root. Keying keeps the pose through frame "
+                      "and mode changes, and it is the form Animatica reads as a key pose")
     bl_options = {"REGISTER", "UNDO"}
 
     key_controls: bpy.props.BoolProperty(
         name="Also key controls", default=False,
-        description="Key the CTRL_* bones too, so you can return to this frame and keep editing "
-                    "from the same control layout")
+        description="Key the CTRL_* bones too, so you can come back to this frame and keep "
+                    "editing with the same controls")
 
     def execute(self, context):
         arm = _armature(context)
@@ -1914,15 +1914,15 @@ class AP_OT_key_pose(bpy.types.Operator):
         root = joint_pose_bone(arm, (engine.meta().get("joint_names") or ["Hips"])[0])
         if root is not None:
             root.keyframe_insert(data_path="location", frame=f)
-        self.report({"INFO"}, f"keyed {n} bones + root location at frame {f}")
+        self.report({"INFO"}, f"Keyed {n} bones and the root location at frame {f}")
         return {"FINISHED"}
 
 
 class AP_OT_take_over(bpy.types.Operator):
     bl_idname = "autoposer.take_over"
     bl_label = "Take Over Rig"
-    bl_description = ("Detach the action driving this rig so the solved pose survives mode "
-                      "switches and frame changes. The action is kept (fake user) and can be "
+    bl_description = ("Detach the action driving this rig so the solved pose holds through mode "
+                      "and frame changes. The action is kept (with a fake user) and can be "
                       "put back")
     bl_options = {"REGISTER", "UNDO"}
 
@@ -1960,14 +1960,14 @@ class AP_OT_take_over(bpy.types.Operator):
                 muted.append(t.name)
         arm["ap_muted_nla"] = muted
         solve(context, self.report)
-        self.report({"INFO"}, "rig detached from its animation — the autoposer owns the pose")
+        self.report({"INFO"}, "Rig detached from its animation. The Autoposer now controls the pose")
         return {"FINISHED"}
 
 
 class AP_OT_release(bpy.types.Operator):
     bl_idname = "autoposer.release"
     bl_label = "Give Back"
-    bl_description = "Re-attach the action (and un-mute NLA) the autoposer took over"
+    bl_description = "Reattach the action the Autoposer took over, and unmute its NLA tracks"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -1990,14 +1990,14 @@ class AP_OT_release(bpy.types.Operator):
                             ad.action_slot = sl
                             break
             except Exception as e:
-                self.report({"WARNING"}, f"action re-linked but its slot did not rebind: {e}")
+                self.report({"WARNING"}, f"Action reattached, but its slot couldn't be rebound: {e}")
         for t in ad.nla_tracks:
             if t.name in list(arm.get("ap_muted_nla", [])):
                 t.mute = False
         for k in ("ap_stashed_action", "ap_muted_nla", "ap_stashed_slot", "ap_stashed_slot_id"):
             if k in arm:
                 del arm[k]
-        self.report({"INFO"}, "animation re-attached — it will drive the pose again")
+        self.report({"INFO"}, "Animation reattached. It drives the pose again")
         return {"FINISHED"}
 
 
@@ -2030,7 +2030,7 @@ class AP_OT_snap_controls(bpy.types.Operator):
 class AP_OT_rest(bpy.types.Operator):
     bl_idname = "autoposer.rest"
     bl_label = "Reset to Rest"
-    bl_description = "Clear the pose on the deform bones and re-seat the controls"
+    bl_description = "Clear the pose on the deform bones and put the controls back on their joints"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -2109,8 +2109,8 @@ class AP_JointItem(bpy.types.PropertyGroup):
     joint: bpy.props.StringProperty(name="Joint")
     bone: bpy.props.StringProperty(
         name="Bone", update=_on_map_edit,
-        description="The bone of this rig that plays this joint. Empty: the rig has no such "
-                    "joint, and the poser fills it in from its prior")
+        description="The bone of this rig that plays this joint. Leave empty if the rig has no "
+                    "such joint, and the poser places it on its own")
 
 
 class AP_OT_detect_joints(bpy.types.Operator):
@@ -2135,10 +2135,10 @@ class AP_OT_detect_joints(bpy.types.Operator):
         found = sum(1 for it in arm.ap_joints if it.bone)
         missing = joint_map.missing_core(joint_map_of(arm))
         if missing:
-            self.report({"WARNING"}, f"found {found} joints; set "
+            self.report({"WARNING"}, f"Found {found} joints. Set "
                         + ", ".join(control_label(j) for j in missing) + " by hand")
         else:
-            self.report({"INFO"}, f"found {found} joints")
+            self.report({"INFO"}, f"Found {found} joints")
         return {"FINISHED"}
 
 
@@ -2161,46 +2161,48 @@ def register():
     bpy.types.Object.ap_joints = bpy.props.CollectionProperty(type=AP_JointItem)
     B = bpy.types.Bone
     B.ap_joint = bpy.props.StringProperty(name="Joint", default="",
-                                          description="SOMA joint this control drives")
+                                          description="The SOMA skeleton joint this control drives")
     B.ap_enabled = bpy.props.BoolProperty(
         name="On", default=True, update=_on_enabled,
-        description="Off: the control follows its joint and contributes no effector, so the poser "
-                    "places that joint from its prior. On: the joint goes where the control is")
+        description="When on, the joint goes where the control is. When off, the control follows "
+                    "its joint and has no effect, so the poser places that joint on its own")
     B.ap_rot = bpy.props.BoolProperty(
         name="Rotation", default=False, update=_on_rot,
-        description="Also send this joint's ORIENTATION to the poser. Switches on by itself when "
-                    "you rotate the control; uncheck to hand the orientation back to the model")
+        description="Also send this joint's orientation to the poser. Turns on by itself when "
+                    "you rotate the control. Uncheck it to let the model choose the orientation")
     B.ap_rot_tol_m = bpy.props.FloatProperty(
         name="Rotation tolerance", default=0.005, min=0.001, max=0.5, step=0.1, precision=3,
         update=_on_tol,
-        description="Slack on the orientation. The Rust IK has no rotation term, so this is the "
-                    "poser's dial alone. If a rotation lands short, loosen this control's POSITION "
-                    "tolerance — pinning the position fights the rotation on the same joint "
-                    "(measured: 30 deg request turned 8.9 deg pinned, 15.3 deg at pos tol 0.20)")
+        description="How far the joint's orientation may stray from the control's. Only the "
+                    "poser uses it, not the IK refine step. If a rotation falls short, loosen "
+                    "this control's position Tolerance, since a tight position fights the "
+                    "rotation on the same joint (in a test, a 30 deg turn reached 8.9 deg with "
+                    "the position pinned and 15.3 deg at a position tolerance of 0.20)")
     B.ap_tol_m = bpy.props.FloatProperty(
         name="Tolerance", default=0.005, min=0.001, max=0.5, step=0.1, precision=3,
         unit="LENGTH", update=_on_tol,
-        description="Metres of slack. Tight = obey; loose = a hint the poser may overrule. Also "
-                    "sets the IK weight (1/tol), so poser and solver read the same dial")
+        description="Slack, in metres. Tight puts the joint at the control. Loose makes the "
+                    "control a hint the poser may overrule. Also sets the IK weight (1/tol), so "
+                    "the poser and the solver use the same value")
     S = bpy.types.Scene
     S.ap_armature = bpy.props.StringProperty(name="Rig", default="")
     S.ap_live = bpy.props.BoolProperty(
         name="Live", default=True, update=_set_live,
-        description="Solve as you drag a control. Off, a control moves nothing "
-                    "until you run Solve from the search menu")
+        description="Solve as you drag a control. When off, controls move nothing "
+                    "until you run Solve Pose from the search menu")
     S.ap_rate = bpy.props.IntProperty(name="Max Hz", default=60, min=5, max=120)
     S.ap_use_ik = bpy.props.BoolProperty(name="IK refine", default=True)
     S.ap_floor = bpy.props.BoolProperty(
         name="Floor", default=True,
-        description="The floor is solid: no joint ends up below it. Whatever the solver leaves "
-                    "underground is lifted out by turning bones about joints that stay put — a "
-                    "knee swings about the line through its hip and ankle, anything else rolls "
-                    "about the joint above it — so pinned controls are not spent doing it. A "
-                    "control you pin BELOW the floor is overruled")
+        description="Treat the floor as solid, so no joint ends up below it. Anything the solver "
+                    "leaves underground is lifted out by turning bones about joints that stay put "
+                    "(a knee swings about the line through its hip and ankle, anything else rolls "
+                    "about the joint above it), so your pinned controls aren't moved to do it. A "
+                    "control you pin below the floor is overruled")
     S.ap_hide_deform = bpy.props.BoolProperty(
         name="Hide skeleton", default=True, update=_on_hide_deform,
         description="Hide the deform bones so only the controls and the character are visible. "
-                    "Display only — the poser drives them either way")
+                    "This only changes the display. The poser drives the bones either way")
     S.ap_status = bpy.props.StringProperty(name="Status", default="")
     S.ap_show_joints = bpy.props.BoolProperty(
         name="Skeleton", default=False,

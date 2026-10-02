@@ -2526,7 +2526,7 @@ def _draw_screen():
 class ANIMATICA_OT_key_poses_refresh(bpy.types.Operator):
     bl_idname = "animatica.key_poses_refresh"
     bl_label = "Refresh Key Poses"
-    bl_description = "Re-read the key poses from the armature and re-bake their ghosts"
+    bl_description = "Read the key poses from the armature again and redraw their ghosts"
     bl_options = {'REGISTER'}
 
     @classmethod
@@ -2542,7 +2542,7 @@ class ANIMATICA_OT_key_poses_refresh(bpy.types.Operator):
             settings.key_pose_ghosts = True
             return {'FINISHED'}
         if rebuild(context) == 0:
-            self.report({'INFO'}, "No key poses to show — pose the rig and insert a keyframe")
+            self.report({'INFO'}, "No key poses to show. Pose the rig and insert a keyframe")
         return {'FINISHED'}
 
 
@@ -2551,7 +2551,7 @@ class ANIMATICA_OT_step_key_pose(bpy.types.Operator):
     bl_label = "Jump to Key Pose"
     bl_description = (
         "Move the playhead to the next or previous pose you keyed. Blender's "
-        "own keyframe jump stops on every frame of a generated take; this "
+        "own keyframe jump stops on every frame of a generated take, and this "
         "stops only on your poses"
     )
     bl_options = {'REGISTER', 'UNDO'}
