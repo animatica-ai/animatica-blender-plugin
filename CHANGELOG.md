@@ -82,6 +82,17 @@ Proscenium, and keep the identifiers those releases actually shipped.
 - **A block can be shortened from the left** where it meets another one.
 - **The add-on no longer stays stuck "working"** after a generation stops
   without finishing.
+- **Fewer freezes on macOS.** The bar, the ghosts and the trails no longer
+  build fresh GPU buffers on every redraw, and the ghost cache is capped.
+- **A drag that is interrupted cleans up.** Loading a file or an error in
+  the middle of a drag no longer leaves the add-on thinking a drag is on;
+  Esc puts back the handles a drag switched on.
+- **Handles can't be grabbed during playback**, when they are hidden.
+- **Editing a travelling loop on a later repeat** no longer makes the
+  character jump back to the first cycle while you drag.
+- **The first fine-tuning edit no longer clears the ghosts.**
+- **Dragging on a sparse take no longer lags** on a wide reach.
+- **G or R on handles with no place in the scene** no longer raises an error.
 
 ## [0.6.4] — 2026-09-30
 

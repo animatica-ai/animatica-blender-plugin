@@ -1018,7 +1018,7 @@ class AnimaticaSettings(PropertyGroup):
         description=(
             "How strongly the frames around an edit follow it: 100% gives them the whole "
             "falloff, 0% leaves them be and only the edited frame changes. The edited frame "
-            "always takes the whole edit. Drag the curve's top in the viewport to change it"
+            "always takes the whole edit. On the floating bar, drag the Reach tile up or down"
         ),
         default=1.0, min=0.0, max=1.0, subtype='FACTOR',
         update=lambda self, context: _redraw_3d_views(),

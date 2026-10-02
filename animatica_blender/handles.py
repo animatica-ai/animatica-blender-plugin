@@ -568,6 +568,9 @@ class ANIMATICA_GT_handles(bpy.types.Gizmo):
         if os.environ.get("AP_DEBUG"):
             print("TS", tuple(location), [(x.name, xy) for x, xy, r in _projected(context, _arm(context))][:3],
                   context.region.width if context.region else None)
+        from . import key_poses
+        if key_poses.playing():
+            return -1              # hidden while it plays: nothing to grab (a drag fought the playback)
         h = hit(context, *location)
         name = h.name if h is not None else ""
         key = context.area.as_pointer()
@@ -680,6 +683,7 @@ class ANIMATICA_OT_handle_drag(bpy.types.Operator):
             return {'CANCELLED'}
         h = hs[self.index]
         self._name = h.name
+        self._was_on = bool(h.ap_enabled)     # Esc puts it back as it was
         if event.ctrl and not self.axis:
             h.ap_enabled = not h.ap_enabled
             if not h.ap_enabled:
@@ -740,6 +744,25 @@ class ANIMATICA_OT_handle_drag(bpy.types.Operator):
         return constrained(context, (event.mouse_region_x, event.mouse_region_y), self._start, self.axis)
 
     def modal(self, context, event):
+        # an error mid-drag, or Blender ending the operator, must not leave the
+        # add-on believing a drag is under way (ghosts stop refilling, edits are
+        # ignored, the header text stays) -- it cancels, as Esc does
+        try:
+            return self._modal(context, event)
+        except Exception:                               # noqa: BLE001
+            import traceback
+            traceback.print_exc()
+            self.cancel(context)
+            return {'CANCELLED'}
+
+    def cancel(self, context):
+        try:
+            self._finish(context, cancel=True)
+        except Exception:                               # noqa: BLE001
+            from . import handles as _h, wormhole as _w
+            _h.abort_drags(context)
+
+    def _modal(self, context, event):
         if event.type == 'INBETWEEN_MOUSEMOVE':
             return {'RUNNING_MODAL'}    # each one a solve: a trackpad's stream of them queued up, and the drag lagged
         if event.type == 'MOUSEMOVE':
@@ -769,7 +792,7 @@ class ANIMATICA_OT_handle_drag(bpy.types.Operator):
             if not failed:
                 self._carry.set_after({pb.name: pb.matrix_basis.copy() for pb in self._arm.pose.bones})
                 # this frame as the edit leaves it -- the frames around it the same way
-                bases = self._carry.pose_at(self._f0)
+                bases = self._carry.shown_at_f0()
                 for name in self._carry.edited:
                     self._arm.pose.bones[name].matrix_basis = bases[name]
                 context.view_layer.update()
@@ -808,6 +831,8 @@ class ANIMATICA_OT_handle_drag(bpy.types.Operator):
             for h in items(context.scene, self._arm):
                 if h.name in self._snap["aims"]:
                     h.aim = self._snap["aims"][h.name]
+                if h.name == self._name:
+                    h.ap_enabled = getattr(self, "_was_on", h.ap_enabled)
             context.view_layer.update()
             context.area.tag_redraw()
             return {'CANCELLED'}
@@ -833,6 +858,25 @@ class ANIMATICA_OT_handle_drag(bpy.types.Operator):
         n = wormhole.end_through(context, self._carry)
         key_poses.flash_keyed(self._f0)
         self.report({'INFO'}, wormhole.edit_report(self._carry, n))
+
+
+def abort_drags(context=None) -> None:
+    """Forget any drag under way (an operator that died, a file loaded): the
+    flags that say one is, the preview through time and the header text."""
+    from . import carry, wormhole
+    _drag.update(active=False, name="", error="")
+    wormhole._drag.update(active=False, points=None, parents=None, error="", bent=None)
+    wormhole.propagation.update(f0=None, radius=0, frames={}, bone="", at=0.0, carry=None, trail={})
+    try:
+        carry.clear_live()
+    except Exception:                                   # noqa: BLE001
+        pass
+    area = getattr(context, "area", None) if context is not None else None
+    if area is not None:
+        try:
+            area.header_text_set(None)
+        except Exception:                               # noqa: BLE001
+            pass
 
 
 _AXES = {"X": Vector((1.0, 0.0, 0.0)), "Y": Vector((0.0, 1.0, 0.0)), "Z": Vector((0.0, 0.0, 1.0))}
@@ -895,6 +939,8 @@ class ANIMATICA_OT_handle_transform(bpy.types.Operator):
         self._was = {h.name: (h.ap_enabled, h.ap_rot) for h in sel}
         self._starts = {h.name: world(arm, h) for h in sel}
         pts = [p for p in self._starts.values() if p is not None]
+        if not pts:
+            return {'PASS_THROUGH'}          # none of them has a place in the scene to move from
         self._center = sum(pts, Vector()) / len(pts)
         self._mouse0 = (event.mouse_region_x, event.mouse_region_y)
         self._grab0 = constrained(context, self._mouse0, self._center)
@@ -970,7 +1016,7 @@ class ANIMATICA_OT_handle_transform(bpy.types.Operator):
         if not self._error:
             # this frame as the edit leaves it, and the frames around it with it
             self._carry.set_after({pb.name: pb.matrix_basis.copy() for pb in self._arm.pose.bones})
-            bases = self._carry.pose_at(self._f0)
+            bases = self._carry.shown_at_f0()
             for name in self._carry.edited:
                 self._arm.pose.bones[name].matrix_basis = bases[name]
             context.view_layer.update()
@@ -981,6 +1027,25 @@ class ANIMATICA_OT_handle_transform(bpy.types.Operator):
         context.area.tag_redraw()
 
     def modal(self, context, event):
+        # an error mid-drag, or Blender ending the operator, must not leave the
+        # add-on believing a drag is under way (ghosts stop refilling, edits are
+        # ignored, the header text stays) -- it cancels, as Esc does
+        try:
+            return self._modal(context, event)
+        except Exception:                               # noqa: BLE001
+            import traceback
+            traceback.print_exc()
+            self.cancel(context)
+            return {'CANCELLED'}
+
+    def cancel(self, context):
+        try:
+            self._finish(context, cancel=True)
+        except Exception:                               # noqa: BLE001
+            from . import handles as _h, wormhole as _w
+            _h.abort_drags(context)
+
+    def _modal(self, context, event):
         if event.type == 'INBETWEEN_MOUSEMOVE':
             return {'RUNNING_MODAL'}    # each one a solve: a trackpad's stream of them queued up, and the drag lagged
         if event.type == 'MOUSEMOVE':

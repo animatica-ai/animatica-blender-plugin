@@ -824,9 +824,13 @@ def _draw_reach(context, rect, u, size, hot, first, last):
         d = i / 16.0
         w = reach_widget._unit_share(d) if radius else (1.0 if i == 0 else 0.0)
         pts.append((mid + d * (cx1 - cx0) / 2, base + (top - base) * w * (k if i else 1.0)))
+    verts, tris = [], []
     for (xa, ya), (xb, yb) in zip(pts, pts[1:]):
         if ya > base + 0.5 or yb > base + 0.5:
-            st.polygon([(xa, base), (xb, base), (xb, yb), (xa, ya)], st.with_alpha(st.SOFT_ORANGE, 0.3))
+            k = len(verts)
+            verts += [(xa, base), (xb, base), (xb, yb), (xa, ya)]
+            tris += [(k, k + 1, k + 2), (k, k + 2, k + 3)]
+    st.triangles(verts, tris, st.with_alpha(st.SOFT_ORANGE, 0.3))    # one batch, not 32
     st.lines(list(zip(pts, pts[1:])), max(1.0, 1.4 * u), st.with_alpha(st.SOFT_ORANGE, 0.95))
     st.lines([((mid, base), (mid, top))], max(1.0, u), (1, 1, 1, 0.6))
     st.lines([((cx0, base), (cx1, base))], max(1.0, u), (1, 1, 1, 0.25))

@@ -155,6 +155,7 @@ def offset_of(context, s):
             depth = radius * (1 - math.cos(a))
             return (right * (radius * math.sin(a)) + into * (depth * math.cos(tilt))
                     + up * (depth * math.sin(tilt)) + back - travel(frame))
+        round_at.key = _view_key(rv3d, c, s, span, here)
         return round_at
 
     def at(frame):
@@ -163,7 +164,17 @@ def offset_of(context, s):
             return None
         r = d / step
         return right * (r * spacing) + into * (abs(r) * spacing * DEPTH)
+    at.key = _view_key(rv3d, c, s, None, None)
     return at
+
+
+def _view_key(rv3d, c, s, span, here):
+    """What a placement depends on, so a path drawn through the slices can be
+    kept until the view, the frame or the settings change."""
+    q = rv3d.view_rotation
+    return (round(q.w, 4), round(q.x, 4), round(q.y, 4), round(q.z, 4), int(c), int(s.trail_radius),
+            int(s.wormhole_step), round(float(s.wormhole_spacing), 4), span,
+            tuple(round(v, 3) for v in here) if here is not None else None)
 
 
 def _hips_now(context, s):
@@ -384,6 +395,9 @@ class ANIMATICA_GT_wormhole(bpy.types.Gizmo):
         draw(context, True)
 
     def test_select(self, context, location):
+        from . import key_poses
+        if key_poses.playing():
+            return -1              # the handles are hidden while it plays
         key = context.area.as_pointer()
         if _mouse.get(key) != tuple(location):
             _mouse[key] = tuple(location)
@@ -458,6 +472,7 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
             self.report({'WARNING'}, f"No handle drives {_label(context, bone)}: add one (Shift A) to pose it")
             return {'CANCELLED'}
         self._arm, self._frame, self._bone, self._off, self._name = arm, f, bone, off.copy(), h.name
+        self._was_on = bool(h.ap_enabled)     # Esc puts it back as it was
         self._start = Vector(entry["joints"][bone]) + off          # where it is drawn
         self._moved = False
         self._error = ""
@@ -528,6 +543,25 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
         show_through(context, self._carry, self._bone)
 
     def modal(self, context, event):
+        # an error mid-drag, or Blender ending the operator, must not leave the
+        # add-on believing a drag is under way (ghosts stop refilling, edits are
+        # ignored, the header text stays) -- it cancels, as Esc does
+        try:
+            return self._modal(context, event)
+        except Exception:                               # noqa: BLE001
+            import traceback
+            traceback.print_exc()
+            self.cancel(context)
+            return {'CANCELLED'}
+
+    def cancel(self, context):
+        try:
+            self._finish(context, cancel=True)
+        except Exception:                               # noqa: BLE001
+            from . import handles as _h, wormhole as _w
+            _h.abort_drags(context)
+
+    def _modal(self, context, event):
         if event.type == 'INBETWEEN_MOUSEMOVE':
             return {'RUNNING_MODAL'}    # each one a solve: a trackpad's stream of them queued up, and the drag lagged
         if event.type == 'MOUSEMOVE':
@@ -558,6 +592,10 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
         if cancel or not self._carry.changed():
             end_through(context, None)
             context.scene.animatica.trail_radius = self._radius0
+            from . import handles
+            for h in handles.items(context.scene, self._arm):
+                if h.name == self._name:
+                    h.ap_enabled = getattr(self, "_was_on", h.ap_enabled)
             return {'CANCELLED'}
         spread = end_through(context, self._carry)
         cur = context.scene.frame_current
@@ -639,6 +677,7 @@ def end_through(context, c) -> int:
         carry.clear_live()
         key_poses.tag_redraw()
         return 0
+    c.refresh()                # read through the keys once more: the preview was throttled
     carry.show_live(context, c, _live_frames(context, c))      # the final state, exactly
     _keep_trail(trail)
     n = c.write()
@@ -674,6 +713,7 @@ def _keep_trail(over) -> None:
                 pts[i] = tuple(p)
         key_poses._trail["points"][name] = pts
     key_poses._trail_colors["signature"] = None
+    key_poses._trail_batches.clear()
 
 
 def edit_report(c, n) -> str:

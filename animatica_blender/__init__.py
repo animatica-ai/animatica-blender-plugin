@@ -91,6 +91,7 @@ def _animatica_load_post(dummy):
     # under the old keys. Migrate first: the hydration below reads the new
     # ones, so it would find nothing on an unmigrated file.
     migrate.run()
+    _reset_drags()                  # nor does a drag: its operator died with the old file
 
     # No generation survives a file load: one saved (or autosaved) mid-run
     # would otherwise reopen showing "Working…" with nothing to finish it.
@@ -137,6 +138,14 @@ def _animatica_load_post(dummy):
             properties.mirror_autoposer_rig(settings)
         except Exception:
             pass
+
+
+def _reset_drags() -> None:
+    try:
+        from . import handles
+        handles.abort_drags()
+    except Exception:                                   # noqa: BLE001
+        pass
 
 
 def _reset_runtime_flags() -> None:

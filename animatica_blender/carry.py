@@ -30,7 +30,9 @@ from mathutils import Matrix, Quaternion, Vector
 #: the joints a hold or a drag puts exactly in place on each frame
 ENDS = ("LeftHand", "RightHand", "LeftFoot", "RightFoot")
 #: live ghosts: at most this many frames re-captured per drag update
-LIVE_MAX = 24
+LIVE_MAX = 16
+#: seconds between re-reading the curves for the live preview of a sparse action
+PROBE_EVERY = 0.08
 
 
 def _split(M):
@@ -122,15 +124,18 @@ def reach(rig, bases, end, target) -> bool:
     return True
 
 
-def bases_from_action(arm, action, frame, names, fallback) -> dict:
+def action_curves(action) -> dict:
+    from . import constraints_ui
+    return {(fc.data_path, fc.array_index): fc
+            for fc in constraints_ui.iter_action_fcurves(action)} if action is not None else {}
+
+
+def bases_from_action(arm, action, frame, names, fallback, curves=None) -> dict:
     """The bases ``names`` have at ``frame`` as the action plays them --
     read off the curves, no frame stepped. A channel with no curve keeps
-    ``fallback``'s value."""
-    from . import constraints_ui
-    curves = {}
-    if action is not None:
-        for fc in constraints_ui.iter_action_fcurves(action):
-            curves[(fc.data_path, fc.array_index)] = fc
+    ``fallback``'s value. ``curves``: the action's, when already gathered."""
+    if curves is None:
+        curves = action_curves(action)
     out = {}
     for n in names:
         pb = arm.pose.bones[n]
@@ -341,9 +346,15 @@ class Carry:
         is keyed. Blender's own interpolation decides that -- its handles bend
         with the new keys -- so it is asked: the keys are written, the frames
         read, and every curve put back exactly as it was, in one go."""
-        key = (self.radius, id(self.after))
-        if getattr(self, "_probe_key", None) != key:
-            self._probe_key, self._probe = key, None
+        import time
+        # the same solve and reach as last time: the same answer. A new solve is
+        # read again at most every PROBE_EVERY -- it writes and reads every
+        # curve, and on a wide reach that lagged the drag; refresh() before the
+        # final ghosts. Held by reference: an id() can come back for a new dict.
+        now = time.monotonic()
+        changed = getattr(self, "_probe_after", None) is not self.after or getattr(self, "_probe_r", None) != self.radius
+        if changed and (getattr(self, "_probe", None) is None or now - getattr(self, "_probe_at", 0.0) >= PROBE_EVERY):
+            self._probe_after, self._probe_r, self._probe, self._probe_at = self.after, self.radius, None, now
         if self._probe is None:
             lo, hi = self.span()
             keyed = self.keyed()
@@ -355,7 +366,7 @@ class Carry:
         from . import constraints_ui, pose_edit
         if self.action is None or not frames:
             return {}
-        curves = {(fc.data_path, fc.array_index): fc for fc in constraints_ui.iter_action_fcurves(self.action)}
+        curves = action_curves(self.action)
         writes = [(self.f0, self.channels(self.pose_at(self.f0)))]
         writes += [(k, self.channels(self.pose_at(k))) for k in self.frames()]
         undo = []          # (fc, keyframe, None) for an added key; (fc, keyframe, (y, hl, hr)) for a changed one
@@ -380,7 +391,7 @@ class Carry:
                     touched.add(fc)
             for fc in touched:
                 fc.update()
-            return {f: bases_from_action(self.arm, self.action, f, self.names, self.before) for f in frames}
+            return {f: bases_from_action(self.arm, self.action, f, self.names, self.before, curves) for f in frames}
         finally:
             for fc, frame, was in reversed(undo):
                 kp = next((k for k in fc.keyframe_points if int(round(k.co.x)) == frame), None)
@@ -392,6 +403,26 @@ class Carry:
                     kp.co.y, kp.handle_left.y, kp.handle_right.y = was
             for fc in touched:
                 fc.update()
+
+    def refresh(self) -> None:
+        """Read the curves again on the next look (before the final ghosts)."""
+        self._probe = None
+        self._probe_after = None
+
+    def shown_at_f0(self) -> dict:
+        """f0 as the rig shows it. On a repeat of a travelling loop the rig
+        stands strides on from the cycle's own frame: the edit is keyed there
+        but shown here (it jumped back by the strides while dragging)."""
+        bases = self.pose_at(self.f0)
+        if not self._wrapped:
+            return bases
+        cycle = self.original(self.f0)
+        out = {}
+        for n, M in bases.items():
+            loc, q, sc = _split(M)
+            on = _split(self.before[n])[0] - _split(cycle[n])[0]
+            out[n] = _compose(loc + on, q, sc)
+        return out
 
     # -- keying ------------------------------------------------------------
 

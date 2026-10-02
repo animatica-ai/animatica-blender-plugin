@@ -304,7 +304,7 @@ def _ghost_signature(arm, action, settings):
     """
     if arm is None or action is None:
         return None
-    return (arm.name, action.name, settings.key_pose_display)
+    return (arm.name, action.as_pointer(), settings.key_pose_display)  # not its name: keeping a take renames it
 
 
 def _trail_signature(arm, action):
@@ -1071,6 +1071,7 @@ def rebuild(context=None) -> int:
         _trail["bones"] = [name for name in trail_bones if name in trail_points]
         _trail["frames"] = trail_frames
         _trail["points"] = trail_points
+        _trail_batches.clear()
         _trail["signature"] = trail_sig
         _trail["dirty"] = False
         _trail["arm"] = arm.name
@@ -1559,7 +1560,7 @@ WORMHOLE_MAX_SIDE = 12
 ONION_DEPTH_NUDGE = 0.025       # m: an onion ghost sits just behind the live body
 ONION_CHUNK = 3                 # frames captured per timer tick: short enough not to stutter
 ONION_TICK = 0.02
-ONION_MAX = 480                 # frames kept at most
+ONION_MAX = 180                 # frames kept: each is a mesh on the GPU, and memory is what froze Blender
 
 #: what the change handler last saw: the frame (a change of it is not an edit),
 #: and how long after a bake its own evaluation is to be ignored
@@ -1618,8 +1619,8 @@ def posing() -> bool:
     until it is keyed, and any capture that steps the playhead and back
     re-evaluates the action over it: the dragged pose was lost."""
     try:
-        from . import handles, wormhole
-        return bool(handles._drag["active"] or wormhole._drag["active"])
+        from . import curve_edit, handles, wormhole
+        return bool(handles._drag["active"] or wormhole._drag["active"] or curve_edit._drag["active"])
     except Exception:                       # noqa: BLE001
         return False
 
@@ -1746,7 +1747,7 @@ def _onion_sig(settings):
     action = _action(arm)
     if arm is None or action is None:
         return None
-    return (arm.name, action.name, settings.key_pose_display)
+    return (arm.name, action.as_pointer(), settings.key_pose_display)  # not its name: keeping a take renames it
 
 
 def onion_wanted(context, settings) -> bool:
@@ -1781,7 +1782,9 @@ def request_onion(context, settings) -> None:
         return
     if sig != _onion["sig"] or _onion["dirty"]:
         same = sig == _onion["sig"]
-        stale = {**_onion["stale"], **_onion["cache"]} if same else {}
+        # what was on show stays until captured again -- only the last cache,
+        # not every one before it (each ghost is a mesh on the GPU)
+        stale = dict(_onion["cache"]) if same else {}
         _onion.update(sig=sig, cache=dict(_onion["seed"]) if same else {}, stale=stale, seed={},
                       dirty=False, extent=_motion_extent(_action(_target(settings))), joint_bones=None)
     if _onion["pending"] or _baking or settings.is_generating:
@@ -1848,6 +1851,7 @@ def fill_onion(context, chunk: int = ONION_CHUNK) -> bool:
                 if segments is not None:
                     entry["lines"] = batch_for_shader(line_shader, 'LINES', {"pos": segments})
             _onion["cache"][f] = entry
+        _evict_onion(scene, settings)
     finally:
         scene.frame_set(saved_frame, subframe=saved_sub)
         try:
@@ -1858,6 +1862,23 @@ def fill_onion(context, chunk: int = ONION_CHUNK) -> bool:
         _seen["quiet_until"] = time.monotonic() + 0.06
     tag_redraw()
     return bool(_onion_todo(scene, settings))
+
+
+def _evict_onion(scene, settings) -> None:
+    """Keep the cache at ONION_MAX: the frames furthest from the playhead go
+    first, the ones on show never. (It only grew: scrubbing a long take with
+    the onion skins on added a mesh on the GPU for every frame visited.)"""
+    cache = _onion["cache"]
+    if len(cache) <= ONION_MAX:
+        return
+    shown = set(onion_frames(scene, settings))
+    c = int(scene.frame_current)
+    span = loop_span(settings)
+    spare = sorted((f for f in cache if f not in shown), key=lambda f: -abs(frames_from(f, c, span)))
+    for f in spare[:len(cache) - ONION_MAX]:
+        del cache[f]
+    for f in [f for f in _onion["stale"] if f not in shown]:
+        del _onion["stale"][f]          # the ones before an edit: only those still on show
 
 
 def bake_onion(context) -> int:
@@ -1893,28 +1914,28 @@ def _draw_onion_frames(settings, scene, scene_depth, xray) -> None:
             continue
         rgb, alpha = onion_look(settings, r, len(before) if r < 0 else len(after),
                                 frames_from(frame, current, span))
-        moved = True
         gpu.matrix.push()
-        # the wormhole: this slice out along the time axis; and a nudge behind the body
-        gpu.matrix.translate(offsets.get(frame, Vector()) + behind)
-        if batches["tris"] is not None:
-            shader.bind()
-            shader.uniform_float("color", (*rgb, alpha))
-            gpu.state.face_culling_set('BACK')
-            _depth_only(lambda: batches["tris"].draw(shader), xray=xray)
-            batches["tris"].draw(shader)
-            gpu.state.depth_test_set(scene_depth)
-            gpu.state.face_culling_set('NONE')
-        if batches["lines"] is not None:
-            line_shader = _line_uniform_shader()
-            line_shader.bind()
-            line_shader.uniform_float("viewportSize", _viewport_size())
-            line_shader.uniform_float("lineWidth", BONE_LINE_WIDTH * _px())
-            line_shader.uniform_float("color", (*rgb, min(1.0, alpha * BONE_ALPHA_BOOST)))
-            batches["lines"].draw(line_shader)
-            gpu.state.depth_test_set(scene_depth)
-        if moved:
-            gpu.matrix.pop()
+        try:
+            # the wormhole: this slice out along the time axis; and a nudge behind the body
+            gpu.matrix.translate(offsets.get(frame, Vector()) + behind)
+            if batches["tris"] is not None:
+                shader.bind()
+                shader.uniform_float("color", (*rgb, alpha))
+                gpu.state.face_culling_set('BACK')
+                _depth_only(lambda: batches["tris"].draw(shader), xray=xray)
+                batches["tris"].draw(shader)
+                gpu.state.depth_test_set(scene_depth)
+                gpu.state.face_culling_set('NONE')
+            if batches["lines"] is not None:
+                line_shader = _line_uniform_shader()
+                line_shader.bind()
+                line_shader.uniform_float("viewportSize", _viewport_size())
+                line_shader.uniform_float("lineWidth", BONE_LINE_WIDTH * _px())
+                line_shader.uniform_float("color", (*rgb, min(1.0, alpha * BONE_ALPHA_BOOST)))
+                batches["lines"].draw(line_shader)
+                gpu.state.depth_test_set(scene_depth)
+        finally:
+            gpu.matrix.pop()       # an error mid-draw left the matrix pushed for every later draw
 
 
 def _visible_poses(scene, p) -> list[tuple[int, dict]]:
@@ -2148,6 +2169,7 @@ def _draw_geometry():
     # Nothing writes depth except each ghost's own pre-pass, which turns the
     # mask on for exactly as long as it takes (see _depth_only).
     gpu.state.depth_mask_set(False)
+    nudged = False
     try:
         if root_ready:
             _draw_root_path()
@@ -2204,12 +2226,19 @@ def _draw_geometry():
                 shader.bind()
             if nudged:
                 gpu.matrix.pop()
+                nudged = False
     finally:
+        if nudged:
+            gpu.matrix.pop()       # an error mid-ghost: not left pushed for every later draw
         gpu.state.blend_set('NONE')
         gpu.state.color_mask_set(True, True, True, True)
         gpu.state.depth_mask_set(True)
         gpu.state.depth_test_set('NONE')
         gpu.state.face_culling_set('NONE')
+
+
+#: the trail's line batches, by joint, while the trail and its colours stand
+_trail_batches: dict = {}
 
 
 def _draw_trail(settings, p, warp=None) -> None:
@@ -2236,8 +2265,35 @@ def _draw_trail(settings, p, warp=None) -> None:
         if not points or len(points) != len(colors):
             continue
 
+        raw = points
         points = _trail_live(name, frames, points)
         pts, cols = points, colors
+        wkey = getattr(warp, "key", None) if warp is not None else ()
+        steady = points is raw and wkey is not None      # nothing moving it this frame
+        if steady:
+            # the same path every redraw until the trail is baked again: built
+            # once (a fresh batch per joint per frame was GPU memory churn)
+            # held by reference, compared by identity: an id() alone came back
+            # for a new list once the old one was freed -- with the old colours
+            got = _trail_batches.get((name, wkey))
+            batch = got[2] if got is not None and got[0] is raw and got[1] is colors else None
+            if batch is None:
+                if len(_trail_batches) > 64:
+                    _trail_batches.clear()
+                if warp is not None:
+                    kept = [(i, warp(f)) for i, f in enumerate(frames)]
+                    kept = [(i, o) for i, o in kept if o is not None]
+                    if len(kept) < 2:
+                        continue
+                    pts = [tuple(Vector(points[i]) + o) for i, o in kept]
+                    cols = [colors[i] for i, _o in kept]
+                batch = batch_for_shader(line, 'LINE_STRIP', {"pos": pts, "color": cols})
+                _trail_batches[(name, wkey)] = (raw, colors, batch)
+            line.bind()
+            line.uniform_float("viewportSize", viewport)
+            line.uniform_float("lineWidth", TRAIL_WIDTH * px)
+            batch.draw(line)
+            continue
         if warp is not None:
             # into the wormhole: each frame's point where its slice is, and
             # only the frames a drag here reaches
