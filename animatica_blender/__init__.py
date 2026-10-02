@@ -14,7 +14,7 @@ which poses the body from dragged hands, feet or hips.
 bl_info = {
     "name": "Animatica — AI Motion Generation",
     "author": "Animatica",
-    "version": (0, 6, 4),
+    "version": (0, 7, 0),
     "blender": (5, 0, 0),
     "location": "View3D > Sidebar > Animatica",
     "description": "AI motion generation — select armature, set keyframes, generate",
@@ -26,7 +26,7 @@ bl_info = {
 #: comparing two builds that both call themselves 0.6.0 would never offer the
 #: newer one. The zip target rewrites this line; a source checkout is the
 #: final release of its number, which is the conservative reading.
-VERSION_TAG = "v0.6.4"
+VERSION_TAG = "v0.7.0"
 
 import bpy
 from bpy.app.handlers import persistent
@@ -52,6 +52,12 @@ from . import examples
 from . import waypoints
 from . import batch
 from . import variations
+from . import toolbar
+from . import picker
+from . import handles
+from . import wormhole
+from . import reach_widget
+from . import guidance
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +202,12 @@ def register():
     waypoints.register()
     batch.register()
     variations.register()
+    handles.register()
+    wormhole.register()
+    reach_widget.register()
+    guidance.register()
+    toolbar.register()
+    picker.register()
 
     _reset_runtime_flags()
 
@@ -224,6 +236,12 @@ def unregister():
     _purge_stale_handlers(bpy.app.handlers.save_pre, "_animatica_save_pre")
     _purge_stale_handlers(bpy.app.handlers.load_post, "_animatica_load_post")
 
+    picker.unregister()
+    toolbar.unregister()
+    guidance.unregister()
+    reach_widget.unregister()
+    wormhole.unregister()
+    handles.unregister()
     variations.unregister()
     batch.unregister()
     waypoints.unregister()

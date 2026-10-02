@@ -395,6 +395,19 @@ def get_refresh_token() -> str:
     return ((getattr(p, "refresh_token", "") or "").strip()) if p else ""
 
 
+def needs_sign_in() -> bool:
+    """True when generating will be refused for want of an account: pointed at
+    Animatica Cloud with no session. Self-hosted servers take no account."""
+    if not is_cloud_url(get_mmcp_url()):
+        return False
+    return not (get_access_token() or get_refresh_token())
+
+
+def offline() -> bool:
+    """True when Blender's online access is what keeps the add-on from the server."""
+    return cached_capabilities() is None and last_connection_error() == OFFLINE_MESSAGE
+
+
 def _auth_headers(url: str, extra: dict[str, str] | None = None) -> dict[str, str]:
     """Standard request headers, plus the Bearer token when signed in AND *url* is
     Animatica Cloud over https. A self-hosted server never sees the token."""
@@ -569,7 +582,9 @@ def cached_model_items() -> list[tuple[str, str, str]]:
     """
     if _MODEL_ITEMS:
         return _MODEL_ITEMS
-    return [("", "(connect to discover models)", "")]
+    # a real identifier: an empty one is not valid, and Blender said so on
+    # every redraw (thousands of console lines a minute, offline)
+    return [("NONE", "(connect to discover models)", "")]
 
 
 def cached_model(model_id: str) -> dict[str, Any] | None:
@@ -579,6 +594,31 @@ def cached_model(model_id: str) -> dict[str, Any] | None:
         if m.get("id") == model_id:
             return m
     return None
+
+
+def model_supports(model_id: str, kind: str) -> bool:
+    """Whether the connected model can take ``kind``: a segment type
+    (``"pose"``, ``"text"``) or a constraint type (``"root_path"``,
+    ``"effector_target"``). True while nothing is connected -- unknown is not
+    "no", and the tools stay usable before Connect."""
+    m = cached_model(model_id)
+    if m is None:
+        return True
+    return kind in (m.get("supported_segments") or []) or kind in (m.get("supported_constraints") or [])
+
+
+#: What each tool needs of the model, for the UI to grey out what it can't use.
+TOOL_NEEDS = {
+    "describe": "pose",
+    "prompt": "text",
+    "waypoint": "root_path",
+    "pin": "effector_target",
+}
+
+
+def tool_available(model_id: str, tool: str) -> bool:
+    need = TOOL_NEEDS.get(tool)
+    return need is None or model_supports(model_id, need)
 
 
 def store_capabilities(caps: dict[str, Any]) -> None:
@@ -873,6 +913,7 @@ class MmcpClient:
         url = f"{self.base_url}{location}"
         cloud = is_cloud_url(url)
         deadline = time.time() + self.timeout
+        refreshed = False
         while time.time() < deadline:
             time.sleep(max(retry_after, 0.5))
             _require_online(url)
@@ -886,7 +927,15 @@ class MmcpClient:
                         continue
                     raise MmcpError.from_response(resp.status, resp.read())
             except HTTPError as exc:
-                if exc.code == 401 and cloud and not refresh_access_token():
+                if exc.code == 401 and cloud:
+                    # The access token can run out while a job is waited on: a
+                    # fresh one, and the same job asked about again -- once.
+                    # Refreshing and then giving up anyway failed the take
+                    # while the session was fine.
+                    if not refreshed and refresh_access_token():
+                        refreshed = True
+                        retry_after = 0.0
+                        continue
                     expire_session("your session expired — sign in again")
                 raise MmcpError.from_response(exc.code, exc.read()) from exc
         raise MmcpError(code="timeout", message=f"async job at {url} did not complete in {self.timeout}s")

@@ -9,6 +9,80 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ## [Unreleased]
 
+## [0.7.0] — preview
+
+### Added
+
+- **A floating toolbar in the viewport, in the order of the work.** Set
+  keys, Generate, Accept, then fine-tune, left to right on one bar: the
+  Autopose tool and the handle picker; step between key poses, Set Key and
+  Auto Key; Waypoint and Pin; the prompt under the playhead, with a button
+  inside the field that switches it to this frame's pose in words (Generate
+  becomes Generate Pose); Loop and Generate, or Redo, Key This Frame, the
+  variations and Discard while a take is judged; the onion skin, the
+  zoetrope, the trail and the reach of an edit; Options; the model. Anything the
+  connected model can't do is greyed out, here and in the sidebar. A hint
+  above the bar names the next step and why.
+- **No Accept.** A take is yours when it arrives: while you judge it the
+  bar offers Redo, Key This Frame, the variations and Discard (and Generate
+  while blocks are left to make). Your first fine-tuning edit keeps it and
+  locks its blocks, without turning the edit into key poses.
+- **Loop on the bar.** Loop sits beside Generate. In a loop the zoetrope is
+  a ring, a drum seen from above standing behind the character with each
+  slice spun in place, and edits reach round the seam and keep the cycle
+  closed.
+- **The Autopose tool.** The Autoposer's handles on your character, no
+  control rig: drag one and the body follows, G and R with axis locks,
+  Blender's move gizmo on a picked handle, Ctrl-click to switch one on or
+  off, and Add Handle for elbows and knees.
+- **Onion skins and the zoetrope.** The motion around this frame as ghosts
+  (Frames, Keyframes or All Keys, with Grease Pencil's controls), drawn
+  during playback too. The zoetrope spreads them into a tunnel through time,
+  every frame an edit reaches, with the motion trail running through them;
+  each ghost can be posed where it is.
+- **Edits that carry through time.** Drag or turn a handle, on the
+  character, a ghost or a zoetrope slice, and the frames around follow with
+  a falloff. Reach and Intensity are a curve on the bar you drag, and the
+  ghosts and the trail re-pose live as you edit. On a take an edit reshapes
+  its motion where it is keyed and adds no keyframes; the preview shows
+  exactly what the curves will give.
+- **Lock a block to keep its motion.** Accept keeps the take as your own
+  action, keys you can edit, and locks the blocks it covered. Generate and
+  Redo then leave a locked block as it is, and the blocks next to it are
+  made to run into it, starting and ending on its pose. Work through a
+  sequence a block at a time; unlock one (right-click it, or the padlock in
+  the sidebar) to make it again. A take no longer goes onto the NLA as one
+  track per block.
+- **A handle picker for the Autoposer.** A card in the viewport with your
+  character in T-pose and the Autoposer's handles on it. Pick one or
+  several (Shift), switch them on or off (or double-click one), give them
+  their rotation, set how strictly the pose keeps to them, remove them, or
+  add one from the handles the rig can still have, shown where they go.
+- **Drops to lower ground.** A take follows the ground under the route, so
+  a character can jump from one roof down onto another. Waypoints sit on
+  the ground, and the Autoposer and Describe stand the pose on it (Describe
+  has **Stand on the ground**, on by default; off keeps a jump in the air).
+  Needs a server with MMCP 1.3, as the Animatica cloud has.
+
+### Changed
+
+- **The timeline lane, redrawn.** Blocks as tiles with their colour as a
+  swatch; the block under the playhead highlighted, as the toolbar's Prompt
+  and Redo act on it. Frame numbers show on the block you hover, select or
+  drag, with its length while you drag. A row of key poses above the
+  blocks: drag one to move the pose to another frame, click it to go there.
+  A row of waypoints below: drag one to retime it. The take under review is
+  marked under its blocks, and a take being made sweeps across them.
+- **A new block is 50 frames long** instead of filling the whole gap.
+
+### Fixed
+
+- **Clicking a block works when the scene has markers.** The marker row no
+  longer takes the clicks meant for the lane.
+- **A block can be shortened from the left** where it meets another one.
+- **The add-on no longer stays stuck "working"** after a generation stops
+  without finishing.
+
 ## [0.6.4] — 2026-09-30
 
 ### Fixed

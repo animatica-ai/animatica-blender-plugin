@@ -20,17 +20,22 @@ import time
 import bpy
 from bpy.props import IntProperty, StringProperty
 
+from .operators import ends_cleanly
 from .timeline_overlay import (
     hit_test_strips,
     hit_test_lane_resize,
+    hit_test_waypoint_pin,
+    hit_test_key_pose,
     pixel_to_frame,
     find_neighbors,
     find_gap,
     inline_edit_state,
+    DEFAULT_BLOCK_LENGTH,
+    is_in_lane,
+    interaction,
+    track_hover,
     get_strip_height,
     set_strip_height,
-    STRIP_Y_OFFSET,
-    LANE_PADDING,
     MIN_STRIP_HEIGHT,
     MAX_STRIP_HEIGHT,
 )
@@ -40,16 +45,26 @@ from .timeline_overlay import (
 _last_click_time: float = 0.0
 _last_click_idx: int = -1
 _DOUBLE_CLICK_THRESHOLD: float = 0.35  # seconds
+#: the last click on the empty lane (the scrub takes it; the second of a double adds a block)
+_last_empty_click: float = 0.0
+#: ...and as the lane's own click handler sees it
+_scrub_click: float = 0.0
 
 # Keymap storage
 _addon_keymaps = []
 
 
-def _is_in_lane(mouse_y):
-    """Check if mouse Y is within the Animatica strip lane area."""
-    lane_y0 = STRIP_Y_OFFSET - LANE_PADDING
-    lane_y1 = STRIP_Y_OFFSET + get_strip_height() + LANE_PADDING
-    return lane_y0 <= mouse_y <= lane_y1
+def _block_sharing_edge(prompt_blocks, idx, zone):
+    """The index of the block whose edge meets *idx*'s *zone* edge, or None."""
+    fr = prompt_blocks[idx]
+    for j, other in enumerate(prompt_blocks):
+        if j == idx:
+            continue
+        if zone == "edge_end" and other.frame_start == fr.frame_end:
+            return j
+        if zone == "edge_start" and other.frame_end == fr.frame_start:
+            return j
+    return None
 
 
 def _timeline_poll(context):
@@ -67,217 +82,594 @@ def _timeline_poll(context):
 # ---------------------------------------------------------------------------
 # Main strip interaction operator (triggered by keymap on LEFTMOUSE)
 # ---------------------------------------------------------------------------
+#
+# The mouse on the lane, as in the other DCC integrations:
+#   left-drag empty ........ scrub the playhead (a click clears the selection)
+#   near the playhead ...... scrub: the playhead wins over the pins on its line
+#   Ctrl+drag empty ........ rubber-band: blocks and waypoint pins
+#   click block ............ select it; Ctrl+click adds or drops it
+#   drag block(s) .......... move the selection, snapping to edges, the
+#                            playhead and pins; Shift: no snapping
+#   Alt+drag block ......... jump past a neighbour, into the nearest free gap
+#                            on the drop side
+#   drag block edge ........ resize; Alt pushes the neighbour, Ctrl scales the
+#                            pins inside with it
+#   click / drag a pin ..... select it (and its viewport marker) / move it
+#   double-click ........... edit the prompt; on empty, a new block
+
+#: within this many px (x UI scale), a dragged edge snaps
+SNAP_PX = 8
+
+
+def _selected(blocks):
+    return [i for i, b in enumerate(blocks) if b.selected]
+
+
+def _select_only(props, idx):
+    for j, b in enumerate(props.prompt_blocks):
+        b.selected = j == idx
+    props.active_block_index = idx
+
+
+def _select_none(props):
+    # the active block stays (the sidebar's prompt field shows it); none is picked
+    for b in props.prompt_blocks:
+        b.selected = False
+
+
+def _snap_targets(context, exclude):
+    """Frames a dragged edge snaps to: the other blocks' edges, the
+    playhead, the key poses and the waypoints."""
+    from . import key_poses, waypoints
+    scene = context.scene
+    out = {int(scene.frame_current)}
+    for j, b in enumerate(scene.animatica.prompt_blocks):
+        if j not in exclude:
+            out.update((int(b.frame_start), int(b.frame_end)))
+    out.update(f for f, _r in key_poses.timeline_ticks(scene)[0])
+    out.update(waypoints.timeline_frames(scene))
+    return sorted(out)
+
+
+def _snap(context, frames, targets, reach_px):
+    """The shift (in frames) that puts the nearest of ``frames`` on a target
+    within ``reach_px``, or 0."""
+    v2d = context.region.view2d
+    best, shift = reach_px + 1, 0
+    for f in frames:
+        fx = v2d.view_to_region(f, 0, clip=False)[0]
+        for t in targets:
+            d = abs(v2d.view_to_region(t, 0, clip=False)[0] - fx)
+            if d < best:
+                best, shift = d, t - f
+    return shift
+
 
 class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
-    """Click/drag Animatica timeline strips.
-
-    Automatically invoked by keymap when clicking in the Timeline.
-    If the click lands on a strip, the operator handles select + drag.
-    If not, it returns PASS_THROUGH so normal timeline scrubbing works.
-    """
+    """Click and drag on the Animatica lane of the Timeline"""
 
     bl_idname = "animatica.timeline_strip_action"
     bl_label = "Animatica Strip Action"
     bl_options = {"REGISTER", "UNDO"}
 
-    # State for the current drag
     _state: str = "IDLE"
-    _active_idx: int = -1
-    _zone: str = ""
-    _original_start: int = 0
-    _original_end: int = 0
-    _drag_offset: int = 0
 
     @classmethod
     def poll(cls, context):
-        return (
-            _timeline_poll(context)
-            and len(context.scene.animatica.prompt_blocks) > 0
-        )
+        if not _timeline_poll(context):
+            return False
+        from . import properties
+        return properties._live_armature(context.scene.animatica.target_armature) is not None
+
+    # -- the press ---------------------------------------------------------
 
     def invoke(self, context, event):
         global _last_click_time, _last_click_idx
 
-        # --- Lane resize (top edge of lane) ---
-        if hit_test_lane_resize(
-            context, event.mouse_region_x, event.mouse_region_y
-        ):
+        mx, my = event.mouse_region_x, event.mouse_region_y
+        if not is_in_lane(context, my):
+            return {"PASS_THROUGH"}
+        props = context.scene.animatica
+        self._u = context.preferences.system.ui_scale
+        self._moved = False
+        self._press_x = mx
+        v2d = context.region.view2d
+
+        # --- the lane's top edge: its height ---
+        if props.prompt_blocks and hit_test_lane_resize(context, mx, my):
             self._state = "DRAGGING_LANE_RESIZE"
-            self._resize_start_y = event.mouse_region_y
+            self._resize_start_y = my
             self._resize_start_h = get_strip_height()
             context.window.cursor_set("MOVE_Y")
-            context.window_manager.modal_handler_add(self)
-            context.area.tag_redraw()
-            return {"RUNNING_MODAL"}
+            return self._start(context)
 
-        hit = hit_test_strips(context, event.mouse_region_x, event.mouse_region_y)
+        ph_x = v2d.view_to_region(context.scene.frame_current, 0, clip=False)[0]
+        near_playhead = abs(mx - ph_x) <= 5 * self._u
 
+        # --- pins: key poses above the blocks, waypoints below; the playhead
+        # wins near its line, or a pin on it could never be scrubbed past ---
+        if not near_playhead:
+            key = hit_test_key_pose(context, mx, my)
+            if key is not None:
+                self._state = "DRAGGING_KEY_POSE"
+                self._key_from = int(key)
+                self._key_moved = False
+                interaction["key_drag"] = (self._key_from, self._key_from)
+                context.window.cursor_set("MOVE_X")
+                return self._start(context)
+            pin = hit_test_waypoint_pin(context, mx, my)
+            if pin is not None:
+                self._state = "DRAGGING_WAYPOINT"
+                self._waypoint_name = pin.name
+                self._original_frame = int(pin.animatica_waypoint_frame)
+                self._ctrl = event.ctrl
+                context.window.cursor_set("MOVE_X")
+                return self._start(context)
+
+        hit = hit_test_strips(context, mx, my)
         if hit["index"] is None:
-            # Miss — let Blender handle normal timeline scrubbing
-            return {"PASS_THROUGH"}
+            # --- empty lane: a rectangle select, as in Blender's own editors
+            # (the playhead line itself still scrubs) ---
+            global _scrub_click
+            now = time.time()
+            if now - _scrub_click < _DOUBLE_CLICK_THRESHOLD:
+                # the second click of a double-click: a new block, typed into
+                _scrub_click = 0.0
+                return ANIMATICA_OT_timeline_strip_add_click._add_strip_at(self, context, event)
+            _scrub_click = now
+            if near_playhead:
+                self._state = "SCRUB"
+                self._scrub(context, mx)
+                return self._start(context)
+            self._band_add = event.shift or event.ctrl or event.oskey
+            self._state = "BAND"
+            self._band_from = (mx, my)
+            interaction["band"] = (mx, my, mx, my)
+            return self._start(context)
 
-        idx = hit["index"]
-        zone = hit["zone"]
-        props = context.scene.animatica
+        idx, zone = hit["index"], hit["zone"]
         fr = props.prompt_blocks[idx]
 
-        # --- Double-click detection ---
+        # --- double-click: the prompt, in place ---
         now = time.time()
-        if (
-            idx == _last_click_idx
-            and (now - _last_click_time) < _DOUBLE_CLICK_THRESHOLD
-        ):
-            # Double-click → inline prompt editing on the strip
-            props.active_block_index = idx
-            _last_click_time = 0.0
-            _last_click_idx = -1
-            bpy.ops.animatica.timeline_strip_inline_edit(
-                "INVOKE_DEFAULT", index=idx,
-            )
+        if idx == _last_click_idx and (now - _last_click_time) < _DOUBLE_CLICK_THRESHOLD and not event.ctrl:
+            _select_only(props, idx)
+            _last_click_time, _last_click_idx = 0.0, -1
+            bpy.ops.animatica.timeline_strip_inline_edit("INVOKE_DEFAULT", index=idx)
+            return {"FINISHED"}
+        _last_click_time, _last_click_idx = now, idx
+
+        # --- Shift / Cmd / Ctrl + click: in or out of the selection (on release,
+        # if the mouse did not move: Shift+drag is a move without snapping) ---
+        self._toggle = zone == "body" and (event.shift or event.ctrl or event.oskey)
+        if self._toggle:
+            if not fr.selected:
+                fr.selected = True               # dragged, it moves with the rest
+                self._toggle = "added"
+        elif not fr.selected:
+            _select_only(props, idx)
+        props.active_block_index = idx
+        if fr.locked:
+            # set in stone: its motion is where it is, so its frames stay too
+            context.area.tag_redraw()
             return {"FINISHED"}
 
-        _last_click_time = now
-        _last_click_idx = idx
-
-        # --- Select strip ---
-        props.active_block_index = idx
-
-        # --- Begin drag ---
+        self._idx = idx
+        self._orig = [(b.frame_start, b.frame_end) for b in props.prompt_blocks]
+        self._press_frame = pixel_to_frame(context, mx)
         self._active_idx = idx
-        self._original_start = fr.frame_start
-        self._original_end = fr.frame_end
+        self._original_start, self._original_end = fr.frame_start, fr.frame_end
 
-        if zone == "edge_start":
+        shared = _block_sharing_edge(props.prompt_blocks, idx, zone)
+        if zone in ("edge_start", "edge_end") and shared is not None and not event.alt:
+            # two blocks meet here and the hit test names one: the drag's direction picks
+            self._state = "DRAGGING_SHARED_EDGE"
+            self._shared_edge = (idx, shared) if zone == "edge_end" else (shared, idx)
+            self._shared_frame = fr.frame_end if zone == "edge_end" else fr.frame_start
+        elif zone == "edge_start":
             self._state = "DRAGGING_EDGE_START"
         elif zone == "edge_end":
             self._state = "DRAGGING_EDGE_END"
+        elif event.alt:
+            self._state = "JUMP"
         else:
-            self._state = "DRAGGING_BODY"
-            mouse_frame = pixel_to_frame(context, event.mouse_region_x)
-            self._drag_offset = mouse_frame - fr.frame_start
+            self._state = "MOVE"
+            self._group = _selected(props.prompt_blocks) or [idx]
+        interaction["drag"] = idx
+        return self._start(context)
 
+    def _start(self, context):
         context.window_manager.modal_handler_add(self)
         context.area.tag_redraw()
         return {"RUNNING_MODAL"}
 
+    # -- the drag ----------------------------------------------------------
+
     def modal(self, context, event):
+        result = self._modal(context, event)
+        if "RUNNING_MODAL" not in result:
+            interaction["drag"] = None
+            interaction["key_drag"] = None
+            interaction["band"] = None
+            context.window.cursor_set("DEFAULT")
+            for a in context.screen.areas:
+                if a.type in {"DOPESHEET_EDITOR", "VIEW_3D"}:
+                    a.tag_redraw()
+        return result
+
+    def _modal(self, context, event):
         if context.area is None:
             return {"CANCELLED"}
-
-        props = context.scene.animatica
-
-        # Cancel drag
         if event.type in {"ESC", "RIGHTMOUSE"} and event.value == "PRESS":
             self._cancel_drag(context)
             return {"CANCELLED"}
+        if event.type == "MOUSEMOVE" and abs(event.mouse_region_x - self._press_x) > 2:
+            self._moved = True
+        handler = {
+            "SCRUB": self._handle_scrub,
+            "BAND": self._handle_band,
+            "DRAGGING_KEY_POSE": self._handle_key_pose_drag,
+            "DRAGGING_WAYPOINT": self._handle_waypoint_drag,
+            "DRAGGING_SHARED_EDGE": self._handle_shared_edge,
+            "DRAGGING_LANE_RESIZE": self._handle_lane_resize,
+            "MOVE": self._handle_move,
+            "JUMP": self._handle_jump,
+            "DRAGGING_EDGE_START": self._handle_edge_drag,
+            "DRAGGING_EDGE_END": self._handle_edge_drag,
+        }.get(self._state)
+        if handler is None:
+            return {"PASS_THROUGH"}
+        return handler(context, event)
 
-        # Dispatch by state
-        if self._state == "DRAGGING_LANE_RESIZE":
-            return self._handle_lane_resize(context, event)
-        elif self._state == "DRAGGING_BODY":
-            return self._handle_body_drag(context, event, props)
-        elif self._state in ("DRAGGING_EDGE_START", "DRAGGING_EDGE_END"):
-            return self._handle_edge_drag(context, event, props)
+    def _released(self, event):
+        return event.type == "LEFTMOUSE" and event.value == "RELEASE"
 
-        return {"PASS_THROUGH"}
+    # scrub
 
-    # -- Edge drag --------------------------------------------------------
+    def _scrub(self, context, mx):
+        scene = context.scene
+        f = max(scene.frame_start, min(scene.frame_end, pixel_to_frame(context, mx)))
+        if f != scene.frame_current:
+            scene.frame_set(f)
 
-    def _handle_edge_drag(self, context, event, props):
+    def _handle_scrub(self, context, event):
         if event.type == "MOUSEMOVE":
-            fr = props.prompt_blocks[self._active_idx]
-            new_frame = pixel_to_frame(context, event.mouse_region_x)
-            left_end, right_start = find_neighbors(
-                props.prompt_blocks, self._active_idx
-            )
-
-            if self._state == "DRAGGING_EDGE_START":
-                low = max(1, left_end)
-                fr.frame_start = max(low, min(new_frame, fr.frame_end - 1))
-            else:  # DRAGGING_EDGE_END
-                hi = right_start if right_start is not None else new_frame
-                fr.frame_end = min(hi, max(fr.frame_start + 1, new_frame))
-
-            context.area.tag_redraw()
+            self._scrub(context, event.mouse_region_x)
             return {"RUNNING_MODAL"}
-
-        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
-            context.window.cursor_set("DEFAULT")
+        if self._released(event):
             return {"FINISHED"}
-
         return {"RUNNING_MODAL"}
 
-    # -- Body drag --------------------------------------------------------
+    # rubber band
 
-    def _handle_body_drag(self, context, event, props):
+    def _handle_band(self, context, event):
+        x0, y0 = self._band_from
         if event.type == "MOUSEMOVE":
-            fr = props.prompt_blocks[self._active_idx]
-            mouse_frame = pixel_to_frame(context, event.mouse_region_x)
-            duration = self._original_end - self._original_start
-
-            new_start = max(1, mouse_frame - self._drag_offset)
-            new_end = new_start + duration
-
-            # Clamp to neighbors
-            left_end, right_start = find_neighbors(
-                props.prompt_blocks, self._active_idx
-            )
-            if new_start < left_end:
-                new_start = left_end
-                new_end = new_start + duration
-            if right_start is not None and new_end > right_start:
-                new_end = right_start
-                new_start = new_end - duration
-
-            new_start = max(1, new_start)
-            fr.frame_start = new_start
-            fr.frame_end = new_start + duration
+            interaction["band"] = (x0, y0, event.mouse_region_x, event.mouse_region_y)
             context.area.tag_redraw()
             return {"RUNNING_MODAL"}
-
-        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
-            context.window.cursor_set("DEFAULT")
+        if self._released(event):
+            from .timeline_overlay import Lane
+            from . import waypoints
+            bx0, bx1 = sorted((x0, event.mouse_region_x))
+            by0, by1 = sorted((y0, event.mouse_region_y))
+            props = context.scene.animatica
+            v2d = context.region.view2d
+            g = Lane(context)
+            if not self._band_add:
+                # a fresh selection (and a click on empty space just clears it)
+                _select_none(props)
+                for obj in waypoints.waypoints(context.scene):
+                    obj.select_set(False)
+            if not self._moved:
+                return {"FINISHED"}
+            first = None
+            if by0 <= g.b1 and by1 >= g.b0:              # the band reaches the block row
+                for j, b in enumerate(props.prompt_blocks):
+                    a = v2d.view_to_region(b.frame_start, 0, clip=False)[0]
+                    e = v2d.view_to_region(b.frame_end, 0, clip=False)[0]
+                    if a <= bx1 and e >= bx0:
+                        b.selected = True
+                        first = j if first is None else first
+            if first is not None:
+                props.active_block_index = first
+            if by0 <= g.wp1 and by1 >= g.wp0:            # ...and the waypoint row
+                for obj in waypoints.waypoints(context.scene):
+                    x = v2d.view_to_region(obj.animatica_waypoint_frame, 0, clip=False)[0]
+                    if bx0 <= x <= bx1:
+                        obj.select_set(True)
             return {"FINISHED"}
-
         return {"RUNNING_MODAL"}
 
-    # -- Lane resize -----------------------------------------------------
+    # move the selection
+
+    def _handle_move(self, context, event):
+        props = context.scene.animatica
+        blocks = props.prompt_blocks
+        if event.type == "MOUSEMOVE":
+            delta = pixel_to_frame(context, event.mouse_region_x) - self._press_frame
+            group = self._group
+            starts = [self._orig[i][0] for i in group]
+            ends = [self._orig[i][1] for i in group]
+            if not event.shift:
+                delta += _snap(context, [min(starts) + delta, max(ends) + delta],
+                               _snap_targets(context, set(group)), SNAP_PX * self._u)
+            # never onto a block that is not moving
+            lo, hi = -10 ** 9, 10 ** 9
+            others = [j for j in range(len(blocks)) if j not in group]
+            for i in group:
+                s0, e0 = self._orig[i]
+                left = max([self._orig[j][1] for j in others if self._orig[j][1] <= s0] + [1])
+                right = min([self._orig[j][0] for j in others if self._orig[j][0] >= e0] + [10 ** 9])
+                lo, hi = max(lo, left - s0), min(hi, right - e0)
+            delta = max(lo, min(hi, delta))
+            for i in group:
+                blocks[i].frame_start = self._orig[i][0] + delta
+                blocks[i].frame_end = self._orig[i][1] + delta
+            context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
+        if self._released(event):
+            if not self._moved:
+                fr = props.prompt_blocks[self._idx]
+                if self._toggle == "added":
+                    props.active_block_index = self._idx
+                elif self._toggle:
+                    fr.selected = False              # it was in: a modifier-click takes it out
+                    rest = _selected(props.prompt_blocks)
+                    if rest and props.active_block_index == self._idx:
+                        props.active_block_index = rest[0]
+                elif len(self._group) > 1:
+                    _select_only(props, self._idx)   # a plain click on one of several: that one
+            return {"FINISHED"}
+        return {"RUNNING_MODAL"}
+
+    # Alt: jump past a neighbour
+
+    def _handle_jump(self, context, event):
+        props = context.scene.animatica
+        b = props.prompt_blocks[self._idx]
+        s0, e0 = self._orig[self._idx]
+        if event.type == "MOUSEMOVE":
+            delta = pixel_to_frame(context, event.mouse_region_x) - self._press_frame
+            b.frame_start, b.frame_end = max(1, s0 + delta), max(1, s0 + delta) + (e0 - s0)
+            context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
+        if self._released(event):
+            place = self._free_place(props, self._idx, b.frame_start, e0 - s0, b.frame_start >= s0)
+            if place is None:
+                b.frame_start, b.frame_end = s0, e0
+                self.report({"INFO"}, "No free gap there for this block")
+            else:
+                b.frame_start, b.frame_end = place, place + (e0 - s0)
+            return {"FINISHED"}
+        return {"RUNNING_MODAL"}
+
+    def _free_place(self, props, idx, want, length, rightward):
+        """Where a block of ``length`` dropped at ``want`` goes: the free gap
+        under it, else the nearest one on the drop side, at the end nearest
+        to where it was dropped."""
+        taken = sorted((self._orig[j] for j in range(len(props.prompt_blocks)) if j != idx))
+        gaps, cursor = [], 1
+        for s, e in taken:
+            if s - cursor >= length:
+                gaps.append((cursor, s))
+            cursor = max(cursor, e)
+        gaps.append((cursor, 10 ** 9))
+        mid = want + length / 2
+        for a, z in gaps:
+            if a <= mid <= z:
+                return max(a, min(want, z - length))
+        side = [g for g in gaps if (g[0] >= want if rightward else g[1] <= want + length)]
+        if not side:
+            return None
+        a, z = min(side, key=lambda g: abs((g[0] if rightward else g[1] - length) - want))
+        return a if rightward else z - length
+
+    # resize an edge (Alt pushes the neighbour, Ctrl scales the pins inside)
+
+    def _handle_edge_drag(self, context, event):
+        props = context.scene.animatica
+        blocks = props.prompt_blocks
+        i = self._idx
+        s0, e0 = self._orig[i]
+        if event.type == "MOUSEMOVE":
+            f = pixel_to_frame(context, event.mouse_region_x)
+            if not event.shift:
+                f += _snap(context, [f], _snap_targets(context, {i}), SNAP_PX * self._u)
+            # everyone back where they started, then the drag
+            for j, (a, z) in enumerate(self._orig):
+                blocks[j].frame_start, blocks[j].frame_end = a, z
+            if self._state == "DRAGGING_EDGE_END":
+                f = max(s0 + 1, f)
+                after = sorted((j for j in range(len(blocks)) if j != i and self._orig[j][0] >= e0),
+                               key=lambda j: self._orig[j][0])
+                if event.alt:
+                    edge = f
+                    for j in after:              # push the neighbours along, as far as needed
+                        a, z = self._orig[j]
+                        if a >= edge:
+                            break
+                        blocks[j].frame_start, blocks[j].frame_end = edge, edge + (z - a)
+                        edge = edge + (z - a)
+                elif after:
+                    f = min(f, self._orig[after[0]][0])
+                blocks[i].frame_end = f
+            else:
+                f = max(1, min(e0 - 1, f))
+                before = sorted((j for j in range(len(blocks)) if j != i and self._orig[j][1] <= s0),
+                                key=lambda j: -self._orig[j][1])
+                if event.alt:
+                    edge = f
+                    for j in before:
+                        a, z = self._orig[j]
+                        if z <= edge:
+                            break
+                        if edge - (z - a) < 1:
+                            f = blocks[i].frame_start         # no room to push into
+                            break
+                        blocks[j].frame_start, blocks[j].frame_end = edge - (z - a), edge
+                        edge = edge - (z - a)
+                elif before:
+                    f = max(f, self._orig[before[0]][1])
+                blocks[i].frame_start = f
+            self._scale_pins = event.ctrl
+            context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
+        if self._released(event):
+            if getattr(self, "_scale_pins", False) or event.ctrl:
+                self._scale_pins_in(context, (s0, e0), (blocks[i].frame_start, blocks[i].frame_end))
+            return {"FINISHED"}
+        return {"RUNNING_MODAL"}
+
+    def _scale_pins_in(self, context, old, new):
+        """The key poses and waypoints inside the block, retimed with it."""
+        from . import key_poses, waypoints
+        (a0, z0), (a1, z1) = old, new
+        if (a0, z0) == (a1, z1) or z0 <= a0:
+            return
+
+        def to(f):
+            return int(round(a1 + (f - a0) * (z1 - a1) / (z0 - a0)))
+
+        scene = context.scene
+        for obj in waypoints.waypoints(scene):
+            f = int(obj.animatica_waypoint_frame)
+            if a0 <= f <= z0 and waypoints.at_frame(scene, to(f)) in (None, obj):
+                obj.animatica_waypoint_frame = to(f)
+        frames = [f for f, _r in key_poses.timeline_ticks(scene)[0] if a0 <= f <= z0]
+        grow = (z1 - a1) > (z0 - a0)
+        # moved in the order that never lands one on another still to move
+        for f in sorted(frames, reverse=grow if a1 >= a0 else not grow):
+            if to(f) != f:
+                key_poses.move_key_pose(scene, f, to(f))
+
+    # the edge two blocks share: the drag's direction picks which one moves
+
+    def _handle_shared_edge(self, context, event):
+        props = context.scene.animatica
+        if event.type == "MOUSEMOVE":
+            frame = pixel_to_frame(context, event.mouse_region_x)
+            if frame == self._shared_frame:
+                return {"RUNNING_MODAL"}
+            left_idx, right_idx = self._shared_edge
+            if frame > self._shared_frame:
+                self._idx, self._state = right_idx, "DRAGGING_EDGE_START"
+            else:
+                self._idx, self._state = left_idx, "DRAGGING_EDGE_END"
+            self._active_idx = self._idx
+            props.active_block_index = self._idx
+            return self._handle_edge_drag(context, event)
+        if self._released(event):
+            return {"FINISHED"}
+        return {"RUNNING_MODAL"}
+
+    # key poses
+
+    def _handle_key_pose_drag(self, context, event):
+        from . import constraints_ui, key_poses
+
+        if event.type == "MOUSEMOVE":
+            frame = max(0, pixel_to_frame(context, event.mouse_region_x))
+            action = key_poses._action(key_poses._target(context.scene.animatica))
+            taken = set(constraints_ui.authored_pose_frames(action)[0]) - {self._key_from}
+            if frame not in taken:
+                interaction["key_drag"] = (self._key_from, frame)
+                self._key_moved = self._key_moved or frame != self._key_from
+            context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
+        if self._released(event):
+            src, dst = interaction.get("key_drag") or (self._key_from, self._key_from)
+            if not self._key_moved:
+                context.scene.frame_set(src)            # a click: go to it
+                return {"CANCELLED"}                    # (nothing to undo)
+            if dst != src and key_poses.move_key_pose(context.scene, src, dst):
+                context.scene.frame_set(dst)
+                self.report({"INFO"}, f"Key pose moved to frame {dst}")
+            return {"FINISHED"}
+        return {"RUNNING_MODAL"}
+
+    # waypoints
+
+    def _dragged_waypoint(self, context):
+        return context.scene.objects.get(getattr(self, "_waypoint_name", ""))
+
+    def _handle_waypoint_drag(self, context, event):
+        from . import waypoints
+
+        obj = self._dragged_waypoint(context)
+        if obj is None:
+            return {"CANCELLED"}
+        if event.type == "MOUSEMOVE":
+            frame = max(1, pixel_to_frame(context, event.mouse_region_x))
+            taken = waypoints.at_frame(context.scene, frame)
+            if frame != obj.animatica_waypoint_frame and taken is None:
+                obj.animatica_waypoint_frame = frame
+                self._waypoint_name = obj.name  # renamed to "Path F<frame>"
+                waypoints.tag_redraw()
+            context.area.tag_redraw()
+            return {"RUNNING_MODAL"}
+        if self._released(event):
+            if not self._moved:
+                # a click: the pin, and its marker in the viewport; Ctrl toggles it
+                if self._ctrl:
+                    obj.select_set(not obj.select_get())
+                else:
+                    for other in waypoints.waypoints(context.scene):
+                        other.select_set(other == obj)
+                waypoints.tag_redraw()
+            return {"FINISHED"}
+        return {"RUNNING_MODAL"}
+
+    # the lane's height
 
     def _handle_lane_resize(self, context, event):
         if event.type == "MOUSEMOVE":
-            delta = event.mouse_region_y - self._resize_start_y
-            set_strip_height(self._resize_start_h + delta)
+            set_strip_height(self._resize_start_h + event.mouse_region_y - self._resize_start_y)
             context.area.tag_redraw()
             return {"RUNNING_MODAL"}
-
-        if event.type == "LEFTMOUSE" and event.value == "RELEASE":
-            context.window.cursor_set("DEFAULT")
-            context.area.tag_redraw()
+        if self._released(event):
             return {"FINISHED"}
-
         return {"RUNNING_MODAL"}
 
-    # -- Cancel -----------------------------------------------------------
+    # cancel: everything back
 
     def _cancel_drag(self, context):
-        if self._state == "DRAGGING_LANE_RESIZE":
-            set_strip_height(
-                getattr(self, "_resize_start_h", get_strip_height())
-            )
-            context.window.cursor_set("DEFAULT")
-            context.area.tag_redraw()
-            return
-
-        props = context.scene.animatica
-        if 0 <= self._active_idx < len(props.prompt_blocks):
-            fr = props.prompt_blocks[self._active_idx]
-            fr.frame_start = self._original_start
-            fr.frame_end = self._original_end
-        context.window.cursor_set("DEFAULT")
+        if self._state == "DRAGGING_WAYPOINT":
+            obj = self._dragged_waypoint(context)
+            if obj is not None:
+                obj.animatica_waypoint_frame = self._original_frame
+        elif self._state == "DRAGGING_LANE_RESIZE":
+            set_strip_height(getattr(self, "_resize_start_h", get_strip_height()))
+        elif hasattr(self, "_orig"):
+            for b, (a, z) in zip(context.scene.animatica.prompt_blocks, self._orig):
+                b.frame_start, b.frame_end = a, z
+        interaction["key_drag"] = None
+        interaction["band"] = None
         context.area.tag_redraw()
 
     def cancel(self, context):
         self._cancel_drag(context)
+
+
+# ---------------------------------------------------------------------------
+# Hover: what the mouse is on, for the lane to light it up
+# ---------------------------------------------------------------------------
+
+class ANIMATICA_OT_timeline_hover(bpy.types.Operator):
+    """Track the mouse over the Animatica lane (never takes the event)"""
+
+    bl_idname = "animatica.timeline_hover"
+    bl_label = "Animatica Lane Hover"
+    bl_options = {"INTERNAL"}
+
+    @classmethod
+    def poll(cls, context):
+        return _timeline_poll(context) and context.region is not None and context.region.type == "WINDOW"
+
+    def invoke(self, context, event):
+        if track_hover(context, event.mouse_region_x, event.mouse_region_y):
+            context.area.tag_redraw()
+        return {"PASS_THROUGH"}
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +692,10 @@ class ANIMATICA_OT_timeline_strip_add_click(bpy.types.Operator):
 
     def invoke(self, context, event):
         # Only react if click is in the lane area
-        if not _is_in_lane(event.mouse_region_y):
+        if not is_in_lane(context, event.mouse_region_y):
+            return {"PASS_THROUGH"}
+        # the lane's click handler does this itself (it takes the first click to scrub)
+        if ANIMATICA_OT_timeline_strip_action.poll(context):
             return {"PASS_THROUGH"}
 
         # Check if there's already a strip here — if so, pass through
@@ -309,14 +704,14 @@ class ANIMATICA_OT_timeline_strip_add_click(bpy.types.Operator):
             return {"PASS_THROUGH"}
 
         # Double-click detection on empty area
+        global _last_empty_click
         now = time.time()
-        cls = type(self)
-        if (now - cls._last_empty_click_time) < _DOUBLE_CLICK_THRESHOLD:
-            cls._last_empty_click_time = 0.0
+        if (now - _last_empty_click) < _DOUBLE_CLICK_THRESHOLD:
+            _last_empty_click = 0.0
             # Create strip at click position
             return self._add_strip_at(context, event)
 
-        cls._last_empty_click_time = now
+        _last_empty_click = now
         return {"PASS_THROUGH"}
 
     def _add_strip_at(self, context, event):
@@ -348,9 +743,13 @@ class ANIMATICA_OT_timeline_strip_add_click(bpy.types.Operator):
             self.report({"WARNING"}, "No room for a new strip here")
             return {"CANCELLED"}
 
-        # Fill the entire gap
-        new_start = gap_start
-        new_end = gap_end
+        # Against the block on its left (where the motion carries on from),
+        # else at the click; the default length, as far as the gap allows.
+        has_left = any(e <= click_frame for _i, _s, e in sorted_items)
+        new_start = gap_start if has_left else max(gap_start, click_frame)
+        new_end = min(gap_end, new_start + DEFAULT_BLOCK_LENGTH)
+        if new_end - new_start < 2:
+            new_start = max(gap_start, new_end - DEFAULT_BLOCK_LENGTH)
 
         new_range = props.prompt_blocks.add()
         new_range.prompt = ""
@@ -531,21 +930,23 @@ class ANIMATICA_OT_timeline_strip_delete(bpy.types.Operator):
 
     def invoke(self, context, event):
         # Only intercept if the mouse is hovering over the strip lane
-        if not _is_in_lane(event.mouse_region_y):
+        if not is_in_lane(context, event.mouse_region_y):
             return {"PASS_THROUGH"}
 
         props = context.scene.animatica
-        hit = hit_test_strips(context, event.mouse_region_x, event.mouse_region_y)
-        idx = hit["index"]
-        if idx is None:
-            idx = props.active_block_index
-
-        if not (0 <= idx < len(props.prompt_blocks)):
-            return {"PASS_THROUGH"}
-
-        fr = props.prompt_blocks[idx]
-        self.report({"INFO"}, f"Deleted strip: {fr.prompt or '(no prompt)'}")
-        props.prompt_blocks.remove(idx)
+        # the selection, as a whole; else the block under the mouse, else the active one
+        doomed = _selected(props.prompt_blocks)
+        if not doomed:
+            hit = hit_test_strips(context, event.mouse_region_x, event.mouse_region_y)
+            idx = hit["index"] if hit["index"] is not None else props.active_block_index
+            if not (0 <= idx < len(props.prompt_blocks)):
+                return {"PASS_THROUGH"}
+            doomed = [idx]
+        names = [props.prompt_blocks[i].prompt or "(no prompt)" for i in doomed]
+        for i in sorted(doomed, reverse=True):
+            props.prompt_blocks.remove(i)
+        self.report({"INFO"}, f"Deleted {len(doomed)} block{'s' if len(doomed) != 1 else ''}: "
+                              + ", ".join(names)[:80])
 
         # Adjust active index
         if len(props.prompt_blocks) == 0:
@@ -577,7 +978,7 @@ class ANIMATICA_OT_timeline_strip_context_menu(bpy.types.Operator):
 
     def invoke(self, context, event):
         # Only show menu if click is in the lane area
-        if not _is_in_lane(event.mouse_region_y):
+        if not is_in_lane(context, event.mouse_region_y):
             return {"PASS_THROUGH"}
 
         # Check if right-click hit a strip
@@ -602,6 +1003,13 @@ class ANIMATICA_OT_timeline_strip_context_menu(bpy.types.Operator):
         if self._hit_index is not None and 0 <= self._hit_index < len(props.prompt_blocks):
             fr = props.prompt_blocks[self._hit_index]
             layout.label(text=f"Strip: {fr.prompt or '(no prompt)'}")
+            op = layout.operator(
+                "animatica.timeline_strip_toggle_lock",
+                text="Unlock (generate it again)" if fr.locked else "Lock (keep this motion)",
+                icon="UNLOCKED" if fr.locked else "LOCKED",
+            )
+            op.index = self._hit_index
+            layout.separator()
             # Seed inspection + pin/unpin. A pinned block (seed > 0) keeps its
             # seed through a full Generate; an unpinned block inherits the
             # global Seed but still records the concrete seed it last ran with.
@@ -653,6 +1061,10 @@ class ANIMATICA_OT_timeline_strip_context_menu(bpy.types.Operator):
             )
             op.block_index = self._hit_index
 
+            op = layout.operator("animatica.block_to_playhead", text="Move Block to Playhead",
+                                 icon='SNAP_ON')
+            op.index = self._hit_index
+
             layout.separator()
 
             # Delete
@@ -684,6 +1096,37 @@ class ANIMATICA_OT_timeline_strip_context_menu(bpy.types.Operator):
             text="Add Strip in Gap",
             icon="ADD",
         )
+        layout.separator()
+        layout.operator("action.view_all", text="View All", icon='ZOOM_ALL')
+
+
+class ANIMATICA_OT_block_to_playhead(bpy.types.Operator):
+    """Move the block so it starts at the playhead (as far as its neighbours allow)"""
+    bl_idname = "animatica.block_to_playhead"
+    bl_label = "Move Block to Playhead"
+    bl_options = {"REGISTER", "UNDO"}
+
+    index: IntProperty(default=-1)
+
+    def execute(self, context):
+        props = context.scene.animatica
+        i = self.index if self.index >= 0 else props.active_block_index
+        if not 0 <= i < len(props.prompt_blocks):
+            return {"CANCELLED"}
+        b = props.prompt_blocks[i]
+        length = b.frame_end - b.frame_start
+        left_end, right_start = find_neighbors(props.prompt_blocks, i)
+        start = max(int(context.scene.frame_current), left_end, 1)
+        if right_start is not None:
+            start = min(start, right_start - length)
+        if start < left_end:
+            self.report({"WARNING"}, "No room for the block there")
+            return {"CANCELLED"}
+        b.frame_start, b.frame_end = start, start + length
+        for a in context.screen.areas:
+            if a.type in {"DOPESHEET_EDITOR", "VIEW_3D"}:
+                a.tag_redraw()
+        return {"FINISHED"}
 
 
 # ---------------------------------------------------------------------------
@@ -716,6 +1159,31 @@ class ANIMATICA_OT_timeline_strip_toggle_enabled(bpy.types.Operator):
             for area in context.screen.areas:
                 if area.type == "DOPESHEET_EDITOR":
                     area.tag_redraw()
+        return {"FINISHED"}
+
+
+class ANIMATICA_OT_timeline_strip_toggle_lock(bpy.types.Operator):
+    """Lock a block to keep its motion: Generate and Redo leave it, and the
+    blocks next to it are made to run into it. Unlock it to make it again"""
+
+    bl_idname = "animatica.timeline_strip_toggle_lock"
+    bl_label = "Lock Block"
+    bl_options = {"REGISTER", "UNDO"}
+
+    index: IntProperty(name="Strip Index", default=-1)
+
+    def execute(self, context):
+        props = context.scene.animatica
+        i = self.index if self.index >= 0 else props.active_block_index
+        if not 0 <= i < len(props.prompt_blocks):
+            return {"CANCELLED"}
+        fr = props.prompt_blocks[i]
+        fr.locked = not fr.locked
+        self.report({"INFO"}, ("Locked: Generate leaves it as it is" if fr.locked
+                               else "Unlocked: the next Generate makes it again"))
+        for area in context.screen.areas:
+            if area.type in {"DOPESHEET_EDITOR", "VIEW_3D"}:
+                area.tag_redraw()
         return {"FINISHED"}
 
 
@@ -789,18 +1257,11 @@ class ANIMATICA_OT_clear_block_seed(bpy.types.Operator):
 # Inline prompt editing (triggered by double-click on strip)
 # ---------------------------------------------------------------------------
 
-class ANIMATICA_OT_timeline_strip_inline_edit(bpy.types.Operator):
-    """Edit strip prompt text directly on the timeline strip."""
-
-    bl_idname = "animatica.timeline_strip_inline_edit"
-    bl_label = "Inline Edit Strip Prompt"
-    bl_options = {"REGISTER", "UNDO", "INTERNAL"}
-
-    index: IntProperty(name="Strip Index", default=0)
-
-    @classmethod
-    def poll(cls, context):
-        return _timeline_poll(context)
+class InlinePromptEditing:
+    """Typing a block's prompt in place: the text, a cursor, a selection, the
+    clipboard. Shared by the Timeline block and the floating bar's field, as a
+    mixin: a subclass of a registered operator took over its poll, and the
+    Timeline's own editor stopped opening."""
 
     def invoke(self, context, event):
         props = context.scene.animatica
@@ -836,7 +1297,7 @@ class ANIMATICA_OT_timeline_strip_inline_edit(bpy.types.Operator):
     @staticmethod
     def _delete_selection():
         """Delete selected text, update cursor, clear selection. Returns new (text, pos)."""
-        lo, hi = ANIMATICA_OT_timeline_strip_inline_edit._get_selection_range()
+        lo, hi = InlinePromptEditing._get_selection_range()
         text = inline_edit_state["text"]
         inline_edit_state["text"] = text[:lo] + text[hi:]
         inline_edit_state["cursor"] = lo
@@ -1038,6 +1499,20 @@ class ANIMATICA_OT_timeline_strip_inline_edit(bpy.types.Operator):
         self._cancel(context)
 
 
+class ANIMATICA_OT_timeline_strip_inline_edit(InlinePromptEditing, bpy.types.Operator):
+    """Edit strip prompt text directly on the timeline strip."""
+
+    bl_idname = "animatica.timeline_strip_inline_edit"
+    bl_label = "Inline Edit Strip Prompt"
+    bl_options = {"REGISTER", "UNDO", "INTERNAL"}
+
+    index: IntProperty(name="Strip Index", default=0)
+
+    @classmethod
+    def poll(cls, context):
+        return _timeline_poll(context)
+
+
 # ---------------------------------------------------------------------------
 # Prompt editing popup (right-click menu → Edit Prompt)
 # ---------------------------------------------------------------------------
@@ -1227,6 +1702,9 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             self.report({'ERROR'}, "No prompt block selected")
             return {'CANCELLED'}
         block = s.prompt_blocks[idx]
+        if block.locked:
+            self.report({'WARNING'}, "This block is locked: unlock it to make it again")
+            return {'CANCELLED'}
         self.seed = int(block.seed) if int(block.seed) > 0 else int(s.seed)
         return context.window_manager.invoke_props_dialog(self, width=320)
 
@@ -1255,6 +1733,9 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         idx = self._resolve_block_index(context)
         if idx < 0:
             self.report({'ERROR'}, "No prompt block selected")
+            return {'CANCELLED'}
+        if s.prompt_blocks[idx].locked:
+            self.report({'WARNING'}, "This block is locked: unlock it to make it again")
             return {'CANCELLED'}
 
         if s.is_generating:
@@ -1339,6 +1820,8 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
                     anchor_frames.add(int(f) + fs)
 
         self._target_range = (fs, fe)
+        from . import timeline_overlay
+        timeline_overlay.activity["generating"] = (fs, fe)
         self._request_start_frame = fs
         self._anchor_frames = anchor_frames
         self._result = None
@@ -1368,6 +1851,10 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         except Exception as exc:                          # noqa: BLE001 — surfaced to UI
             self._error = exc
 
+    def cancel(self, context):
+        self._cleanup(context)
+
+    @ends_cleanly
     def modal(self, context, event):
         from . import gltf_to_blender
         from .operators import (
@@ -1489,11 +1976,14 @@ def register_keymaps():
         name="Dopesheet", space_type="DOPESHEET_EDITOR"
     )
 
-    # Left-click — strip select/drag (also handles lane resize)
+    # Left-click — strip select/drag (also handles lane resize). Any modifier:
+    # a keymap item matches its modifiers exactly, and Ctrl, Alt and Shift
+    # mean things on the lane (outside it the click is passed on untouched).
     kmi = km.keymap_items.new(
         "animatica.timeline_strip_action",
         type="LEFTMOUSE",
         value="PRESS",
+        any=True,
     )
     _addon_keymaps.append((km, kmi))
 
@@ -1503,6 +1993,14 @@ def register_keymaps():
         "animatica.timeline_strip_add_click",
         type="LEFTMOUSE",
         value="PRESS",
+    )
+    _addon_keymaps.append((km, kmi))
+
+    # Mouse move — the lane lights up what the mouse is on
+    kmi = km.keymap_items.new(
+        "animatica.timeline_hover",
+        type="MOUSEMOVE",
+        value="ANY",
     )
     _addon_keymaps.append((km, kmi))
 
@@ -1543,6 +2041,9 @@ def unregister_keymaps():
 
 _classes = (
     ANIMATICA_OT_timeline_strip_action,
+    ANIMATICA_OT_timeline_hover,
+    ANIMATICA_OT_timeline_strip_toggle_lock,
+    ANIMATICA_OT_block_to_playhead,
     ANIMATICA_OT_timeline_strip_add_click,
     ANIMATICA_OT_add_strip_between_keyframes,
     ANIMATICA_OT_timeline_strip_delete,

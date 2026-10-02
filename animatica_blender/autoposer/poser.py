@@ -44,6 +44,7 @@ import time
 
 import bpy
 import mathutils
+import numpy as np
 
 from . import engine, joint_map
 
@@ -1063,6 +1064,80 @@ def _pins(arm, eff, out, floor):
     return pins
 
 
+def floor_height(arm, eff) -> float:
+    """The floor under the pose, in the poser's frame (its Y).
+
+    The poser's floor is Y=0 of its frame -- the armature's base plane. A
+    character posed on a roof 0.6 m below that, or on a stair, had its feet
+    held at the base plane in the air. The ground under it is read from the
+    scene instead: a ray down at the hips (or the middle of the targets),
+    from just above them, past the character's own meshes -- not from above
+    the head, where a hat or a ledge being reached for is not the floor.
+    """
+    from .. import ground
+
+    pos = [e for e in eff if e.get("type") == "pos"]
+    if not pos or arm is None:
+        return 0.0
+    mw = arm.matrix_world
+    world = {e["joint"]: mw @ from_poser(arm, e["pos"]) for e in pos}
+    at = world.get("Hips")
+    if at is None:
+        at = sum(world.values(), mathutils.Vector()) / len(world)
+        at.z = min(v.z for v in world.values()) + 1.0      # about hip height over the lowest target
+    z = ground.surface_below_cached(bpy.context.scene, at.x, at.y, at.z + ground.RAY_HEADROOM, arm=arm)
+    if z is None:
+        return 0.0
+    return float(to_poser(arm, mw.inverted() @ mathutils.Vector((at.x, at.y, z))).y)
+
+
+#: how far (poser metres) under its lowest target the ground may be before a
+#: pose counts as in the air
+AIRBORNE = 0.5
+#: how high a joint stands off the floor (poser metres), to tell from a target
+#: where the feet must be
+_STANDS = {"Hips": 0.95, "Spine": 1.05, "Spine1": 1.15, "Spine2": 1.25, "Neck": 1.45, "Head": 1.6,
+           "LeftHand": 0.8, "RightHand": 0.8, "LeftForeArm": 1.05, "RightForeArm": 1.05,
+           "LeftLeg": 0.5, "RightLeg": 0.5, "LeftFoot": 0.08, "RightFoot": 0.08,
+           "LeftToeBase": 0.03, "RightToeBase": 0.03}
+
+
+def pose_on_ground(eng, arm, eff, **kw):
+    """``eng.pose`` with its floor on the ground under the pose (see
+    `floor_height`): the targets go down by it, the solve comes back up."""
+    # ``floor_below``: no higher than this (poser Y) -- the lowest joint of the
+    # pose being edited. A floor found above it (a ledge the hips are over in
+    # mid-jump) pushed the feet up through the pose, and the body flipped over.
+    cap = kw.pop("floor_below", None)
+    lift = floor_height(arm, eff) if kw.get("floor", True) else 0.0
+    if kw.get("floor", True):
+        # a pose far above the ground is in the air (a jump, a swing, a fall):
+        # put 6 m of nothing under it and the poser, which learned bodies near
+        # their floor, answered with one turned upside down. Its floor goes
+        # just under it instead.
+        # where the feet are, near enough: each target less how high that joint
+        # stands off the floor (the hips held alone are a metre up, not in the air)
+        feet = [e["pos"][1] - _STANDS.get(str(e["joint"]).rsplit(":", 1)[-1], 0.9)
+                for e in eff if e.get("type") == "pos" and "pos" in e]
+        if feet:
+            lift = max(lift, min(feet) - AIRBORNE)
+        if cap is not None:
+            lift = min(lift, float(cap))
+    if abs(lift) < 1e-4:
+        return eng.pose(eff, **kw)
+    moved = []
+    for e in eff:
+        if "pos" in e:
+            e = dict(e, pos=[e["pos"][0], e["pos"][1] - lift, e["pos"][2]])
+        moved.append(e)
+    out = dict(eng.pose(moved, **kw))
+    up = np.array([0.0, lift, 0.0], dtype=np.float32)
+    out["joints"] = np.asarray(out["joints"], dtype=np.float32) + up
+    out["root"] = np.asarray(out["root"], dtype=np.float32) + up
+    out["floor_m"] = lift
+    return out
+
+
 def solve(context, report=None, *, moved: bool = False):
     """Solve and apply one pose.
 
@@ -1097,7 +1172,7 @@ def solve(context, report=None, *, moved: bool = False):
     t0 = time.perf_counter()
     try:
         floor = bool(context.scene.ap_floor)
-        out = eng.pose(eff, bone_lengths=_bone_lengths(arm),
+        out = pose_on_ground(eng, arm, eff, bone_lengths=_bone_lengths(arm),
                        ik_refine=context.scene.ap_use_ik,
                        # one switch: the floor is solid, or it is not there. The solver's own
                        # floor term stays on the feet — the set the checkpoint was trained
@@ -1730,6 +1805,59 @@ class AP_OT_remove_control(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class AP_OT_remove_rig(bpy.types.Operator):
+    bl_idname = "autoposer.remove_rig"
+    bl_label = "Stop the Autoposer"
+    bl_description = ("Take the Autoposer's handles off the rig and show its own bones again. "
+                      "The pose and the keys stay as they are")
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        arm = _armature(context)
+        return arm is not None and has_controls(arm)
+
+    def execute(self, context):
+        arm = _armature(context)
+        problem = edit_problem(arm)
+        if problem is not None:
+            self.report({"ERROR"}, problem)
+            return {"CANCELLED"}
+        # holding the rig (its action detached): give it back first
+        try:
+            if bpy.ops.animatica.give_back_rig.poll():
+                bpy.ops.animatica.give_back_rig()
+        except (AttributeError, RuntimeError):
+            pass
+        names = [b.name for b in _controls(arm)]
+        prev = arm.mode
+        context.view_layer.objects.active = arm
+        _clear_transform_flag(context)
+        keep = _preserve_pose(arm)
+        global _BUILDING
+        _BUILDING = True
+        try:
+            bpy.ops.object.mode_set(mode="EDIT")
+            try:
+                eb = arm.data.edit_bones
+                for name in names:
+                    b = eb.get(name)
+                    if b is not None:
+                        eb.remove(b)
+            finally:
+                bpy.ops.object.mode_set(mode="POSE" if prev == "POSE" else "OBJECT")
+        finally:
+            _BUILDING = False
+        _restore_pose(arm, keep, context)      # stopping must not move the character
+        _hide_deform_bones(arm, hide=False)    # the rig's own bones, as they were shown
+        coll = arm.data.collections.get(CTRL_COLL)
+        if coll is not None and not len(coll.bones):
+            arm.data.collections.remove(coll)
+        _show_controls_in_front(arm, on=False)
+        self.report({"INFO"}, f"Removed the {len(names)} control bones the Autoposer had added to the rig")
+        return {"FINISHED"}
+
+
 class AP_OT_key_pose(bpy.types.Operator):
     bl_idname = "autoposer.key_pose"
     bl_label = "Key Pose"
@@ -2022,7 +2150,7 @@ def skeleton_summary(arm) -> str:
     return f"{got} of {total} joints matched"
 
 
-CLASSES = (AP_OT_build_rig, AP_OT_add_control, AP_OT_remove_control, AP_OT_solve,
+CLASSES = (AP_OT_build_rig, AP_OT_add_control, AP_OT_remove_control, AP_OT_remove_rig, AP_OT_solve,
            AP_OT_snap_controls, AP_OT_rest, AP_OT_key_pose, AP_OT_take_over, AP_OT_release,
            AP_OT_detect_joints,
 )

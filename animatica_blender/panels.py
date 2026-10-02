@@ -60,6 +60,8 @@ def _draw_signin_hint(layout, context) -> bool:
         return False
     from . import mmcp_client
 
+    if mmcp_client.offline():
+        return False            # the offline card says what comes first
     box = layout.box()
     # A session that ended by itself needs a reason, or signing in again looks
     # like the addon forgetting things at random.
@@ -69,9 +71,17 @@ def _draw_signin_hint(layout, context) -> bool:
         row.alert = True
         row.label(text=expired.capitalize(), icon='ERROR')
     else:
-        box.label(text="Sign in to Animatica to generate", icon='USER')
-    box.operator("animatica.signin", icon='IMPORT', text="Sign in")
+        note = box.row()
+        note.active = False
+        note.label(text="Generating needs an Animatica account")
+    row = box.row(align=True)
+    row.operator("animatica.signin", icon='USER', text="Sign in")
+    row.operator("wm.url_open", icon='URL', text="Create Account").url = SIGN_UP_URL
     return True
+
+
+#: Where an account is made: the add-on signs in, it does not sign up.
+SIGN_UP_URL = "https://app.animatica.ai/signup"
 
 
 def _draw_rig_held(layout, context, settings) -> None:
@@ -133,6 +143,11 @@ def _draw_skeleton(layout, context, arm, open_if_wrong=False) -> None:
         col.prop_search(it, "bone", arm.data, "bones", text=poser.control_label(it.joint))
 
 
+def handles_have(context, arm) -> bool:
+    from . import handles
+    return handles.has(context.scene, arm)
+
+
 def _draw_set_keyframe(layout, context, settings) -> None:
     """The one button for committing a pose you posed by hand.
 
@@ -144,10 +159,10 @@ def _draw_set_keyframe(layout, context, settings) -> None:
         return
     row = layout.row(align=True)
     row.scale_y = 1.2
-    row.operator("animatica.set_key_pose", icon='KEYFRAME_HLT', text="Set Keyframe")
+    row.operator("animatica.set_key_pose", icon='KEYFRAME_HLT', text="Set Key Pose")
     # Record, next to the button it automates: on, posing with the handles keys
     # itself; off, Set Keyframe is the only way a pose is written.
-    row.prop(settings, "auto_key_pose", text="", icon='REC', toggle=True)
+    row.prop(context.scene.tool_settings, "use_keyframe_insert_auto", text="", icon='REC', toggle=True)
     _draw_rig_held(layout, context, settings)
 
 
@@ -269,11 +284,13 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
             box = layout.box()
             err = mmcp_client.last_connection_error()
             if err == mmcp_client.OFFLINE_MESSAGE:
-                box.label(text="Not connected", icon='INTERNET_OFFLINE')
+                box.label(text="Animatica needs internet access", icon='INTERNET_OFFLINE')
                 col = box.column(align=True)
-                col.label(text=err)
-                col.operator("animatica.open_online_prefs", text="Open Preferences",
-                             icon='PREFERENCES')
+                col.active = False
+                col.label(text="Motion is made on Animatica's servers")
+                row = box.row()
+                row.scale_y = 1.3
+                row.operator("animatica.allow_online", icon='WORLD', text="Allow Online Access")
             elif mmcp_client.connecting() or not err:
                 box.label(text="Connecting…", icon='SORTTIME')
             else:
@@ -366,15 +383,16 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
         if batch.pending(settings):
             row.operator("animatica.generate_batch", text="Regenerate All",
                          icon='FILE_REFRESH').characters = json.dumps(batch.pending(settings))
+        elif mmcp_client.needs_sign_in() and not in_preview:
+            # the step that is missing, as the button: it signs in, then generates
+            gen.enabled = True
+            row.operator("animatica.signin_generate", text="Sign in to Generate", icon='USER')
+        elif blockers and not in_preview:
+            # greyed, and saying why instead of "Generate Motion" without a word
+            row.operator("animatica.generate", text=blockers[0])
         else:
             row.operator("animatica.generate",
                          text="Generate Again" if in_preview else "Generate Motion")
-        # With no prompt, the field above already says what is missing.
-        if blockers and has_prompt:
-            note = gen.row()
-            note.enabled = True         # readable while the button above is not
-            note.active = False
-            note.label(text=blockers[0], icon='INFO')
 
         _draw_take_options(layout, context, settings, model, in_preview or batch_waiting)
         if not in_preview and not batch_waiting:
@@ -400,8 +418,12 @@ def _draw_prompt(layout, settings, has_prompt, in_preview) -> None:
         return
     i = min(max(settings.active_block_index, 0), len(blocks) - 1)
     col = layout.column(align=True)
+    col.enabled = mmcp_client.tool_available(settings.model_id, "prompt")
     label = "Prompt" if len(blocks) == 1 else f"Prompt · block {i + 1} of {len(blocks)}"
-    col.label(text=label)
+    head = col.row(align=True)
+    head.label(text=label)
+    head.prop(blocks[i], "locked", text="", emboss=False,
+              icon='LOCKED' if blocks[i].locked else 'UNLOCKED')
     col.prop(blocks[i], "prompt", text="", placeholder="e.g. a person waves hello")
     sub = col.row()
     sub.active = False
@@ -706,6 +728,10 @@ _MAX_NAMED_DROPPED = 3
 class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
     bl_label = "Pose"
     bl_idname = "ANIMATICA_PT_pose"
+    # Folded in a new file: a first take needs a prompt and Generate, and a
+    # sidebar opening on the Autoposer's download and the fingers read as
+    # steps to do first. The floating bar has the posing tools anyway.
+    bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
         from .autoposer import engine, poser
@@ -714,7 +740,9 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
         settings = context.scene.animatica
         arm = properties._live_armature(settings.target_armature)
         if arm is None:
-            layout.label(text="Set a target armature first", icon='INFO')
+            note = layout.row()
+            note.active = False
+            note.label(text="Add a character first (above)", icon='INFO')
             return
 
         # --- the Autoposer: named, and said what it does, so it can be found
@@ -729,7 +757,7 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
             # settings that switch it on.
             sub = layout.row()
             sub.active = False
-            sub.label(text="Or drag the trail · Shift: the whole body")
+            sub.label(text="Or in Motion: click a trail point, then drag it")
         status = engine.status()
         if not (status["runtime"] and status["model"]):
             box = layout.box()
@@ -758,38 +786,43 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
                 row.operator("autoposer.download", icon='IMPORT',
                              text=engine.download_label())
             box.label(text="Preferences → Animatica for detail")
-        elif not poser.has_controls(arm):
-            problem = poser.rig_problem(arm)
+        else:
+            from . import handles
+            problem = handles.problem(context, arm)
             if problem and problem != poser.NO_MODEL:
                 row = layout.row()
                 row.alert = True
                 row.label(text=problem[:70], icon='ERROR')
-            _draw_skeleton(layout, context, arm, open_if_wrong=bool(problem))
             row = layout.row()
             row.scale_y = 1.3
-            row.enabled = problem is None
-            row.operator("autoposer.build_rig", icon='OUTLINER_OB_ARMATURE',
-                         text="Start the Autoposer")
-        else:
+            row.enabled = not problem
+            active = handles.tool_active(context)
+            row.operator("animatica.toolbar_autoposer", icon='ARMATURE_DATA', depress=active,
+                         text="Autopose Tool (on)" if active else "Autopose Tool")
+            controls = handles.items(context.scene, arm)
+            if not controls:
+                _draw_skeleton(layout, context, arm, open_if_wrong=bool(problem))
             # The handles, in the artist's words rather than the rig's. Adding
             # one belongs in the same block as picking one, so the + sits with
             # them either way round.
-            controls = poser._controls(arm)
-            if settings.pose_details:
+            elif settings.pose_details:
                 col = layout.column(align=True)
                 for b in controls:
                     row = col.row(align=True)
-                    row.prop(b, "ap_enabled", text=poser.joint_label(b), toggle=True)
+                    row.prop(b, "ap_enabled", text=poser.control_label(b.ap_joint, b.ap_kind), toggle=True)
                     sub = row.row(align=True)
                     sub.active = b.ap_enabled
                     sub.prop(b, "ap_rot", text="Rot", toggle=True)
                     sub.prop(b, "ap_tol_m", text="")
-                col.operator("autoposer.add_control", text="Add Handle", icon='ADD')
+                col.menu("ANIMATICA_MT_add_handle", text="Add Handle", icon='ADD')
             else:
                 grid = layout.grid_flow(row_major=True, columns=4, align=True)
                 for b in controls:
-                    grid.prop(b, "ap_enabled", text=poser.joint_label(b), toggle=True)
-                grid.operator("autoposer.add_control", text="", icon='ADD')
+                    grid.prop(b, "ap_enabled", text=poser.control_label(b.ap_joint, b.ap_kind), toggle=True)
+                grid.menu("ANIMATICA_MT_add_handle", text="", icon='ADD')
+        if arm is not None and handles_have(context, arm):
+            layout.prop(settings, "show_picker", text="Handle Picker in the Viewport",
+                        icon='RESTRICT_SELECT_OFF')
             row = layout.row(align=True)
             row.prop(settings, "pose_tightness", slider=True)
             row.prop(settings, "pose_details", text="", icon='OPTIONS')
@@ -845,9 +878,14 @@ class ANIMATICA_PT_paths(AnimaticaPanelBase, Panel):
         settings = scene.animatica
 
         row = layout.row(align=True)
-        row.operator("animatica.add_waypoint", icon='MESH_CIRCLE',
+        # greyed out when the connected model can't use them
+        sub = row.row(align=True)
+        sub.enabled = mmcp_client.tool_available(settings.model_id, "waypoint")
+        sub.operator("animatica.add_waypoint", icon='MESH_CIRCLE',
                      text=f"Waypoint at {scene.frame_current}")
-        row.operator("animatica.add_effector_target", icon='EMPTY_SINGLE_ARROW', text="Pin")
+        sub = row.row(align=True)
+        sub.enabled = mmcp_client.tool_available(settings.model_id, "pin")
+        sub.operator("animatica.add_effector_target", icon='EMPTY_SINGLE_ARROW', text="Pin")
 
         found = constraints_ui.walk_scene_constraints(scene)
         marks = found["waypoints"]
@@ -1009,6 +1047,10 @@ class ANIMATICA_PT_settings_viewport(AnimaticaPanelBase, Panel):
             note.label(text=f"Refreshing after {held}")
         parts.operator("animatica.key_poses_refresh", text="Refresh Ghosts", icon='FILE_REFRESH')
 
+        col = layout.column()
+        col.use_property_split = True
+        col.use_property_decorate = False
+        col.prop(settings, "show_toolbar", text="Floating Toolbar")
         arm = properties._live_armature(settings.target_armature)
         if arm is not None:
             col = layout.column()

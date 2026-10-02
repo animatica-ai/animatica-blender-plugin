@@ -164,11 +164,27 @@ def facing_vector(angle: float) -> Vector:
     return Vector((math.sin(angle), -math.cos(angle), 0.0))
 
 
-def create_marker(scene, frame: int, xy, owner=None, facing=None):
+def ground_z(scene, xy, owner=None, z_from=None) -> float:
+    """The height of the surface under *xy* -- a roof, a stair -- or 0 where
+    there is none. The ray starts a step above *z_from* (the character's
+    height when it is placed, the marker's own when it is moved)."""
+    from . import ground
+
+    if z_from is None:
+        z_from = owner.matrix_world.translation.z if owner is not None else 0.0
+    # from about hip height over the spot: a marker is placed or dragged on the
+    # ground, and the ground under it is at most a step up or a drop away
+    z = ground.surface_below(scene, float(xy[0]), float(xy[1]),
+                             float(z_from) + 1.0, arm=owner)
+    return 0.0 if z is None else z
+
+
+def create_marker(scene, frame: int, xy, owner=None, facing=None, z=None):
     """A flat circle on the ground at *xy*, tied to *frame*.
 
     *facing*, in radians from the rest facing, makes it a waypoint that also
-    says which way to face; ``None`` leaves that to the path.
+    says which way to face; ``None`` leaves that to the path. *z* is the
+    ground's height there (see `ground_z`); the circle sits on it.
     """
     obj = bpy.data.objects.new(marker_name(frame), None)
     obj.empty_display_type = 'CIRCLE'
@@ -176,9 +192,10 @@ def create_marker(scene, frame: int, xy, owner=None, facing=None):
     # under the floor. A quarter turn about X lays it flat on the ground.
     obj.rotation_euler = (math.pi / 2, 0.0, 0.0)
     obj.empty_display_size = MARKER_RADIUS
-    # A centimetre above the ground, not on it: a floor at z=0 z-fights the
-    # circle and leaves only arcs of it showing. Height is never sent.
-    obj.location = (float(xy[0]), float(xy[1]), MARKER_LIFT)
+    # A centimetre above the ground, not on it: a floor z-fights the circle
+    # and leaves only arcs of it showing. The ground's height goes to the
+    # server separately (ground.ground_constraint), not this one.
+    obj.location = (float(xy[0]), float(xy[1]), float(z or 0.0) + MARKER_LIFT)
     obj.lock_location[2] = True                # a waypoint is a spot on the ground
     obj.lock_rotation = (True, True, True)
     obj.lock_scale = (True, True, True)
@@ -309,7 +326,7 @@ class ANIMATICA_OT_add_waypoint(bpy.types.Operator):
         old = at_frame(scene, frame)
         if old is not None:
             bpy.data.objects.remove(old, do_unlink=True)
-        obj = create_marker(scene, frame, xy, owner=arm)
+        obj = create_marker(scene, frame, xy, owner=arm, z=ground_z(scene, xy, arm))
 
         for o in context.selected_objects:
             o.select_set(False)
@@ -393,7 +410,8 @@ class ANIMATICA_OT_curve_to_waypoints(bpy.types.Operator):
             old = at_frame(scene, f)
             if old is not None:
                 bpy.data.objects.remove(old, do_unlink=True)
-            create_marker(scene, f, (point.x, point.y), owner=arm)
+            create_marker(scene, f, (point.x, point.y), owner=arm,
+                          z=ground_z(scene, (point.x, point.y), arm, z_from=point.z))
         bpy.data.objects.remove(curve, do_unlink=True)
         tag_redraw()
         self.report({'INFO'}, f"{len(frames)} waypoints along the old path")
@@ -580,6 +598,31 @@ def unregister_draw_handlers():
                 pass
 
 
+_SNAPPING = False
+
+
+def _on_depsgraph(scene, depsgraph):
+    """A waypoint dragged to another roof sits on that roof."""
+    global _SNAPPING
+    if _SNAPPING:
+        return
+    moved = [u.id.original for u in depsgraph.updates
+             if u.is_updated_transform and isinstance(u.id, bpy.types.Object)]
+    moved = [o for o in moved if is_waypoint(o)]
+    if not moved:
+        return
+    _SNAPPING = True
+    try:
+        for obj in moved:
+            loc = obj.location
+            owner = bpy.data.objects.get(obj.get(PROP_OWNER, "")) if obj.get(PROP_OWNER) else None
+            z = ground_z(scene, (loc.x, loc.y), owner, z_from=loc.z - MARKER_LIFT) + MARKER_LIFT
+            if abs(z - loc.z) > 1e-3:
+                obj.location.z = z
+    finally:
+        _SNAPPING = False
+
+
 def timeline_frames(scene) -> list[int]:
     """Waypoint frames, for pins on the timeline."""
     return [int(o.animatica_waypoint_frame) for o in waypoints(scene)]
@@ -621,9 +664,20 @@ def register():
     for cls in _classes:
         bpy.utils.register_class(cls)
     register_draw_handlers()
+    _drop_handler()
+    bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
+
+
+def _drop_handler():
+    """Every copy of the handler, this module's or a reloaded one's."""
+    hs = bpy.app.handlers.depsgraph_update_post
+    for h in list(hs):
+        if getattr(h, "__name__", "") == "_on_depsgraph" and getattr(h, "__module__", "") == __name__:
+            hs.remove(h)
 
 
 def unregister():
+    _drop_handler()
     unregister_draw_handlers()
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)

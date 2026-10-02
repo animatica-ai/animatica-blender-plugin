@@ -62,6 +62,7 @@ def _serialize_blocks(blocks) -> str:
             "color": list(b.color),
             "seed": int(getattr(b, "seed", 0)),
             "last_used_seed": int(getattr(b, "last_used_seed", 0)),
+            "locked": bool(getattr(b, "locked", False)),
         }
         for b in blocks
     ])
@@ -108,6 +109,7 @@ def load_blocks_from_armature(arm_obj, settings):
             # ``last_used_seed`` records the concrete seed of the last generation
             # (added with client-side seed recording); older scenes default to 0.
             b.last_used_seed = int(item.get("last_used_seed", 0))
+            b.locked = bool(item.get("locked", False))
         settings.active_block_index = int(arm_obj.get(_ACTIVE_KEY, 0))
         return
 
@@ -428,7 +430,8 @@ def _tightness_update(self, context):
     arm = properties._live_armature(self.target_armature)
     if arm is None:
         return
-    for b in poser._controls(arm):
+    from . import handles  # noqa: PLC0415
+    for b in list(poser._controls(arm)) + handles.items(context.scene, arm):
         b.ap_tol_m = float(self.pose_tightness)
         b.ap_rot_tol_m = float(self.pose_tightness)
 
@@ -466,6 +469,19 @@ class PromptBlock(PropertyGroup):
         name="Enabled",
         description="Include this block when generating",
         default=True,
+    )
+    selected: BoolProperty(
+        name="Selected", default=False, options={'SKIP_SAVE'},
+        description="Picked on the Timeline: moved, deleted and edited together",
+    )
+    locked: BoolProperty(
+        name="Locked",
+        description=(
+            "Set in stone: this block's motion is yours, keys you can edit, and "
+            "Generate and Redo leave it as it is -- the blocks next to it are "
+            "generated to run into it"
+        ),
+        default=False,
     )
     color: FloatVectorProperty(
         name="Color",
@@ -715,6 +731,23 @@ def _model_id_items(self, context):
     return mmcp_client.cached_model_items()
 
 
+def _bar_mode_update(self, context):
+    """Pose or Motion picked: the viewport draws what that mode is about."""
+    from . import key_poses
+    key_poses.on_toggle(self)
+    _redraw_3d_views()
+
+
+def _redraw_3d_views() -> None:
+    try:
+        for win in bpy.context.window_manager.windows:
+            for area in win.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+    except (AttributeError, ReferenceError):
+        pass
+
+
 class AnimaticaSettings(PropertyGroup):
     """Scene-level addon state."""
 
@@ -942,6 +975,168 @@ class AnimaticaSettings(PropertyGroup):
     # One switch for the whole overlay, so it can go away in a click instead
     # of three. It sits with the toggles it governs — the same switch in the
     # Pose panel's *header* read as switching posing off, which it never did.
+    bar_mode: EnumProperty(
+        name="Bar Mode",
+        description="What the floating bar's field makes: a pose at the playhead, or the motion",
+        items=(
+            ('POSE', "Pose", "This frame: pose with the handles or in words, key it, "
+                             "with the key poses either side as onion skins"),
+            ('MOTION', "Motion", "The stretch between key poses: the trail, waypoints, pins, "
+                                 "and the take that moves through your key poses"),
+        ),
+        default='POSE',
+        update=lambda self, context: _bar_mode_update(self, context),
+    )
+    show_hints: BoolProperty(
+        name="Next-Step Hints",
+        description="A line above the floating bar with the next step that improves the take, and why",
+        default=True,
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    trail_radius: IntProperty(
+        name="Reach",
+        description=(
+            "How many frames either side follow when you drag a point on the motion "
+            "trail, a handle or a zoetrope slice, fading out with distance (0: that "
+            "frame only). The zoetrope shows exactly these frames, and the Timeline the "
+            "falloff. The mouse wheel changes it during a drag, as with proportional editing"
+        ),
+        default=6, min=0, max=60,
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    field_pose: BoolProperty(
+        name="Pose in Words",
+        description=(
+            "The bar's field describes this frame's pose, and Generate Pose makes it and keys it "
+            "at the playhead. Off: the field says what happens in the block, and Generate makes the take"
+        ),
+        default=False, options={'SKIP_SAVE'},
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    edit_strength: FloatProperty(
+        name="Intensity",
+        description=(
+            "How strongly the frames around an edit follow it: 100% gives them the whole "
+            "falloff, 0% leaves them be and only the edited frame changes. The edited frame "
+            "always takes the whole edit. Drag the curve's top in the viewport to change it"
+        ),
+        default=1.0, min=0.0, max=1.0, subtype='FACTOR',
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    # Onion skin, in Pose -- Grease Pencil's own controls, in its words
+    onion_mode: EnumProperty(
+        name="Mode",
+        description="Which key poses are drawn as onion skins",
+        items=(
+            ('FRAMES', "Frames", "The motion itself: the pose every Step frames before and after the "
+                                 "playhead (Before, After)"),
+            ('KEYFRAMES', "Keyframes", "Your key poses either side of the playhead (Before, After)"),
+            ('ALL', "All Keys", "Every key pose, before the playhead and after"),
+        ),
+        default='FRAMES',
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    onion_before: IntProperty(
+        name="Before",
+        description="How many poses before the playhead are drawn (Frames and Keyframes modes)",
+        default=2, min=0, max=16,
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    onion_after: IntProperty(
+        name="After",
+        description="How many poses after the playhead are drawn (Frames and Keyframes modes)",
+        default=2, min=0, max=16,
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    onion_step: IntProperty(
+        name="Step",
+        description="Frames between the onion skins (Frames mode: across the Reach)",
+        default=2, min=1, max=24,
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    onion_wormhole: BoolProperty(
+        name="Zoetrope",
+        description=(
+            "Spread the onion skins out into a tunnel instead of piling them on the character: "
+            "the past one way, the future the other, receding into depth. Each has handles: "
+            "drag one to pose that frame without moving the playhead"
+        ),
+        default=False,
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    wormhole_count: IntProperty(
+        name="Slices",
+        description="(No longer used: the zoetrope shows the frames within Reach)",
+        default=5, min=1, max=12,
+        options={'HIDDEN'},
+    )
+    wormhole_step: IntProperty(
+        name="Step",
+        description=(
+            "Frames between the zoetrope's slices. It shows the frames within Reach, "
+            "the ones a drag moves; past 12 a side the step grows so they stay readable"
+        ),
+        default=1, min=1, max=12,
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    wormhole_spacing: FloatProperty(
+        name="Spacing",
+        description="How far apart the zoetrope's slices are",
+        default=0.22, min=0.05, max=3.0, subtype='DISTANCE', unit='LENGTH',
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    onion_opacity: FloatProperty(
+        name="Opacity",
+        description="How solid the onion skins are",
+        default=0.32, min=0.05, max=1.0, subtype='FACTOR',
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    onion_fade: BoolProperty(
+        name="Fade",
+        description="Draw the key poses further from the playhead fainter",
+        default=True,
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    onion_color_before: FloatVectorProperty(
+        name="Before",
+        description="The colour of the key poses before the playhead",
+        subtype='COLOR', size=3, min=0.0, max=1.0, default=(0.36, 0.80, 0.34),
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    onion_color_after: FloatVectorProperty(
+        name="After",
+        description="The colour of the key poses after the playhead",
+        subtype='COLOR', size=3, min=0.0, max=1.0, default=(0.42, 0.50, 1.00),
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    pose_on_ground: BoolProperty(
+        name="Stand on the Ground",
+        description=("Put a described pose's lowest point on the ground. Off: the height "
+                     "the model gave it, for a pose in the air, like a jump"),
+        default=True,
+    )
+    show_picker: BoolProperty(  # opened from the bar, not by itself
+        name="Handle Picker",
+        description=(
+            "A card in the viewport with the character in T-pose and the "
+            "Autoposer's handles on it: pick one or several, switch them on or "
+            "off, and set how strictly the pose keeps to them"
+        ),
+        default=False,
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    picker_collapsed: BoolProperty(name="Picker Collapsed", default=False,
+                                   update=lambda self, context: _redraw_3d_views())
+    show_toolbar: BoolProperty(
+        name="Toolbar",
+        description=(
+            "The floating bar at the bottom of the viewport: Generate, Accept and "
+            "Reject, posing and keying, the key poses, waypoints and pins, and the "
+            "take's switches, without the N panel"
+        ),
+        default=True,
+        update=lambda self, context: _redraw_3d_views(),
+    )
     key_pose_overlay: BoolProperty(
         name="Show Plan",
         description=(
@@ -1045,13 +1240,11 @@ class AnimaticaSettings(PropertyGroup):
     auto_key_pose: BoolProperty(
         name="Auto Key",
         description=(
-            "Write a keyframe whenever you pose with the Autoposer handles. "
-            "Off: posing still works and still shows, but nothing is recorded "
-            "until you press Set Keyframe — the way to try a pose out without "
-            "it landing in the action"
+            "Superseded by Blender's own Auto Keying (the record button in the "
+            "Timeline), which the Autoposer and the bar follow"
         ),
-        default=True,
-    )
+        default=False,       # off, as Blender's own auto-key starts
+    )   # no longer read: the record button is Blender's own (tool_settings.use_keyframe_insert_auto)
     waypoint_heading: BoolProperty(
         name="Face along the path",
         description=(

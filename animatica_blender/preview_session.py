@@ -315,6 +315,8 @@ def finish(context, arm, *, accepted: bool) -> None:
     """Close the session. On Reject the pose and the frame range go back as
     they were; either way the user's action gets its own fake-user flag back
     and the splice copy goes."""
+    from .pose_edit import clear_kept
+    clear_kept(arm)                       # frames kept from this take: done with it
     data = get(arm)
     if data is None:
         return
