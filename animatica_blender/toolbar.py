@@ -64,6 +64,7 @@ TEXT_SIZE = 11
 PROMPT_CHARS = 16    # of the block's prompt shown on its button
 HINT_H = 24          # the next-step line above the bar
 FIELD = 210          # px at 1x: the prompt field, before the take's buttons take their share
+REACH = 96           # px at 1x: the reach tile -- its falloff curve and "±6 · 100%"
 PLACEHOLDER = "Describe what happens here…"
 #: the field's editing index while it holds the pose description, not a block's prompt
 POSE_FIELD = -2
@@ -267,6 +268,13 @@ def _pose_items(context, arm) -> list:
              on=key_poses.ghosts_on(s), group=3),
         Item("wormhole", "wormhole", "animatica.toolbar_wormhole",
              on=bool(s.onion_wormhole) and key_poses.ghosts_on(s) and s.onion_mode == 'FRAMES', group=3),
+    ]
+    # how far, and how strongly, an edit carries to the frames around it: there
+    # whenever one would (the Autopose tool with the ghosts on, or Auto Keying)
+    from . import wormhole
+    if active and (autokey or wormhole.editable(context)):
+        out.append(Item("reach", "", "animatica.reach_drag", {"part": "bar"}, group=3, width="reach"))
+    out += [
         Item("pose_prompt", "", "animatica.toolbar_pose_prompt", label=(s.last_pose_prompt or "").strip(),
              enabled=mmcp_client.tool_available(s.model_id, "describe"), group=4, width="field"),
     ]
@@ -466,6 +474,8 @@ def _take_width(u: float, size: float) -> float:
 def _width(it: Item, u: float, size: float) -> float:
     if it.width == "field":
         return FIELD * u
+    if it.width == "reach":
+        return REACH * u
     return _plain_width(it.label, bool(it.icon), u, size)
 
 
@@ -515,7 +525,7 @@ def _shelf_lift(area, region) -> float:
 
 #: what goes first when even the compact bar does not fit, and where it is then:
 #: the Options popover beside Generate shows whatever was folded into it
-FOLD = ("smooth", "pin", "waypoint", "picker", "wormhole", "onion", "trail", "model", "auto_key",
+FOLD = ("smooth", "pin", "waypoint", "picker", "reach", "wormhole", "onion", "trail", "model", "auto_key",
         "key_steps", "autopose", "set_key")
 #: folded together: one without the other would be half a control
 _FOLD_TOGETHER = {"key_steps": ("key_prev", "key_next")}
@@ -649,6 +659,11 @@ def _draw_folded(layout, context):
             title, it = labels[fid]
             if not it.op:
                 continue
+            if fid == "reach":                  # a drag on the bar; here, the two numbers
+                sc = context.scene.animatica
+                col.prop(sc, "trail_radius", text="Reach")
+                col.prop(sc, "edit_strength", text="Intensity", slider=True)
+                continue
             row = col.row(align=True)
             row.enabled = it.enabled
             # a switch shows as one: pressed in when it is on
@@ -725,6 +740,9 @@ def draw_bar(context, highlighted: bool = True) -> None:
         if it.width == "field":
             _draw_field(it, rect, u, size, _hot(live, it), first, last)
             continue
+        if it.width == "reach":
+            _draw_reach(context, rect, u, size, _hot(live, it), first, last)
+            continue
         hot = _hot(live, it)
         dim = not it.enabled and it.progress is None
         # hover lifts the segment itself: an outline round one segment of a strip read as a gap
@@ -788,6 +806,39 @@ def _draw_hint(it, rect, u, size, hot):
         text = text.rstrip() + "…"
     blf.color(0, 1, 1, 1, 0.95 if hot else 0.85)
     blf.position(0, x0 + 21 * u, cy - size * 0.36, 0)
+    blf.draw(0, text)
+
+
+def _draw_reach(context, rect, u, size, hot, first, last):
+    """The reach of an edit as a tile: the falloff over the frames either side,
+    filled as high as Intensity, and the two numbers. Drag it: sideways for
+    Reach, up and down for Intensity."""
+    from . import reach_widget
+    x0, y0, x1, y1 = rect
+    _rounded(None, rect, RADIUS * u, st.TILE_HOVER if hot else BUTTON_COLOR, left=first, right=last)
+    s = context.scene.animatica
+    radius, k = int(s.trail_radius), float(s.edit_strength)
+    # the curve, in the tile's left part
+    cx0, cx1 = x0 + 7 * u, x0 + 42 * u
+    base, top = y0 + 8 * u, y1 - 7 * u
+    mid = (cx0 + cx1) / 2
+    pts = []
+    for i in range(-16, 17):
+        d = i / 16.0
+        w = reach_widget._unit_share(d) if radius else (1.0 if i == 0 else 0.0)
+        pts.append((mid + d * (cx1 - cx0) / 2, base + (top - base) * w * (k if i else 1.0)))
+    for (xa, ya), (xb, yb) in zip(pts, pts[1:]):
+        if ya > base + 0.5 or yb > base + 0.5:
+            st.polygon([(xa, base), (xb, base), (xb, yb), (xa, ya)], st.with_alpha(st.SOFT_ORANGE, 0.3))
+    st.lines(list(zip(pts, pts[1:])), max(1.0, 1.4 * u), st.with_alpha(st.SOFT_ORANGE, 0.95))
+    st.lines([((mid, base), (mid, top))], max(1.0, u), (1, 1, 1, 0.6))
+    st.lines([((cx0, base), (cx1, base))], max(1.0, u), (1, 1, 1, 0.25))
+    # the numbers
+    blf.size(0, size * 0.92)
+    text = f"\u00b1{radius} \u00b7 {round(k * 100)}%" if radius else "1 frame"
+    tw = blf.dimensions(0, text)[0]
+    blf.color(0, *WHITE[:3], 0.9 if hot else 0.75)
+    blf.position(0, cx1 + ((x1 - 6 * u) - cx1 - tw) / 2, (y0 + y1) / 2 - size * 0.34, 0)
     blf.draw(0, text)
 
 
@@ -928,6 +979,7 @@ TIPS = {
     "key_next": ("Next Key Pose", "Jump to your key pose after the playhead (the take's own keys are skipped; Up Arrow stops on every key). Why: animators work key to key, checking each against its neighbours"),
     "auto_key": ("Auto Keying", "Blender's record button. Why: on, every pose you make is kept; off, you choose what to keep with I"),
     "onion": ("Onion Skin", "The motion around this frame as ghosts: green before, blue after. Why: a key pose has to fit what comes before and after it. Mode, opacity, colours: Pose Options"),
+    "reach": ("Reach \u00b7 Intensity", "How far an edit carries to the frames around it, and how strongly they follow. Drag sideways for Reach (frames either side), up or down for Intensity. Why: a wider reach makes a smooth change through the motion, a narrow one a local fix; the ghosts, the Timeline and the next edit follow as you drag"),
     "wormhole": ("Wormhole", "The onion skin spread out into a tunnel through time: earlier to the left, later to the right. Why: frames that overlap become readable side by side, and each can be posed without moving the playhead"),
     "trail": ("Motion Trail", "The path the hands, feet, hips and head take. Why: good motion moves in arcs; the trail shows where it does not. Click a point, then drag: the frames around it follow"),
     "smooth": ("Smooth Motion Here", "Even out the picked joint's path around the picked point. Why: a generated take can wobble; this fixes the arc without making a new take"),
@@ -1273,6 +1325,7 @@ class ANIMATICA_PT_pose_options(_Popover, bpy.types.Panel):
             if wormhole:
                 # the wormhole shows the frames a drag reaches: Reach is its range
                 col.prop(s, "trail_radius", text="Reach (frames)")
+                col.prop(s, "edit_strength", text="Intensity", slider=True)
                 col.prop(s, "wormhole_step", text="Step")
                 col.prop(s, "wormhole_spacing", text="Spacing")
         col.prop(s, "key_pose_trail", text="Motion Trail")

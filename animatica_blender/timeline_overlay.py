@@ -679,7 +679,6 @@ def _draw(context, region, props, window, key_pose_ticks, waypoint_frames):
         st.rounded(rect, 0, st.with_alpha(st.SOFT_ORANGE, 0.12))
         st.outline(rect, 0, max(1.0, u * 0.75), st.with_alpha(st.SOFT_ORANGE, 0.8))
 
-    _draw_reach(g, fx)
     _draw_key_pose_rail(g, W, fx, key_pose_ticks)
     _draw_waypoint_rail(g, W, fx, waypoint_frames)
 
@@ -846,73 +845,6 @@ def _draw_key_pose_rail(g, W, fx, ticks):
         _font(8 * u)
         label = f"{drag[1]}"
         _text(label, x + 1.35 * s + 3 * u, cy - 3 * u, st.WHITE)
-
-
-def drag_reach():
-    """``(frame, radius)`` of a drag that reaches through time -- a wormhole
-    slice or a trail point -- or None."""
-    try:
-        from . import curve_edit, wormhole
-    except Exception:                           # noqa: BLE001
-        return None
-    if wormhole._drag["active"] and wormhole._drag["frame"] is not None:
-        return int(wormhole._drag["frame"]), int(wormhole._drag.get("radius", 0))
-    if wormhole.propagation["f0"] is not None:          # a handle on the live character
-        return int(wormhole.propagation["f0"]), int(wormhole.propagation["radius"])
-    if curve_edit._drag["active"] and curve_edit._drag["frame"] >= 0:
-        return int(curve_edit._drag["frame"]), int(curve_edit._drag.get("radius", 0))
-    return None
-
-
-def idle_reach():
-    """``(frame, radius)`` the wormhole shows while nothing is dragged: the
-    frames a drag here would move, around the playhead -- or None."""
-    try:
-        from . import wormhole
-        ctx = bpy.context
-        if not wormhole.shown(ctx):
-            return None
-        return int(ctx.scene.frame_current), int(ctx.scene.animatica.trail_radius)
-    except Exception:                           # noqa: BLE001
-        return None
-
-
-def _draw_reach(g, fx):
-    """How far a drag reaches, on the lane: full at the dragged frame, fading
-    to nothing at the radius -- the falloff you are about to apply, where the
-    frames are."""
-    reach = drag_reach()
-    idle = reach is None
-    if idle:
-        # the wormhole on and nothing dragged: the same falloff around the
-        # playhead, in the onion skin's colours -- the slices you see, in time
-        reach = idle_reach()
-        if reach is None:
-            return
-    from .curve_edit import reach_weight
-    f0, radius = reach
-    u = g.u
-    y0, h = g.b0, (g.b1 - g.b0)
-    s = bpy.context.scene.animatica
-    before = (*s.onion_color_before, 1.0) if idle else st.SOFT_ORANGE
-    after = (*s.onion_color_after, 1.0) if idle else st.SOFT_ORANGE
-    fill = 0.3 if idle else 0.38
-    pts = []
-    for f in range(f0 - radius - 1, f0 + radius + 2):
-        w = reach_weight(f - f0, radius)
-        pts.append((f, fx(f), y0 + h * w))
-    for (fa, xa, ya), (fb, xb, yb) in zip(pts, pts[1:]):
-        if ya <= y0 + 0.5 and yb <= y0 + 0.5:
-            continue
-        rgb = before if fb <= f0 else after
-        st.polygon([(xa, y0), (xb, y0), (xb, yb), (xa, ya)], st.with_alpha(rgb, fill))
-        st.lines([((xa, ya), (xb, yb))], max(1.0, 1.5 * u), st.with_alpha(rgb, 0.95))
-    x = fx(f0)
-    if not idle:                                # the playhead marks it when idle
-        st.lines([((x, g.b0), (x, g.b1))], max(1.0, 2.0 * u), st.SOFT_ORANGE)
-    _font(8 * u)
-    label = f"{f0}  \u00b1{radius}" if radius else f"{f0}"
-    _text(label, x + 4 * u, g.b1 - 10 * u, st.WHITE)
 
 
 def _draw_waypoint_rail(g, W, fx, frames):
