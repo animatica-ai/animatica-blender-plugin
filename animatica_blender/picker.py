@@ -7,9 +7,8 @@ handle on it where its joint is. Click a handle to pick it, Shift-click to add
 or drop one; under the figure the picked handles are switched on or off, given
 their rotation or not, and told how strictly the pose keeps to them (slack).
 
-Picking a handle selects its control bone -- the picker's selection *is* the
-rig's, so G and R work on what was picked, and a handle clicked in the
-viewport shows picked here.
+The handles are the Autopose tool's (see handles.py), not bones: picking one
+here picks it in the viewport too, and the other way round.
 
 Drawn as the toolbar is (see toolbar.py): one gizmo draws the card, Blender's
 button gizmos under it take the clicks, hover and tooltips.
@@ -29,14 +28,23 @@ from gpu_extras.batch import batch_for_shader
 from mathutils import Matrix
 
 from . import ui_style as st
-from .blender_compat import pose_bone_is_selected, pose_bone_select_set
+from . import handles
+
+
+def pose_bone_is_selected(h) -> bool:
+    """Picked: the handle's own selection (handles are not bones any more)."""
+    return bool(h.select)
+
+
+def pose_bone_select_set(h, value: bool) -> None:
+    h.select = bool(value)
 
 # logical px (× UI scale)
 CARD_W = 196
 PAD = 10
 HEAD_H = 22
 FIG_MAX = 230
-FIG_MIN = 110
+FIG_MIN = 64
 CAPTION_H = 14
 ROW_H = 24
 GAP = 6
@@ -88,7 +96,7 @@ def _arm(context):
 
 def _controls(arm):
     from .autoposer import poser
-    return [arm.pose.bones[b.name] for b in poser._controls(arm) if b.name in arm.pose.bones]
+    return handles.refs(bpy.context.scene, arm)
 
 
 def picked(arm) -> list:
@@ -98,7 +106,7 @@ def picked(arm) -> list:
 
 def _label(pb) -> str:
     from .autoposer import poser
-    return poser.joint_label(pb.bone)
+    return poser.control_label(pb.bone.ap_joint, pb.bone.get("ap_kind") or "")
 
 
 def shown(context) -> bool:
@@ -107,7 +115,7 @@ def shown(context) -> bool:
     if s is None or not getattr(s, "show_picker", True):
         return False
     arm = _arm(context)
-    return arm is not None and poser.has_controls(arm)
+    return arm is not None and handles.has(context.scene, arm)
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +201,9 @@ def _figure_of(arm):
     joints = {}
     for pb in _controls(arm):
         b = pb.bone
-        joints[pb.name] = spot(arm.data.bones.get(b.ap_joint) or b, b.get("ap_kind") or "")
+        bone = poser.joint_bone(arm, b.ap_joint)
+        if bone is not None:
+            joints[pb.name] = spot(bone, b.get("ap_kind") or "")
     # and every handle the rig could have, where it would go
     for spec in poser.rig_def():
         bone = poser.joint_bone(arm, spec["joint"])
@@ -240,7 +250,16 @@ def layout(context, area, region) -> dict | None:
     # Top left, under the viewport's own text: the floating bar has the bottom.
     # The figure as tall as the rig's proportions want (a T-pose is about as
     # wide as it is tall), within what the viewport has room for.
-    room = (region.height - headers) / u - TOP_TEXT - MARGIN - 175
+    # ...and above the floating bar (its height and its gap from the bottom),
+    # so the slack rows never slide under it
+    bar = 0.0
+    try:
+        from . import toolbar
+        if toolbar.shown(context):
+            bar = toolbar.BOTTOM + 2 * toolbar.PAD + toolbar.BUTTON + 12
+    except Exception:                                  # noqa: BLE001
+        pass
+    room = (region.height - headers) / u - TOP_TEXT - MARGIN - 175 - bar
     want = FIG_MAX
     if fig is not None:
         bx0, by0, bx1, by1 = fig["bbox"]
@@ -439,20 +458,19 @@ def draw_card(context, highlighted: bool = True):
         if hot:
             hover = pb
         rr = r * (1.25 if hot else 1.0)
+        # the viewport's shapes: a square for the body, a diamond for an aim, a circle else
+        shape = handles._shape(pb.item, x, y, rr)
         if pose_bone_is_selected(pb):
-            st.rounded((x - rr - 3 * u, y - rr - 3 * u, x + rr + 3 * u, y + rr + 3 * u),
-                       rr + 3 * u, (1, 1, 1, 0.95))
-            st.rounded((x - rr - 1.5 * u, y - rr - 1.5 * u, x + rr + 1.5 * u, y + rr + 1.5 * u),
-                       rr + 1.5 * u, st.GROUND)
-        dot = (x - rr, y - rr, x + rr, y + rr)
+            ring = handles._shape(pb.item, x, y, rr + 3 * u)
+            st.polygon(ring, (1, 1, 1, 0.95))
+            st.polygon(handles._shape(pb.item, x, y, rr + 1.5 * u), st.GROUND)
         if pb.bone.ap_enabled:
-            st.rounded(dot, rr, DOT_ON)
+            st.polygon(shape, DOT_ON)
             if pb.bone.ap_rot:            # keeps its turn too: a dot in the dot
-                c = rr * 0.38
-                st.rounded((x - c, y - c, x + c, y + c), c, st.GROUND)
+                st.polygon(handles._circle(x, y, rr * 0.38, 12), st.GROUND)
         else:
-            st.rounded(dot, rr, st.GROUND)
-            st.outline(dot, rr, max(1.0, 1.3 * u), DOT_OFF)
+            st.polygon(shape, st.GROUND)
+            st.lines(list(zip(shape, shape[1:] + shape[:1])), max(1.0, 1.3 * u), DOT_OFF)
     # the handle under the mouse, else what is picked, on the line under the figure
     cap = L["caption"]
     ghost_hot = None
@@ -483,7 +501,7 @@ def draw_card(context, highlighted: bool = True):
         names = ", ".join(_label(pb) for pb in sel)
         _text(_fit(names, cap[2] - cap[0], SMALL * u), cap[0], _mid(cap, SMALL * u), SMALL * u, st.WHITE)
     else:
-        _text(_fit("Shift: pick more · Double-click: on/off", cap[2] - cap[0], SMALL * u),
+        _text(_fit("Shift: pick more · Ctrl-click: on/off", cap[2] - cap[0], SMALL * u),
               cap[0], _mid(cap, SMALL * u), SMALL * u, st.MUTED)
 
     # On / Off / Rot
@@ -496,20 +514,20 @@ def draw_card(context, highlighted: bool = True):
     for name, text in (("on", "On"), ("off", "Off"), ("rot", "Rotation")):
         rect = L[name]
         fill = st.ON if states[name] else (st.TILE_HOVER if _hot(live, name) and have else st.TILE)
-        st.rounded(rect, 5 * u, fill if have else st.with_alpha(fill, 0.45),
+        st.rounded(rect, 5 * u, fill if have else st.with_alpha(st.TILE, 0.18),
                    left=name == "on", right=name == "rot")
         blf.size(0, SMALL * u)
         tw = blf.dimensions(0, text)[0]
-        color = (st.REC if states[name] else st.WHITE) if have else (1, 1, 1, 0.35)
+        color = (st.REC if states[name] else st.WHITE) if have else (1, 1, 1, 0.22)
         _text(text, (rect[0] + rect[2] - tw) / 2, _mid(rect, SMALL * u), SMALL * u, color)
 
     rect = L["remove"]
     if have:
         st.rounded(rect, 5 * u, st.TILE_HOVER if _hot(live, "remove") else st.TILE)
     else:
-        st.rounded(rect, 5 * u, st.with_alpha(st.TILE, 0.45))
+        st.rounded(rect, 5 * u, st.with_alpha(st.TILE, 0.18))
     st.icon("remove", (rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2, 14 * u,
-            st.WHITE if have else (1, 1, 1, 0.35))
+            st.WHITE if have else (1, 1, 1, 0.22))
 
     # slack
     rot_sel = [pb for pb in sel if pb.bone.ap_rot and pb.bone.ap_enabled]
@@ -523,7 +541,7 @@ def draw_card(context, highlighted: bool = True):
 def _slider(rect, label, values, fmt, live, name, u):
     """A slack dial: the label, a track filled to the value, the value."""
     have = bool(values)
-    a = 1.0 if have else 0.35
+    a = 1.0 if have else 0.25
     size = SMALL * u
     _text(label, rect[0], _mid(rect, size), size, (1, 1, 1, 0.8 * a))
     track = _track(rect, u)
@@ -672,7 +690,7 @@ class ANIMATICA_OT_picker_click(bpy.types.Operator):
     """The handle picker"""
     bl_idname = "animatica.picker_click"
     bl_label = "Handle Picker"
-    bl_options = {'INTERNAL'}
+    bl_options = {'INTERNAL', 'UNDO'}  # what the click ran is one undo step: a nested operator records none
 
     @classmethod
     def description(cls, context, properties):
@@ -706,7 +724,7 @@ class ANIMATICA_OT_picker_click(bpy.types.Operator):
             return {'CANCELLED'}
         op, props = found
         if op == "animatica.picker_select":
-            props = dict(props, extend=bool(event.shift))     # Shift: add or drop, as clicked
+            props = dict(props, extend=bool(event.shift), toggle=bool(event.ctrl))  # Shift: add or drop; Ctrl: on/off
         group, name = op.split(".", 1)
         result = getattr(getattr(bpy.ops, group), name)('INVOKE_DEFAULT', **props)
         return {'CANCELLED'} if result == {'CANCELLED'} else {'FINISHED'}
@@ -729,11 +747,12 @@ class ANIMATICA_OT_picker_select(bpy.types.Operator):
 
     bone: StringProperty()
     extend: bpy.props.BoolProperty(default=False, options={'HIDDEN', 'SKIP_SAVE'})
+    toggle: bpy.props.BoolProperty(default=False, options={'HIDDEN', 'SKIP_SAVE'})
 
     @classmethod
     def description(cls, context, properties):
         arm = _arm(context)
-        pb = arm.pose.bones.get(properties.bone) if arm else None
+        pb = handles.ref(context.scene, arm, properties.bone) if arm else None
         if pb is None:
             return "Pick this handle"
         b = pb.bone
@@ -744,7 +763,7 @@ class ANIMATICA_OT_picker_select(bpy.types.Operator):
 
     def invoke(self, context, event):
         arm = _arm(context)
-        pb = arm.pose.bones.get(self.bone) if arm else None
+        pb = handles.ref(context.scene, arm, self.bone) if arm else None
         if pb is None:
             return {'CANCELLED'}
         now = time.monotonic()
@@ -753,11 +772,16 @@ class ANIMATICA_OT_picker_select(bpy.types.Operator):
         _click.update(bone="" if double else pb.name, at=now,
                       picked=tuple(p.name for p in picked(arm)))
         shift = event.shift or self.extend
+        if event.ctrl or self.toggle:
+            # Ctrl-click: on or off, as on the handles in the viewport
+            switch(context, arm, [pb], not pb.bone.ap_enabled)
+            _redraw(context)
+            return {'FINISHED'}
         if double and not shift:
             # Double-click: on or off. The picked handles together when this
             # is one of them, so a whole limb goes in one go -- picked as they
             # were before the first click of the two, which picked this alone.
-            bones = [arm.pose.bones[n] for n in before if n in arm.pose.bones]
+            bones = [h for h in _controls(arm) if h.name in before]
             if pb in bones:
                 for p_ in bones:
                     pose_bone_select_set(p_, True)
@@ -769,13 +793,10 @@ class ANIMATICA_OT_picker_select(bpy.types.Operator):
         if shift:
             now = not pose_bone_is_selected(pb)
             pose_bone_select_set(pb, now)
-            if now:
-                arm.data.bones.active = pb.bone
         else:
-            for other in arm.pose.bones:
+            for other in _controls(arm):
                 pose_bone_select_set(other, False)
             pose_bone_select_set(pb, True)
-            arm.data.bones.active = pb.bone
         _redraw(context)
         return {'FINISHED'}
 
@@ -800,20 +821,10 @@ class ANIMATICA_OT_picker_all(bpy.types.Operator):
 
 def _batch(context, arm, bones, change, *, resolve: bool, place_on=()):
     """Change several handles with one solve after, not one per handle."""
-    from .autoposer import poser
-    was = poser._BUILDING
-    poser._BUILDING = True
-    try:
-        for pb in bones:
-            change(pb.bone)
-    finally:
-        poser._BUILDING = was
-    for pb in place_on:
-        poser._place(arm, pb.bone)
-    if place_on:
-        context.view_layer.update()
+    for pb in bones:
+        change(pb.bone)
     if resolve:
-        poser.solve(context)
+        handles.resolve(context, arm)
 
 
 def switch(context, arm, bones, on: bool) -> None:
@@ -904,7 +915,7 @@ class ANIMATICA_OT_picker_slack(bpy.types.Operator):
 def _specs(arm):
     """Every handle the Autoposer has for this rig, in the rig's order: ``[(spec, have)]``."""
     from .autoposer import poser
-    have = {b.name for b in poser._controls(arm)}
+    have = {h.name for h in handles.items(bpy.context.scene, arm)}
     out = []
     for spec in poser.rig_def():
         if poser.joint_bone(arm, spec["joint"]) is None:
@@ -954,16 +965,14 @@ class ANIMATICA_OT_picker_add(bpy.types.Operator):
         arm = _arm(context)
         if arm is None:
             return {'CANCELLED'}
-        result = bpy.ops.autoposer.add_control('EXEC_DEFAULT', control=self.control)
-        if 'FINISHED' not in result:
+        if handles.add(context.scene, arm, self.control) is None:
             return {'CANCELLED'}
         _adding["on"] = False                  # one at a time: added, and back to picking
-        pb = arm.pose.bones.get(self.control)
+        pb = handles.ref(context.scene, arm, self.control)
         if pb is not None:                      # picked, so it can be set up straight away
-            for other in arm.pose.bones:
+            for other in _controls(arm):
                 pose_bone_select_set(other, False)
             pose_bone_select_set(pb, True)
-            arm.data.bones.active = pb.bone
         _redraw(context)
         return {'FINISHED'}
 
@@ -980,10 +989,7 @@ class ANIMATICA_OT_picker_remove(bpy.types.Operator):
         names = [pb.name for pb in picked(arm)] if arm else []
         if not names:
             return {'CANCELLED'}
-        gone = 0
-        for name in names:
-            if 'FINISHED' in bpy.ops.autoposer.remove_control('EXEC_DEFAULT', name=name):
-                gone += 1
+        gone = handles.remove(context.scene, arm, set(names))
         self.report({'INFO'}, f"Removed {gone} handle{'s' if gone != 1 else ''}")
         _redraw(context)
         return {'FINISHED'}

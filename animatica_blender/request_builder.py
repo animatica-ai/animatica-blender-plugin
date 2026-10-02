@@ -104,6 +104,10 @@ def locked_seams(prompt_blocks, lo: int, hi: int, margin: int = 0) -> tuple[bool
     return left, right
 
 
+#: the start of the blocker that sends the artist to the model menu
+MODEL_RIG_MISMATCH = "This model can't animate this character"
+
+
 def generation_blockers(
     *,
     scene,
@@ -141,6 +145,16 @@ def generation_blockers(
         or (constraint_objects or {}).get("effector_targets")
         or (constraint_objects or {}).get("waypoints")
     )
+
+    # 0. A model that only animates its own skeleton, and a rig that is not
+    #    it: nothing else here matters until another model is picked.
+    if armature_obj is not None and caps and not caps.get("supports_retargeting", True):
+        names = {j.get("name") for j in (caps.get("canonical_skeleton") or {}).get("joints", [])}
+        bones = {pb.name for pb in armature_obj.pose.bones}
+        if names and not names <= bones:
+            return [MODEL_RIG_MISMATCH + f" (it animates its own skeleton, and {armature_obj.name!r} "
+                    f"is not that: {len(names - bones)} of its joints are missing). Pick a model that "
+                    "retargets, such as Animatica's own"]
 
     # 1. Nothing to go on. Unconditioned motion between authored poses is a
     #    real request; unconditioned motion between nothing is noise, and the
@@ -564,6 +578,12 @@ def build_request_for_block(
     edited_bones_by_frame = _user_edited_bones_per_frame(
         preview_action, block_start, block_end,
     )
+    # Frames the artist kept from the take: held whole, though their values
+    # are the take's own (which is why the edit test above passes them over).
+    from .pose_edit import kept_frames
+    for f in kept_frames(armature_obj):
+        if block_start < f < block_end:
+            edited_bones_by_frame[f] = {"*"}
 
     # Two kinds of anchor frames feed the model:
     #
@@ -623,7 +643,7 @@ def build_request_for_block(
                 source_action=preview_action,
                 sample_frame=f,
                 request_frame=f - block_start,
-                bone_names=edited_at_f,
+                bone_names=None if "*" in edited_at_f else edited_at_f,
             )
 
         # Merge the two when both exist. Boundary stays the base (full

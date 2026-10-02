@@ -71,7 +71,21 @@ def _start_runtime_install():
     return None
 
 
+def _unload_at_exit() -> None:
+    """Let go of the inference sessions before Python shuts down: freed during
+    interpreter teardown instead, onnxruntime aborted Blender on quit."""
+    try:
+        engine.unload()
+        import gc
+        gc.collect()
+    except Exception:                                          # noqa: BLE001
+        pass
+
+
 def register() -> None:
+    import atexit
+    atexit.unregister(_unload_at_exit)
+    atexit.register(_unload_at_exit)
     for cls in prefs.CLASSES:
         bpy.utils.register_class(cls)
     poser.register()

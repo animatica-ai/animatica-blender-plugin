@@ -54,6 +54,9 @@ from . import batch
 from . import variations
 from . import toolbar
 from . import picker
+from . import handles
+from . import wormhole
+from . import guidance
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +201,9 @@ def register():
     waypoints.register()
     batch.register()
     variations.register()
+    handles.register()
+    wormhole.register()
+    guidance.register()
     toolbar.register()
     picker.register()
 
@@ -230,6 +236,9 @@ def unregister():
 
     picker.unregister()
     toolbar.unregister()
+    guidance.unregister()
+    wormhole.unregister()
+    handles.unregister()
     variations.unregister()
     batch.unregister()
     waypoints.unregister()

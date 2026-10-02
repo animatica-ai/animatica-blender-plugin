@@ -81,6 +81,8 @@ _drag: dict = {
     "solve": None,        # the raw solve, kept for the commit
     "whole_pose": False,  # moving the body, rather than one effector
     "error": "",
+    "radius": 0,          # frames either side that follow, fading
+    "bent": None,         # the dragged joint's trail as it would be, world space
 }
 
 LABEL_SIZE = 12
@@ -177,8 +179,8 @@ def pick_point(context, x: float, y: float):
     settings = key_poses._settings(context.scene)
     if region is None or rv3d is None or settings is None:
         return None
-    if not key_poses.trail_on(settings):
-        return None
+    if not key_poses.trail_on(settings) or key_poses._trail_warp(context, settings) is not None:
+        return None    # in the wormhole the trail is drawn in the slices: they are what you grab
 
     trail = key_poses._trail
     frames = trail["frames"]
@@ -253,8 +255,8 @@ def selected_world(context):
         return None
     bone, frame = pick
     settings = key_poses._settings(context.scene)
-    if not key_poses.trail_on(settings):
-        return None
+    if not key_poses.trail_on(settings) or key_poses._trail_warp(context, settings) is not None:
+        return None    # in the wormhole the trail is drawn in the slices: they are what you grab
     trail = key_poses._trail
     frames = trail["frames"]
     points = trail["points"].get(bone)
@@ -342,7 +344,7 @@ def _preview_from(arm, out):
 # Committing
 # ---------------------------------------------------------------------------
 
-def commit(arm, frame: int, out) -> int:
+def commit(arm, frame: int, out, key_type: str = 'KEYFRAME') -> int:
     """Write the solved pose into the rig's action at ``frame``.
 
     The solve is turned into the same ``matrix_basis`` the Autoposer would
@@ -382,14 +384,46 @@ def commit(arm, frame: int, out) -> int:
             channels += [
                 (f'pose.bones["{name}"].location', i, v) for i, v in enumerate(loc)
             ]
-    return pose_edit.write_channels(action, frame, channels)
+    return pose_edit.write_channels(action, frame, channels, key_type)
 
 
 # ---------------------------------------------------------------------------
 # Draw
 # ---------------------------------------------------------------------------
 
+def falloff(d: int, radius: int) -> float:
+    """How much of the move a frame ``d`` frames from the dragged one gets:
+    all of it there, none past the radius, smooth between (Blender's Smooth
+    proportional falloff)."""
+    if radius <= 0:
+        return 1.0 if d == 0 else 0.0
+    t = abs(d) / float(radius + 1)
+    if t >= 1.0:
+        return 0.0
+    return 3 * (1 - t) ** 2 - 2 * (1 - t) ** 3
+
+
+def _bent(bone: str, index: int, delta: Vector, radius: int):
+    """The dragged joint's trail with the move spread over the radius."""
+    from . import key_poses
+    points = key_poses._trail["points"].get(bone) or []
+    lo, hi = max(0, index - radius - 1), min(len(points), index + radius + 2)
+    return [Vector(points[i]) + delta * falloff(i - index, radius) for i in range(lo, hi)]
+
+
 def _draw():
+    if _drag["active"] and _drag["bent"] and len(_drag["bent"]) > 1:
+        # the trail as the drag would leave it: the radius, seen
+        from . import key_poses
+        line = gpu.shader.from_builtin("POLYLINE_UNIFORM_COLOR")
+        gpu.state.blend_set('ALPHA')
+        gpu.state.depth_test_set('NONE')
+        line.bind()
+        line.uniform_float("viewportSize", key_poses._viewport_size())
+        line.uniform_float("lineWidth", 3.0 * key_poses._px())
+        line.uniform_float("color", (1.0, 0.63, 0.34, 0.95))       # the brand's Soft Orange
+        batch_for_shader(line, 'LINE_STRIP', {"pos": [p[:] for p in _drag["bent"]]}).draw(line)
+        gpu.state.blend_set('NONE')
     if not _drag["active"] or _drag["points"] is None:
         return
     context = bpy.context
@@ -449,11 +483,18 @@ def _draw_label():
     px = key_poses._px()
     text = (f"whole pose · frame {_drag['frame']}" if _drag["whole_pose"]
             else f"{_drag['joint']} · frame {_drag['frame']}")
+    if _drag["radius"]:
+        text += f"  ±{_drag['radius']} frames (wheel)"
     if _drag["error"]:
         text = _drag["error"]
     font_id = 0
     blf.size(font_id, int(LABEL_SIZE * px))
-    blf.position(font_id, co.x + LABEL_OFFSET_PX * px, co.y + LABEL_OFFSET_PX * px, 0)
+    x, y = co.x + LABEL_OFFSET_PX * px, co.y + LABEL_OFFSET_PX * px
+    w, h = blf.dimensions(font_id, text)
+    from . import ui_style
+    ui_style.rounded((x - 5 * px, y - 5 * px, x + w + 5 * px, y + h + 4 * px), 4 * px,
+                     (0.08, 0.08, 0.09, 0.82))      # a backing: the label sits on the bent trail
+    blf.position(font_id, x, y, 0)
     blf.color(font_id, *LABEL_COLOR)
     blf.draw(font_id, text)
 
@@ -500,7 +541,7 @@ def _clear() -> None:
     _drag.update({
         "active": False, "bone": "", "joint": "", "frame": -1,
         "origin": None, "target": None, "points": None, "parents": None,
-        "solve": None, "whole_pose": False, "error": "",
+        "solve": None, "whole_pose": False, "error": "", "radius": 0, "bent": None,
     })
 
 
@@ -584,13 +625,41 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             "points": None, "parents": None, "solve": None, "error": "",
         })
         self._plane_no = context.region_data.view_rotation @ Vector((0.0, 0.0, 1.0))
+        self._radius = int(getattr(context.scene.animatica, "trail_radius", 0))
+        self._radius0 = self._radius
+        _drag["radius"] = self._radius
         self._solve(context, event)
+        self._header(context)
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def _spread(self, delta, whole) -> int:
+        """The frames around the dragged one, each moved by its share of the
+        move and solved on its own: the stroke reaches through time."""
+        from . import key_poses
+        frames = key_poses._trail["frames"]
+        points = key_poses._trail["points"].get(self.bone) or []
+        n = 0
+        for i, frame in enumerate(frames):
+            d = i - self._index
+            w = falloff(d, self._radius)
+            if d == 0 or w <= 1e-3 or i >= len(points):
+                continue
+            try:
+                out = solve_drag(self._arm, i, self.bone, Vector(points[i]) + delta * w,
+                                 whole_pose=whole)
+            except Exception:                   # noqa: BLE001 -- one frame must not stop the stroke
+                continue
+            commit(self._arm, int(frame), out, 'GENERATED')   # carried along: motion, not key poses
+            n += 1
+        return n
+
+    def _header(self, context):
         context.area.header_text_set(
             f"Move {_canonical(self._arm, self.bone)} at frame {self.frame}"
             + (f" along {self.axis}" if self.axis else "")
+            + f"   |   ±{self._radius} frames follow (wheel)"
             + "   |   Shift: whole pose   |   Esc: cancel")
-        context.window_manager.modal_handler_add(self)
-        return {'RUNNING_MODAL'}
 
     def _mode(self, event) -> bool:
         """Whether this drag carries the whole pose, read from the modifiers.
@@ -649,6 +718,9 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         _drag["error"] = ""
         _drag["solve"] = out
         _drag["points"], _drag["parents"] = _preview_from(self._arm, out)
+        self._origin, self._last_target = _drag["origin"].copy(), _drag["target"].copy()
+        delta = _drag["target"] - _drag["origin"]
+        _drag["bent"] = _bent(self.bone, self._index, delta, self._radius) if self._radius else None
         key_poses.tag_redraw()
         return True
 
@@ -659,8 +731,20 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             self._solve(context, event)
             context.area.tag_redraw()
             return {'RUNNING_MODAL'}
+        # the radius, as proportional editing's: the wheel, or Page Up / Down
+        if event.type in {'WHEELUPMOUSE', 'PAGE_UP', 'WHEELDOWNMOUSE', 'PAGE_DOWN'} and event.value == 'PRESS':
+            # as proportional editing: wheel down or Page Up widens it
+            step = 1 if event.type in {'WHEELDOWNMOUSE', 'PAGE_UP'} else -1
+            self._radius = max(0, min(60, self._radius + step))
+            _drag["radius"] = self._radius
+            context.scene.animatica.trail_radius = self._radius
+            self._solve(context, event)
+            self._header(context)
+            context.area.tag_redraw()
+            return {'RUNNING_MODAL'}
 
         if event.type in {'RIGHTMOUSE', 'ESC'}:
+            context.scene.animatica.trail_radius = self._radius0      # Esc takes it all back
             _clear()
             context.area.header_text_set(None)
             context.area.tag_redraw()
@@ -679,12 +763,24 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             if out is None:
                 self.report({'WARNING'}, error or "nothing to key")
                 return {'CANCELLED'}
-            written = commit(self._arm, frame, out)
+            last, origin = getattr(self, "_last_target", None), getattr(self, "_origin", None)
+            delta = last - origin if last is not None and origin is not None else None
+            from . import pose_edit
+            key_type = pose_edit.edit_key_type(self._arm, frame)    # before the fence adds keys
+            if delta is not None and self._radius:
+                # the edit stays inside the reach: the pose just outside it is kept as
+                # it was -- captured before anything here is keyed
+                pose_edit.fence(self._arm, (frame - self._radius - 2, frame - self._radius - 1,
+                            frame + self._radius + 1, frame + self._radius + 2))  # two deep: auto handles settle
+            written = commit(self._arm, frame, out, key_type)
+            spread = self._spread(delta, whole) if delta is not None and self._radius else 0
             key_poses.flash_keyed(frame)
             key_poses.invalidate_plan()
             key_poses.request_rebuild()
             what = "whole pose moved" if whole else f"{_canonical(self._arm, self.bone)} moved"
-            self.report({'INFO'}, f"{what} at frame {frame} — keyed ({written} channels)")
+            self.report({'INFO'}, f"{what} at frame {frame}"
+                        + (f", and {spread} frames around it" if spread else "")
+                        + (" — the take reshaped" if key_type == 'GENERATED' else " — keyed as a key pose"))
             return {'FINISHED'}
 
         return {'RUNNING_MODAL'}
@@ -767,6 +863,9 @@ class ANIMATICA_GGT_curve_point(bpy.types.GizmoGroup):
             arrow.draw_style = 'NORMAL'
             arrow.length = ARROW_LENGTH
             arrow.line_width = 2.0
+            # out from the point, as Blender's own: a press on the point itself
+            # is the view-plane ring's (a free move), not the Z arrow's
+            arrow.matrix_offset = Matrix.Translation((0.0, 0.0, 0.3))
             self._paint(arrow, colour, 1.0)
             self._handles.append((axis, arrow))
 
@@ -813,7 +912,53 @@ class ANIMATICA_GGT_curve_point(bpy.types.GizmoGroup):
         return Matrix.Translation(origin)              # the view-plane ring
 
 
-_classes = (ANIMATICA_OT_drag_motion_curve, ANIMATICA_GGT_curve_point)
+class ANIMATICA_OT_smooth_trail(bpy.types.Operator):
+    """Smooth the motion around the picked trail point: that joint's path over
+    the Reach frames either side is evened out, each frame solved and
+    keyed. Again for more"""
+    bl_idname = "animatica.smooth_trail"
+    bl_label = "Animatica: Smooth Motion Here"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    strength: bpy.props.FloatProperty(name="Strength", default=1.0, min=0.0, max=1.0)
+
+    @classmethod
+    def poll(cls, context):
+        return selected() is not None and selected_world(context) is not None
+
+    def execute(self, context):
+        from . import key_poses
+        bone, frame = selected()
+        arm = key_poses._target(key_poses._settings(context.scene))
+        trail = key_poses._trail
+        frames, points = trail["frames"], trail["points"].get(bone) or []
+        if arm is None or frame not in frames or len(points) != len(frames):
+            return {'CANCELLED'}
+        radius = max(1, int(context.scene.animatica.trail_radius))
+        index = frames.index(frame)
+        n = 0
+        for i in range(max(0, index - radius), min(len(frames), index + radius + 1)):
+            w = falloff(i - index, radius) * self.strength
+            # the average of its neighbours, two either side
+            near = [Vector(points[k]) for k in range(max(0, i - 2), min(len(points), i + 3))]
+            avg = sum(near, Vector()) / len(near)
+            target = Vector(points[i]).lerp(avg, w)
+            try:
+                out = solve_drag(arm, i, bone, target)
+            except Exception as exc:            # noqa: BLE001
+                self.report({'WARNING'}, f"Smoothing stopped: {exc}")
+                break
+            # smoothing evens the motion out; it does not make key poses
+            commit(arm, int(frames[i]), out, 'KEYFRAME' if frames[i] in key_poses.plan(context.scene)["frames"]
+                   else 'GENERATED')
+            n += 1
+        key_poses.invalidate_plan()
+        key_poses.request_rebuild()
+        self.report({'INFO'}, f"Smoothed {_canonical(arm, bone)} over {n} frames")
+        return {'FINISHED'}
+
+
+_classes = (ANIMATICA_OT_drag_motion_curve, ANIMATICA_GGT_curve_point, ANIMATICA_OT_smooth_trail)
 
 
 def register() -> None:

@@ -582,7 +582,9 @@ def cached_model_items() -> list[tuple[str, str, str]]:
     """
     if _MODEL_ITEMS:
         return _MODEL_ITEMS
-    return [("", "(connect to discover models)", "")]
+    # a real identifier: an empty one is not valid, and Blender said so on
+    # every redraw (thousands of console lines a minute, offline)
+    return [("NONE", "(connect to discover models)", "")]
 
 
 def cached_model(model_id: str) -> dict[str, Any] | None:
@@ -911,6 +913,7 @@ class MmcpClient:
         url = f"{self.base_url}{location}"
         cloud = is_cloud_url(url)
         deadline = time.time() + self.timeout
+        refreshed = False
         while time.time() < deadline:
             time.sleep(max(retry_after, 0.5))
             _require_online(url)
@@ -924,7 +927,15 @@ class MmcpClient:
                         continue
                     raise MmcpError.from_response(resp.status, resp.read())
             except HTTPError as exc:
-                if exc.code == 401 and cloud and not refresh_access_token():
+                if exc.code == 401 and cloud:
+                    # The access token can run out while a job is waited on: a
+                    # fresh one, and the same job asked about again -- once.
+                    # Refreshing and then giving up anyway failed the take
+                    # while the session was fine.
+                    if not refreshed and refresh_access_token():
+                        refreshed = True
+                        retry_after = 0.0
+                        continue
                     expire_session("your session expired — sign in again")
                 raise MmcpError.from_response(exc.code, exc.read()) from exc
         raise MmcpError(code="timeout", message=f"async job at {url} did not complete in {self.timeout}s")

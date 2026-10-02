@@ -1091,10 +1091,29 @@ def floor_height(arm, eff) -> float:
     return float(to_poser(arm, mw.inverted() @ mathutils.Vector((at.x, at.y, z))).y)
 
 
+#: how far (poser metres) under its lowest target the ground may be before a
+#: pose counts as in the air
+AIRBORNE = 0.5
+
+
 def pose_on_ground(eng, arm, eff, **kw):
     """``eng.pose`` with its floor on the ground under the pose (see
     `floor_height`): the targets go down by it, the solve comes back up."""
+    # ``floor_below``: no higher than this (poser Y) -- the lowest joint of the
+    # pose being edited. A floor found above it (a ledge the hips are over in
+    # mid-jump) pushed the feet up through the pose, and the body flipped over.
+    cap = kw.pop("floor_below", None)
     lift = floor_height(arm, eff) if kw.get("floor", True) else 0.0
+    if kw.get("floor", True):
+        # a pose far above the ground is in the air (a jump, a swing, a fall):
+        # put 6 m of nothing under it and the poser, which learned bodies near
+        # their floor, answered with one turned upside down. Its floor goes
+        # just under it instead.
+        low = [e["pos"][1] for e in eff if e.get("type") == "pos" and "pos" in e]
+        if low:
+            lift = max(lift, min(low) - AIRBORNE)
+        if cap is not None:
+            lift = min(lift, float(cap))
     if abs(lift) < 1e-4:
         return eng.pose(eff, **kw)
     moved = []
@@ -1826,7 +1845,7 @@ class AP_OT_remove_rig(bpy.types.Operator):
         if coll is not None and not len(coll.bones):
             arm.data.collections.remove(coll)
         _show_controls_in_front(arm, on=False)
-        self.report({"INFO"}, f"Autoposer stopped: {len(names)} handles removed")
+        self.report({"INFO"}, f"Removed the {len(names)} control bones the Autoposer had added to the rig")
         return {"FINISHED"}
 
 

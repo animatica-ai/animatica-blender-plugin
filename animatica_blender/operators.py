@@ -2235,6 +2235,8 @@ class ANIMATICA_OT_generate_pose(Operator):
 
         # Snap viewport to the freshly-keyframed pose.
         context.scene.frame_set(self._target_frame)
+        from . import key_poses
+        key_poses.flash_keyed(self._target_frame)
 
         self._cleanup(context)
         self.report({'INFO'}, f"Inserted pose: {written} channels @ frame {self._target_frame}")

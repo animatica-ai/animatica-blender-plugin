@@ -87,6 +87,10 @@ BONE_LINE_WIDTH  = 2.0
 # A pose inside the window but outside every prompt block: still sent, but it
 # belongs to no instruction, so it gets a neutral tint rather than a block's.
 UNBLOCKED_COLOR = (0.62, 0.68, 0.78)
+
+# Onion skin, in Pose: Blender's own onion colours (Grease Pencil's green
+# before, blue after), lifted to read on a grey viewport -- the defaults of
+# onion_color_before / _after, which the artist can change.
 DROPPED_COLOR   = (0.50, 0.50, 0.52)
 
 # The motion trail: where the body actually goes, frame by frame, against the
@@ -429,6 +433,17 @@ def plan(scene=None) -> dict:
 def invalidate_plan() -> None:
     """Mark the plan stale; the next reader recomputes it."""
     _plan["dirty"] = True
+
+
+def take_keys(scene) -> list:
+    """The key poses the next take will hit (inside the generation window)."""
+    p = plan(scene)
+    return [f for f in p["frames"] if p["entries"][f]["in_range"]]
+
+
+def keyed_here(scene) -> bool:
+    """Whether the frame under the playhead holds one of your key poses."""
+    return int(scene.frame_current) in plan(scene)["frames"]
 
 
 def move_key_pose(scene, src: int, dst: int) -> bool:
@@ -1020,7 +1035,12 @@ def rebuild(context=None) -> int:
             roots[f] = _anchors(arm, depsgraph, points)
     finally:
         scene.frame_set(saved_frame, subframe=saved_subframe)
+        try:
+            context.view_layer.update()     # its evaluation, while still marked as ours
+        except Exception:                   # noqa: BLE001
+            pass
         _baking = False
+        _seen["quiet_until"] = time.monotonic() + 0.06
         # The walk above happened with the control-seating handler muted, so
         # the controls are describing whatever frame the bake stopped on.
         try:
@@ -1161,6 +1181,11 @@ def request_rebuild(*, coalesce: bool = False) -> None:
     _trail["dirty"] = True
     _root_path["dirty"] = True
     _root_path["reuse"] = False
+    if not coalesce:
+        # an edit: the motion's poses changed. (A coalescing ask comes from a
+        # draw finding a cache stale -- it says nothing about the motion, and
+        # emptying the onion skin's cache on it meant it never filled.)
+        _onion["dirty"] = True
     _arm_rebuild_timer(coalesce)
 
 
@@ -1210,6 +1235,8 @@ def _rebuild_timer():
     settings = _settings(getattr(bpy.context, "scene", None))
     if settings is not None and settings.is_generating:
         return REBUILD_DEBOUNCE
+    if posing():
+        return REBUILD_DEBOUNCE        # a drag's pose is unkeyed until it ends: no stepping under it
 
     _rebuild_requested_at = None
     _rebuild_first_at = None
@@ -1226,6 +1253,14 @@ def flash_keyed(frame: int) -> None:
     _flash["frame"] = int(frame)
     _flash["at"] = time.monotonic()
     tag_redraw()
+    if not bpy.app.timers.is_registered(_pulse):
+        bpy.app.timers.register(_pulse, first_interval=1 / 30)
+
+
+def _pulse():
+    """Redraw while the Timeline's ring opens out from a new key pose."""
+    tag_redraw()
+    return 1 / 30 if time.monotonic() - _flash["at"] < 1.3 else None
 
 
 def _flashing(frame: int) -> bool:
@@ -1282,8 +1317,8 @@ def _on_depsgraph(scene, depsgraph) -> None:
     there is no plan change to show, and rebaking mid-drag would move the
     playhead under the artist.
     """
-    if _baking:
-        return
+    if _baking or posing():
+        return                  # a drag keys (and asks for a rebuild) when it ends
     settings = _settings(scene)
     if settings is None:
         return
@@ -1298,6 +1333,16 @@ def _on_depsgraph(scene, depsgraph) -> None:
     # rebuild themselves and do not come through here.
     screen = getattr(bpy.context, "screen", None)
     if screen is not None and getattr(screen, "is_animation_playing", False):
+        return
+    # Nor is a frame change -- scrubbing evaluates the action too -- nor the
+    # evaluation that follows a bake putting the playhead back: taking those
+    # for edits emptied the onion skin's cache on every scrub, and after every
+    # capture, so it never filled.
+    frame = (int(scene.frame_current), round(float(scene.frame_subframe), 3))
+    if frame != _seen["frame"]:
+        _seen["frame"] = frame
+        return
+    if time.monotonic() < _seen["quiet_until"]:
         return
 
     action = _action(arm)
@@ -1442,16 +1487,383 @@ def refresh_held_by() -> str:
     return ""
 
 
+def bar_mode(context=None) -> str:
+    """The floating bar's mode -- 'POSE' (this frame) or 'MOTION' (the take) --
+    which says what the viewport draws: onion skins in Pose; the trail and
+    every key pose in Motion."""
+    try:
+        from . import toolbar
+        return toolbar.mode_of(context or bpy.context)
+    except Exception:                       # noqa: BLE001 -- never break a draw
+        return 'MOTION'
+
+
+def _onion_ranks(scene, settings) -> dict:
+    """Pose: the key poses either side of the playhead that are onion
+    skins, by rank -- negative before, positive after."""
+    current = scene.frame_current
+    before = [f for f in _ghosts["frames"] if f < current][::-1]
+    after = [f for f in _ghosts["frames"] if f > current]
+    if settings.onion_mode == 'KEYFRAMES':
+        before, after = before[:settings.onion_before], after[:settings.onion_after]
+    out = {f: -(i + 1) for i, f in enumerate(before)}
+    out.update({f: i + 1 for i, f in enumerate(after)})
+    return out
+
+
+def onion_look(settings, rank: int, n_side: int, frames_away: int | None = None):
+    """``(rgb, alpha)`` of an onion skin ``rank`` key poses away (negative:
+    before). Fade takes it down towards a quarter by the furthest one. In the
+    wormhole, ``frames_away`` from the playhead: the slice is as solid as the
+    share of a drag it would take -- the falloff, drawn as the tunnel."""
+    rgb = tuple(settings.onion_color_before if rank < 0 else settings.onion_color_after)
+    alpha = float(settings.onion_opacity)
+    if frames_away is not None and settings.onion_wormhole:
+        from .curve_edit import falloff
+        w = falloff(frames_away, max(1, int(settings.trail_radius)))
+        return rgb, alpha * (0.2 + 0.8 * w)
+    if settings.onion_fade and n_side > 1:
+        alpha *= 1.0 - 0.75 * (abs(rank) - 1) / (n_side - 1)
+    return rgb, alpha
+
+
+# ---------------------------------------------------------------------------
+# Onion skin of the motion (Pose, Frames mode)
+# ---------------------------------------------------------------------------
+#
+# Grease Pencil's Frames mode: the pose every Step frames either side of the
+# playhead, from the motion itself -- a generated take is a key on every
+# frame, and it is that motion an animator reads an onion skin for.
+#
+# Capturing a pose means moving the playhead, which cannot happen while the
+# animation plays. So the motion's poses are kept in a cache, filled a few
+# frames at a time while nothing is playing -- the frames around the playhead
+# first, then outward through the whole take -- and playback draws from it.
+# Any edit (request_rebuild) empties it.
+
+#: at most this many wormhole slices a side: past it the step grows
+WORMHOLE_MAX_SIDE = 12
+ONION_DEPTH_NUDGE = 0.025       # m: an onion ghost sits just behind the live body
+ONION_CHUNK = 3                 # frames captured per timer tick: short enough not to stutter
+ONION_TICK = 0.02
+ONION_MAX = 480                 # frames kept at most
+
+#: what the change handler last saw: the frame (a change of it is not an edit),
+#: and how long after a bake its own evaluation is to be ignored
+_seen: dict = {"frame": None, "quiet_until": 0.0}
+
+_onion: dict = {"sig": None, "cache": {}, "extent": None, "dirty": True, "pending": False,
+               "live": {}, "stale": {}, "seed": {}}
+
+
+def onion_entry(frame):
+    """The ghost to draw at ``frame``: the drag's live one, else the cache's,
+    else the one from before the last edit until its frame is captured again
+    (emptied on every edit, the ghosts blinked off and back)."""
+    return _onion["live"].get(frame) or _onion["cache"].get(frame) or _onion["stale"].get(frame)
+
+
+def set_onion_live(entries) -> None:
+    """Ghosts a drag shows in place of the cache's while it runs."""
+    _onion["live"] = dict(entries or {})
+    tag_redraw()
+
+
+def seed_onion(entries) -> None:
+    """Ghosts known to be right after an edit (captured as it was keyed):
+    the cache starts from them instead of from nothing."""
+    _onion["seed"] = dict(entries or {})
+
+
+def capture_onion_entry(context, arm):
+    """The rig's ghost as it stands now (no frame stepped), as the cache
+    keeps one."""
+    settings = _settings(context.scene)
+    if settings is None:
+        return None
+    context.view_layer.update()
+    depsgraph = context.evaluated_depsgraph_get()
+    mode = settings.key_pose_display
+    meshes = _skinned_meshes(arm, context) if mode in {'AUTO', 'MESH'} else []
+    bone_names = _ghost_bones(arm) if (mode == 'BONES' or (mode == 'AUTO' and not meshes)) else []
+    joint_bones = _onion.get("joint_bones") or _trail_bones(arm)
+    entry = {"tris": None, "lines": None, "joints": _capture_trail(arm, joint_bones, depsgraph)}
+    if meshes:
+        captured = _capture_meshes(meshes, depsgraph)
+        if captured is not None:
+            verts, tris = captured
+            entry["tris"] = batch_for_shader(_shader(), 'TRIS', {"pos": verts}, indices=tris)
+    if bone_names:
+        segments = _capture_bones(arm, bone_names, depsgraph)
+        if segments is not None:
+            entry["lines"] = batch_for_shader(_line_uniform_shader(), 'LINES', {"pos": segments})
+    return entry
+
+
+def posing() -> bool:
+    """Whether a drag is posing the rig right now. Its pose lives on the rig
+    until it is keyed, and any capture that steps the playhead and back
+    re-evaluates the action over it: the dragged pose was lost."""
+    try:
+        from . import handles, wormhole
+        return bool(handles._drag["active"] or wormhole._drag["active"])
+    except Exception:                       # noqa: BLE001
+        return False
+
+
+def playing() -> bool:
+    """Whether any window plays the animation. Asked of every window, not
+    bpy.context.screen: a timer has none, and the onion skin's capture,
+    blind to playback, moved the playhead under it -- the ghosts flickered."""
+    wm = getattr(bpy.context, "window_manager", None)
+    for w in getattr(wm, "windows", ()):
+        if w.screen is not None and w.screen.is_animation_playing:
+            return True
+    return False
+
+
+def onion_frames(scene, settings) -> list[int]:
+    """The frames the Frames-mode onion skin shows: Step apart, either side of
+    the playhead (as Grease Pencil's, not cut to the scene's range). The
+    wormhole shows the frames within Reach instead -- the ones a drag here
+    moves -- so what you see is what an edit carries."""
+    c, step = int(scene.frame_current), max(1, int(settings.onion_step))
+    if settings.onion_wormhole:
+        reach = max(1, int(settings.trail_radius))
+        step = wormhole_step(settings)
+        before = after = reach // step
+    else:
+        before, after = int(settings.onion_before), int(settings.onion_after)
+    out = [c - k * step for k in range(before, 0, -1)]
+    return out + [c + k * step for k in range(1, after + 1)]
+
+
+def wormhole_step(settings) -> int:
+    """Frames between wormhole slices: its Step, grown so a side never holds
+    more than WORMHOLE_MAX_SIDE."""
+    reach = max(1, int(settings.trail_radius))
+    return max(int(settings.wormhole_step), math.ceil(reach / WORMHOLE_MAX_SIDE))
+
+
+def _trail_live(name, frames, points):
+    """``points`` with a drag under way laid over them: the frames it reaches,
+    where the edit puts the joint now."""
+    try:
+        from . import wormhole
+        over = (wormhole.propagation.get("trail") or {}).get(name)
+    except Exception:                       # noqa: BLE001
+        over = None
+    if not over:
+        return points
+    return [tuple(over[f]) if f in over else p for f, p in zip(frames, points)]
+
+
+def _trail_warp(context, settings):
+    """In Pose with the wormhole on, ``frame -> offset`` that carries the
+    motion trail into the tunnel (None past the reach); else None, and the
+    trail is drawn where the motion is."""
+    if bar_mode(context) != 'POSE':
+        return None
+    from . import wormhole
+    if not wormhole.shown(context):
+        return None
+    return wormhole.offset_of(context, settings)
+
+
+def _onion_sig(settings):
+    arm = _target(settings)
+    action = _action(arm)
+    if arm is None or action is None:
+        return None
+    return (arm.name, action.name, settings.key_pose_display)
+
+
+def onion_wanted(context, settings) -> bool:
+    return (settings is not None and bar_mode(context) == 'POSE' and ghosts_on(settings)
+            and settings.onion_mode == 'FRAMES')
+
+
+def _onion_todo(scene, settings) -> list[int]:
+    """Frames still to capture: the ones on show first, then outward from the
+    playhead through the motion."""
+    cache = _onion["cache"]
+    want = [f for f in onion_frames(scene, settings) if f not in cache]
+    ext = _onion["extent"]
+    if ext is None or len(cache) >= ONION_MAX:
+        return want
+    lo, hi = ext
+    c = int(scene.frame_current)
+    rest = []
+    for d in range(0, max(c - lo, hi - c) + 1):
+        for f in (c - d, c + d) if d else (c,):
+            if lo <= f <= hi and f not in cache:
+                rest.append(f)
+        if len(rest) >= ONION_CHUNK * 4:
+            break
+    return want + [f for f in rest if f not in want]
+
+
+def request_onion(context, settings) -> None:
+    """From a draw: keep the cache right, and fill it while nothing plays."""
+    sig = _onion_sig(settings)
+    if sig is None:
+        return
+    if sig != _onion["sig"] or _onion["dirty"]:
+        same = sig == _onion["sig"]
+        stale = {**_onion["stale"], **_onion["cache"]} if same else {}
+        _onion.update(sig=sig, cache=dict(_onion["seed"]) if same else {}, stale=stale, seed={},
+                      dirty=False, extent=_motion_extent(_action(_target(settings))), joint_bones=None)
+    if _onion["pending"] or _baking or settings.is_generating:
+        return
+    if playing() or posing():
+        return                                 # the cache draws; nothing is captured mid-playback
+    if _onion_todo(context.scene, settings):
+        _onion["pending"] = True
+        bpy.app.timers.register(_onion_timer, first_interval=ONION_TICK)
+
+
+def _onion_timer():
+    try:
+        more = fill_onion(bpy.context)
+    except Exception as exc:                # noqa: BLE001 -- a timer must not raise
+        print(f"[Animatica] onion skin failed: {exc}")
+        more = False
+    if more:
+        return ONION_TICK
+    _onion["pending"] = False
+    return None
+
+
+def fill_onion(context, chunk: int = ONION_CHUNK) -> bool:
+    """Capture a few of the frames still missing. True while there is more
+    to do and it is still the time to do it. Moves the playhead and puts it
+    back, so never from a draw."""
+    global _baking
+    scene = context.scene
+    settings = _settings(scene)
+    if settings is None or settings.is_generating or _baking or not onion_wanted(context, settings):
+        return False
+    if playing() or posing():
+        return False
+    arm = _target(settings)
+    if arm is None or _onion_sig(settings) != _onion["sig"]:
+        return False
+    todo = _onion_todo(scene, settings)[:chunk]
+    if not todo:
+        return False
+    mode = settings.key_pose_display
+    meshes = _skinned_meshes(arm, context) if mode in {'AUTO', 'MESH'} else []
+    bone_names = _ghost_bones(arm) if (mode == 'BONES' or (mode == 'AUTO' and not meshes)) else []
+    joint_bones = _onion.get("joint_bones")
+    if joint_bones is None:
+        joint_bones = _onion["joint_bones"] = _trail_bones(arm)    # the wormhole's handles
+    shader, line_shader = _shader(), _line_uniform_shader()
+    saved_frame, saved_sub = scene.frame_current, scene.frame_subframe
+    _baking = True
+    try:
+        for f in todo:
+            scene.frame_set(f)
+            context.view_layer.update()
+            depsgraph = context.evaluated_depsgraph_get()
+            entry = {"tris": None, "lines": None,
+                     "joints": _capture_trail(arm, joint_bones, depsgraph)}
+            if meshes:
+                captured = _capture_meshes(meshes, depsgraph)
+                if captured is not None:
+                    verts, tris = captured
+                    entry["tris"] = batch_for_shader(shader, 'TRIS', {"pos": verts}, indices=tris)
+            if bone_names:
+                segments = _capture_bones(arm, bone_names, depsgraph)
+                if segments is not None:
+                    entry["lines"] = batch_for_shader(line_shader, 'LINES', {"pos": segments})
+            _onion["cache"][f] = entry
+    finally:
+        scene.frame_set(saved_frame, subframe=saved_sub)
+        try:
+            context.view_layer.update()     # its evaluation, while still marked as ours
+        except Exception:                   # noqa: BLE001
+            pass
+        _baking = False
+        _seen["quiet_until"] = time.monotonic() + 0.06
+    tag_redraw()
+    return bool(_onion_todo(scene, settings))
+
+
+def bake_onion(context) -> int:
+    """Fill the cache for the frames on show now (tests, and a caller that
+    cannot wait for the timer)."""
+    while fill_onion(context, chunk=8):
+        if all(f in _onion["cache"] for f in onion_frames(context.scene, _settings(context.scene))):
+            break
+    return sum(1 for f in onion_frames(context.scene, _settings(context.scene)) if f in _onion["cache"])
+
+
+def _draw_onion_frames(settings, scene, scene_depth, xray) -> None:
+    """The Frames-mode onion skins from the cache, faintest first -- during
+    playback too."""
+    current = scene.frame_current
+    shown = onion_frames(scene, settings)
+    before = [f for f in shown if f < current]
+    after = [f for f in shown if f > current]
+    ranked = [(f, -(len(before) - i)) for i, f in enumerate(before)] + \
+             [(f, i + 1) for i, f in enumerate(after)]
+    shader = _shader()
+    offsets = {}
+    if settings.onion_wormhole:
+        from . import wormhole
+        offsets = wormhole.offsets(bpy.context, settings, ranked)
+    # A ghost a frame or two from the playhead lies almost on the live body,
+    # and the two fought for the same depth: the ghosts flickered as the take
+    # played. Pushed a little away from the camera, the live body always wins.
+    rv3d = getattr(bpy.context, "region_data", None)
+    behind = (rv3d.view_rotation @ Vector((0.0, 0.0, -1.0))) * ONION_DEPTH_NUDGE if rv3d else Vector()
+    for frame, r in sorted(ranked, key=lambda fr: -abs(fr[1])):
+        batches = onion_entry(frame)
+        if batches is None:
+            continue
+        rgb, alpha = onion_look(settings, r, len(before) if r < 0 else len(after), frame - current)
+        moved = True
+        gpu.matrix.push()
+        # the wormhole: this slice out along the time axis; and a nudge behind the body
+        gpu.matrix.translate(offsets.get(frame, Vector()) + behind)
+        if batches["tris"] is not None:
+            shader.bind()
+            shader.uniform_float("color", (*rgb, alpha))
+            gpu.state.face_culling_set('BACK')
+            _depth_only(lambda: batches["tris"].draw(shader), xray=xray)
+            batches["tris"].draw(shader)
+            gpu.state.depth_test_set(scene_depth)
+            gpu.state.face_culling_set('NONE')
+        if batches["lines"] is not None:
+            line_shader = _line_uniform_shader()
+            line_shader.bind()
+            line_shader.uniform_float("viewportSize", _viewport_size())
+            line_shader.uniform_float("lineWidth", BONE_LINE_WIDTH * _px())
+            line_shader.uniform_float("color", (*rgb, min(1.0, alpha * BONE_ALPHA_BOOST)))
+            batches["lines"].draw(line_shader)
+            gpu.state.depth_test_set(scene_depth)
+        if moved:
+            gpu.matrix.pop()
+
+
 def _visible_poses(scene, p) -> list[tuple[int, dict]]:
-    """The key poses to draw, with their plan entry.
+    """The key poses to draw, with their plan entry: every one in Motion,
+    the onion skins in Pose.
 
     The pose under the playhead is suppressed: the rig itself is standing
     there, and a ghost inside it just muddies the silhouette.
     """
     current = scene.frame_current
+    frames = _ghosts["frames"]
+    if bar_mode() == 'POSE':
+        settings = _settings(scene)
+        if settings.onion_mode == 'FRAMES':
+            return []                     # the motion's own frames are drawn instead
+        onion = _onion_ranks(scene, settings)
+        frames = [f for f in frames if f in onion]
     return [
         (f, p["entries"].get(f, {"block": None, "in_range": True}))
-        for f in _ghosts["frames"]
+        for f in frames
         if f != current
     ]
 
@@ -1640,11 +2052,24 @@ def _draw_geometry():
     trail_ready = _trail_ready(settings)
     ghosts_ready = _ghosts_ready(settings)
     root_ready = _root_path_ready(settings)
-    if not trail_ready and not ghosts_ready and not root_ready:
+    frames_onion = onion_wanted(context, settings)
+    if frames_onion:
+        request_onion(context, settings)
+        # (kept during a drag: the ghosts re-pose live, and show the edit
+        # going through time, as the wormhole's slices do)
+    if not trail_ready and not ghosts_ready and not root_ready and not frames_onion:
         return
 
+    onion = bar_mode(context) == 'POSE'
+    warp = _trail_warp(context, settings)
+    if onion:
+        # Pose is about this frame: the trail stays (where the motion goes is
+        # what a pose is sculpted against; in the wormhole it runs through the
+        # slices), the root's floor path does not
+        root_ready = False
     visible = _visible_poses(context.scene, p) if ghosts_ready else []
     ranks = _rank_from_playhead(_ghosts["frames"], context.scene.frame_current)
+    onion_ranks = _onion_ranks(context.scene, settings) if onion else {}
     editing = _editing_frame(settings)
     shader = _shader()
     ghosts = _ghosts["ghosts"]
@@ -1661,7 +2086,9 @@ def _draw_geometry():
         if root_ready:
             _draw_root_path()
         if trail_ready:
-            _draw_trail(settings, p)
+            _draw_trail(settings, p, warp)
+        if frames_onion:
+            _draw_onion_frames(settings, context.scene, scene_depth, xray)
 
         # Faintest first, so the poses nearest the playhead land on top.
         order = sorted(visible, key=lambda item: _pose_alpha(item[0], item[1], ranks, editing))
@@ -1671,6 +2098,17 @@ def _draw_geometry():
                 continue
             rgb = _pose_color(frame, entry, settings)
             alpha = _pose_alpha(frame, entry, ranks, editing)
+            nudged = False
+            if onion and frame in onion_ranks and frame != editing:
+                r = onion_ranks[frame]
+                side = sum(1 for v in onion_ranks.values() if (v < 0) == (r < 0))
+                rgb, alpha = onion_look(settings, r, side)
+                rv = getattr(context, "region_data", None)
+                if rv is not None:
+                    # just behind the live body, as the Frames onion skin: no depth fight
+                    gpu.matrix.push()
+                    gpu.matrix.translate((rv.view_rotation @ Vector((0.0, 0.0, -1.0))) * ONION_DEPTH_NUDGE)
+                    nudged = True
             shader.bind()
             shader.uniform_float("color", (*rgb, alpha))
             if batches["tris"] is not None:
@@ -1698,6 +2136,8 @@ def _draw_geometry():
                 batches["lines"].draw(line_shader)
                 gpu.state.depth_test_set(scene_depth)
                 shader.bind()
+            if nudged:
+                gpu.matrix.pop()
     finally:
         gpu.state.blend_set('NONE')
         gpu.state.color_mask_set(True, True, True, True)
@@ -1706,7 +2146,7 @@ def _draw_geometry():
         gpu.state.face_culling_set('NONE')
 
 
-def _draw_trail(settings, p) -> None:
+def _draw_trail(settings, p, warp=None) -> None:
     """The motion itself: where the body actually goes, frame by frame.
 
     One line per traced bone, coloured per frame, so the path changes colour
@@ -1730,12 +2170,23 @@ def _draw_trail(settings, p) -> None:
         if not points or len(points) != len(colors):
             continue
 
+        points = _trail_live(name, frames, points)
+        pts, cols = points, colors
+        if warp is not None:
+            # into the wormhole: each frame's point where its slice is, and
+            # only the frames a drag here reaches
+            kept = [(i, warp(f)) for i, f in enumerate(frames)]
+            kept = [(i, o) for i, o in kept if o is not None]
+            pts = [tuple(Vector(points[i]) + o) for i, o in kept]
+            cols = [colors[i] for i, _o in kept]
+            if len(pts) < 2:
+                continue
         # The path itself, changing colour where the prompt blocks change.
         line.bind()
         line.uniform_float("viewportSize", viewport)
         line.uniform_float("lineWidth", TRAIL_WIDTH * px)
         batch_for_shader(
-            line, 'LINE_STRIP', {"pos": points, "color": colors},
+            line, 'LINE_STRIP', {"pos": pts, "color": cols},
         ).draw(line)
 
 
@@ -1749,7 +2200,7 @@ def _diamond(x: float, y: float, r: float):
     return ((x, y + r), (x + r, y), (x, y - r), (x - r, y))
 
 
-def _draw_trail_markers(settings, p, region, rv3d, current: int) -> None:
+def _draw_trail_markers(settings, p, region, rv3d, current: int, warp=None) -> None:
     """Per-frame markers along the trail, in screen space.
 
     Screen space because GPU point size is ignored on the Metal backend, and
@@ -1783,8 +2234,15 @@ def _draw_trail_markers(settings, p, region, rv3d, current: int) -> None:
         points = trail["points"].get(name)
         if not points or len(points) != len(colors):
             continue
+        points = _trail_live(name, frames, points)
         for i, frame in enumerate(frames):
-            co = view3d_utils.location_3d_to_region_2d(region, rv3d, points[i])
+            at = points[i]
+            if warp is not None:
+                off = warp(frame)
+                if off is None:
+                    continue    # past the wormhole's reach
+                at = Vector(at) + off
+            co = view3d_utils.location_3d_to_region_2d(region, rv3d, at)
             if co is None:
                 continue        # behind the viewer
             if picked == (name, frame):
@@ -1885,6 +2343,9 @@ def _draw_screen():
     trail_ready = _trail_ready(settings)
     ghosts_ready = _ghosts_ready(settings)
     root_ready = _root_path_ready(settings)
+    warp = _trail_warp(context, settings)
+    if bar_mode(context) == 'POSE':
+        root_ready = False
     if not trail_ready and not ghosts_ready and not root_ready:
         return
 
@@ -1893,7 +2354,7 @@ def _draw_screen():
         if root_ready:
             _draw_root_path_markers(region, rv3d, context.scene.frame_current)
         if trail_ready:
-            _draw_trail_markers(settings, p, region, rv3d, context.scene.frame_current)
+            _draw_trail_markers(settings, p, region, rv3d, context.scene.frame_current, warp)
 
         if not ghosts_ready or not settings.key_pose_labels:
             return
@@ -1903,7 +2364,12 @@ def _draw_screen():
         font_id = 0
         px = _px()
         blf.size(font_id, int(LABEL_SIZE * px))
+        onion = bar_mode(context) == 'POSE'
+        near = _onion_ranks(context.scene, settings) if onion else {}
+        taken = []                        # labels already drawn: a new one never lands on one
         for frame, entry in _visible_poses(context.scene, p):
+            if onion and abs(near.get(frame, 99)) > 1 and frame != editing and not _flashing(frame):
+                continue                  # Pose: the nearest key either side is named, the rest are seen
             anchor = roots.get(frame)
             if anchor is None:
                 continue
@@ -1918,7 +2384,12 @@ def _draw_screen():
                 text = str(frame)
             else:
                 text = f"{frame} ✕"
-            width, _height = blf.dimensions(font_id, text)
+            width, height = blf.dimensions(font_id, text)
+            box = (co.x - width * 0.5 - 3 * px, co.y + LABEL_OFFSET_PX * px - 2 * px,
+                   co.x + width * 0.5 + 3 * px, co.y + LABEL_OFFSET_PX * px + height + 2 * px)
+            if any(box[0] < b[2] and b[0] < box[2] and box[1] < b[3] and b[1] < box[3] for b in taken):
+                continue
+            taken.append(box)
             blf.position(font_id, co.x - width * 0.5, co.y + LABEL_OFFSET_PX * px, 0)
             blf.color(font_id, *(
                 FLASH_COLOR if _flashing(frame)

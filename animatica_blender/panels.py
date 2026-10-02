@@ -143,6 +143,11 @@ def _draw_skeleton(layout, context, arm, open_if_wrong=False) -> None:
         col.prop_search(it, "bone", arm.data, "bones", text=poser.control_label(it.joint))
 
 
+def handles_have(context, arm) -> bool:
+    from . import handles
+    return handles.has(context.scene, arm)
+
+
 def _draw_set_keyframe(layout, context, settings) -> None:
     """The one button for committing a pose you posed by hand.
 
@@ -154,10 +159,10 @@ def _draw_set_keyframe(layout, context, settings) -> None:
         return
     row = layout.row(align=True)
     row.scale_y = 1.2
-    row.operator("animatica.set_key_pose", icon='KEYFRAME_HLT', text="Set Keyframe")
+    row.operator("animatica.set_key_pose", icon='KEYFRAME_HLT', text="Set Key Pose")
     # Record, next to the button it automates: on, posing with the handles keys
     # itself; off, Set Keyframe is the only way a pose is written.
-    row.prop(settings, "auto_key_pose", text="", icon='REC', toggle=True)
+    row.prop(context.scene.tool_settings, "use_keyframe_insert_auto", text="", icon='REC', toggle=True)
     _draw_rig_held(layout, context, settings)
 
 
@@ -752,7 +757,7 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
             # settings that switch it on.
             sub = layout.row()
             sub.active = False
-            sub.label(text="Or drag the trail · Shift: the whole body")
+            sub.label(text="Or in Motion: click a trail point, then drag it")
         status = engine.status()
         if not (status["runtime"] and status["model"]):
             box = layout.box()
@@ -781,38 +786,41 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
                 row.operator("autoposer.download", icon='IMPORT',
                              text=engine.download_label())
             box.label(text="Preferences → Animatica for detail")
-        elif not poser.has_controls(arm):
-            problem = poser.rig_problem(arm)
+        else:
+            from . import handles
+            problem = handles.problem(context, arm)
             if problem and problem != poser.NO_MODEL:
                 row = layout.row()
                 row.alert = True
                 row.label(text=problem[:70], icon='ERROR')
-            _draw_skeleton(layout, context, arm, open_if_wrong=bool(problem))
             row = layout.row()
             row.scale_y = 1.3
-            row.enabled = problem is None
-            row.operator("autoposer.build_rig", icon='OUTLINER_OB_ARMATURE',
-                         text="Start the Autoposer")
-        else:
+            row.enabled = not problem
+            active = handles.tool_active(context)
+            row.operator("animatica.toolbar_autoposer", icon='ARMATURE_DATA', depress=active,
+                         text="Autopose Tool (on)" if active else "Autopose Tool")
+            controls = handles.items(context.scene, arm)
+            if not controls:
+                _draw_skeleton(layout, context, arm, open_if_wrong=bool(problem))
             # The handles, in the artist's words rather than the rig's. Adding
             # one belongs in the same block as picking one, so the + sits with
             # them either way round.
-            controls = poser._controls(arm)
-            if settings.pose_details:
+            elif settings.pose_details:
                 col = layout.column(align=True)
                 for b in controls:
                     row = col.row(align=True)
-                    row.prop(b, "ap_enabled", text=poser.joint_label(b), toggle=True)
+                    row.prop(b, "ap_enabled", text=poser.control_label(b.ap_joint, b.ap_kind), toggle=True)
                     sub = row.row(align=True)
                     sub.active = b.ap_enabled
                     sub.prop(b, "ap_rot", text="Rot", toggle=True)
                     sub.prop(b, "ap_tol_m", text="")
-                col.operator("autoposer.add_control", text="Add Handle", icon='ADD')
+                col.menu("ANIMATICA_MT_add_handle", text="Add Handle", icon='ADD')
             else:
                 grid = layout.grid_flow(row_major=True, columns=4, align=True)
                 for b in controls:
-                    grid.prop(b, "ap_enabled", text=poser.joint_label(b), toggle=True)
-                grid.operator("autoposer.add_control", text="", icon='ADD')
+                    grid.prop(b, "ap_enabled", text=poser.control_label(b.ap_joint, b.ap_kind), toggle=True)
+                grid.menu("ANIMATICA_MT_add_handle", text="", icon='ADD')
+        if arm is not None and handles_have(context, arm):
             layout.prop(settings, "show_picker", text="Handle Picker in the Viewport",
                         icon='RESTRICT_SELECT_OFF')
             row = layout.row(align=True)
