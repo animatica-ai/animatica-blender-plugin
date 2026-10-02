@@ -281,7 +281,7 @@ def _bar_items(context, arm) -> list:
                         enabled=(one or s.loop) and not s.is_generating, group=5))
     review = _review_items(context, arm, keyed)
     if kind in ("offline", "connect") and not busy:
-        out.append(Item("connect", "connect", op, label=text, primary=True, group=5))
+        out.append(_server_item(kind, text, op, group=5))
     elif kind == "model" and not busy:
         out.append(Item("generate", "model", op, label=text, primary=True, group=5))
     elif kind == "sign_in" and not busy:
@@ -381,11 +381,14 @@ def _setup_items(context) -> list:
     already in the scene, or a whole example scene."""
     from . import canonical_skeleton, mmcp_client
     s = context.scene.animatica
+    from . import remote_asset
     kind, text, op = gate(context)
     out = []
+    # the server's state is shown, but it never hides the way in: a rig of
+    # your own, a downloaded character and posing all work without it
     if kind in ("offline", "connect"):
-        out.append(Item("connect", "connect", op, label=text, primary=True, group=1))
-        return out
+        out.append(_server_item(kind, text, op, group=0, primary=False))
+    online = kind != "offline" or remote_asset.is_cached()
     fetching = canonical_skeleton.download_state()
     if fetching["active"]:
         pct = float(fetching["percent"])
@@ -393,7 +396,7 @@ def _setup_items(context) -> list:
                         group=1, progress=pct / 100.0))
     else:
         out.append(Item("add_char", "add_character", "animatica.import_canonical_skeleton",
-                        label="Add a Character", primary=True, group=1))
+                        label="Add a Character", primary=online, enabled=online, group=1))
         out.append(Item("use_rig", "rig", "animatica.use_selected_rig", label="Use Selected Rig",
                         enabled=_selected_rig(context) is not None, group=1))
     out.append(Item("examples", "examples", "animatica.toolbar_menu", {"menu": "ANIMATICA_MT_examples"},
@@ -401,6 +404,19 @@ def _setup_items(context) -> list:
     if mmcp_client.cached_model(s.model_id) is not None:
         out.append(Item("model", "model", "animatica.toolbar_model", label=_short(s.model_id), group=10))
     return out
+
+
+def _server_item(kind, text, op, group, primary=True):
+    """Online access, or the connection: what it is doing, in words. A bare
+    Connect said nothing about why there was no server, and auto-connect was
+    already doing what it offered."""
+    from . import mmcp_client
+    if kind == "offline":
+        return Item("connect", "connect", op, label=text, primary=primary, group=group)
+    trying = mmcp_client.connecting() or not mmcp_client.last_connection_error()
+    return Item("connect", "connect", None if trying else op,
+                label="Connecting\u2026" if trying else "Can't reach Animatica \u00b7 Retry",
+                primary=primary and not trying, group=group)
 
 
 def _selected_rig(context):
@@ -1032,10 +1048,9 @@ def tip(context, it) -> str:
         line = f"\u201c{it.label}\u201d. Click to change it, then press Enter to make it"
     elif it.id == "pose_prompt" and not it.enabled:
         line = _describe_blocker(context) or line
-    elif it.id == "options" and pose_mode_on(context):
-        title, line = "Pose Options", ("Onion skin, zoetrope, and whether a described pose stands on the "
-                                       "ground. Onion skins show whether this pose fits the motion around "
-                                       "it. Standing on the ground keeps a described pose from floating")
+    elif it.id == "options":
+        title, line = "Options", ("The next take (Loop, In Place, versions), the onion skin and zoetrope, "
+                                  "and whether a described pose stands on the ground")
     elif it.id in ("auto_key", "onion", "trail", "wormhole"):
         title += " (on)" if it.on else " (off)"
     elif it.id == "picker":
@@ -1074,7 +1089,12 @@ def tip(context, it) -> str:
         elif kind == "offline":
             title, line = "Allow Online Access", "Animatica makes the motion on its servers. This lets Blender connect to them"
         elif kind == "connect":
-            title, line = "Connect", "Connect to the Animatica server"
+            err = mmcp_client.last_connection_error()
+            if err and not mmcp_client.connecting():
+                title, line = "Can't Reach Animatica", ("Check your internet connection, then click to try "
+                                                       "again. You can still add a character and pose it")
+            else:
+                title, line = "Connecting", "Connecting to Animatica to list the models"
     elif it.id == "hint":
         from . import guidance
         h = guidance.next_step(context)
@@ -1090,12 +1110,16 @@ def tip(context, it) -> str:
         line = f"{s.model_id} on {mmcp_client.get_mmcp_url()}. Click to pick another model or change the server"
     elif it.id == "fetching":
         title, line = "Fetching the Character", "Downloading the character. This happens once, and it is kept for next time"
-    base_why = TIPS.get(it.id, ("", ""))[1].partition(" Why: ")[2]
-    if base_why and "Why:" not in line:
-        # a state rewrote the line (the prompt, a greyed button): the reason stays
-        line = (line.rstrip(".") + ". " if line else "") + "Why: " + base_why
-    line = line.replace(". Why: ", ".\nWhy: ")     # the reason on a line of its own
+    if not it.enabled and it.id in ("waypoint", "pin", "prompt", "pose_text", "pose_prompt") \
+            and not mmcp_client.tool_available(s.model_id, _TOOL_OF.get(it.id, it.id)):
+        line = f"The model {s.model_id} can't use this. Pick another model on the bar to use it"
+    elif not it.enabled and it.id == "use_rig":
+        line = "Select an armature (or a mesh bound to one) in the viewport first"
     return f"{title}\n{line}" if line else title
+
+
+#: the model tool behind a bar button, where the names differ
+_TOOL_OF = {"pose_text": "describe", "pose_prompt": "describe"}
 
 
 _PLACES = (" to the ", " towards ", " toward ", " into the ", " onto ", " up to ", " over to ", " across ")
@@ -1133,10 +1157,30 @@ class ANIMATICA_OT_bar_click(bpy.types.Operator):
 
     def invoke(self, context, event):
         it = _item(context, hovered(context.area))
-        if it is None or not it.op or not it.enabled:
+        if it is None:
+            return {'CANCELLED'}
+        if not it.enabled:
+            # a greyed button clicked did nothing, without a word: now it says why,
+            # and a Generate waiting for a prompt opens the field for it
+            from .request_builder import MODEL_RIG_MISMATCH  # noqa: F401
+            if it.id == "generate" and gate(context)[1] == "Type a prompt first":
+                bpy.ops.animatica.toolbar_prompt_here('INVOKE_DEFAULT')
+                return {'CANCELLED'}
+            why = tip(context, it).partition("\n")[2].split("\n")[0]
+            if why:
+                self.report({'INFO'}, why)
+            return {'CANCELLED'}
+        if not it.op:
             return {'CANCELLED'}
         group, name = it.op.split(".", 1)
-        result = getattr(getattr(bpy.ops, group), name)('INVOKE_DEFAULT', **it.props)
+        try:
+            result = getattr(getattr(bpy.ops, group), name)('INVOKE_DEFAULT', **it.props)
+        except RuntimeError as exc:
+            # the button's own error report, raised by bpy.ops: shown as what it
+            # says, not as a Python traceback in the status bar
+            text = str(exc).strip().splitlines()[-1]
+            self.report({'ERROR'}, text.removeprefix("Error: ").strip() or "That didn't work")
+            return {'CANCELLED'}
         return {'CANCELLED'} if result == {'CANCELLED'} else {'FINISHED'}
 
 

@@ -21,6 +21,7 @@ import bpy
 from bpy.props import IntProperty, StringProperty
 
 from .operators import ends_cleanly
+from .operators import esc_cancels as operators_esc_cancels
 from .timeline_overlay import (
     hit_test_strips,
     hit_test_lane_resize,
@@ -1844,6 +1845,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
     def _worker(self, server_url, req):
         from . import mmcp_client
         try:
+            mmcp_client.clear_failure()
             client = mmcp_client.MmcpClient(server_url)
             self._result = client.generate(req)
         except Exception as exc:                          # noqa: BLE001 — surfaced to UI
@@ -1864,7 +1866,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
 
         s = context.scene.animatica
 
-        if event.type == 'ESC' or s.cancel_requested:
+        if operators_esc_cancels(self, event) or s.cancel_requested:
             self._cleanup(context)
             self.report({'INFO'}, "Regenerate cancelled. The request still finishes on the server")
             return {'CANCELLED'}
@@ -1881,7 +1883,8 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             if _announce_quota(context, self._error):
                 self.report({'INFO'}, "Generation limit reached")
             else:
-                self.report({'ERROR'}, f"Regenerate failed: {self._error}")
+                from . import mmcp_client
+                self.report({'ERROR'}, f"The take failed. {mmcp_client.note_failure(self._error)}")
             return {'CANCELLED'}
 
         if self._result is None:

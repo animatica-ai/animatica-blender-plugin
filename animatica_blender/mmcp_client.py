@@ -733,6 +733,48 @@ def _apply_connection(caps, error: str, url: str):
 # Errors
 # ---------------------------------------------------------------------------
 
+#: the last generation that failed, in plain words, for the hint above the bar
+_FAILURE = {"text": ""}
+
+
+def plain_error(exc) -> str:
+    """What went wrong, in words an artist can act on. The raw error goes to
+    the console for whoever has to debug it."""
+    code = getattr(exc, "code", "")
+    status = getattr(exc, "status", None)
+    message = str(getattr(exc, "message", "") or exc)
+    if code == "offline":
+        return "Blender's online access is off. Turn it on in Preferences > System"
+    if code == "model_unavailable":
+        return "Can't reach Animatica. Check your internet connection and try again"
+    if code == "timeout":
+        return "The model took too long to answer. It may be starting up, so try again in a minute"
+    if status == 401 or code in ("unauthorized", "unauthenticated", "invalid_token", "auth_required"):
+        return "Your sign-in has expired. Sign in again"
+    if code == "unknown_model":
+        return "This model is not offered any more. Pick another one on the bar"
+    if code == "internal_error":
+        return "Something went wrong on the server. Try again"
+    if isinstance(exc, MmcpError):
+        return message[:1].upper() + message[1:]
+    return message or exc.__class__.__name__
+
+
+def note_failure(exc) -> str:
+    """Remember a failed generation for the hint, and give its plain words."""
+    print(f"[Animatica] generation failed: {exc!r}")
+    _FAILURE["text"] = plain_error(exc)
+    return _FAILURE["text"]
+
+
+def clear_failure() -> None:
+    _FAILURE["text"] = ""
+
+
+def last_failure() -> str:
+    return _FAILURE["text"]
+
+
 class MmcpError(Exception):
     """Wraps the MMCP error envelope.
 

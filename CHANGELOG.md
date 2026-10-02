@@ -93,6 +93,27 @@ Proscenium, and keep the identifiers those releases actually shipped.
 - **The first fine-tuning edit no longer clears the ghosts.**
 - **Dragging on a sparse take no longer lags** on a wide reach.
 - **G or R on handles with no place in the scene** no longer raises an error.
+- **A first take is quicker.** The hint asks for a prompt first, then says
+  Ready: Generate; key poses are offered as the way to steer it, so a first
+  session no longer starts with the 225 MB Autoposer download. A greyed
+  Generate says "Type a prompt first", and clicking it opens the field.
+- **Greyed buttons say why** when clicked or hovered (a tool the model can't
+  use, Use Selected Rig with nothing selected).
+- **Offline, the way in stays.** Use Selected Rig, Examples and a downloaded
+  character stay on the bar without a connection; an unreachable server
+  says so with Retry. Allow Online Access asks before it changes Blender's
+  setting.
+- **Failures in plain words**, kept on the hint with a retry, instead of
+  protocol codes in a status line that faded. Bar buttons that fail no longer
+  print a Python traceback.
+- **A key pose outside the blocks is no longer left out silently.** Setting
+  it warns, and the hint offers to stretch the block over it.
+- **Esc no longer throws a generation away by accident:** press it twice.
+- **The sidebar matches the bar** while a take is judged: Redo, Key This
+  Frame and Discard, and Generate makes the rest (no Accept, no Generate
+  Again).
+- **The first Autopose click no longer fails** on a fresh install (the
+  download prompt raised an error).
 
 ## [0.6.4] — 2026-09-30
 

@@ -291,7 +291,7 @@ class ANIMATICA_OT_generate_batch(Operator):
         from . import operators
 
         settings = context.scene.animatica
-        if event.type == 'ESC' or settings.cancel_requested:
+        if operators.esc_cancels(self, event) or settings.cancel_requested:
             self._finish(context, cancelled=True)
             self.report({'INFO'}, "Batch cancelled. Takes already made are waiting for review")
             return {'CANCELLED'}

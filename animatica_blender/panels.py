@@ -390,9 +390,14 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
         elif blockers and not in_preview:
             # greyed, and saying why instead of "Generate Motion" without a word
             row.operator("animatica.generate", text=blockers[0])
+        elif in_preview:
+            # as on the bar: Generate keeps the take and makes the blocks it left;
+            # another go at this one is Redo, in the review box above
+            from . import toolbar
+            if toolbar._more_to_make(context, arm_live):
+                row.operator("animatica.toolbar_generate", text="Generate the Rest")
         else:
-            row.operator("animatica.generate",
-                         text="Generate Again" if in_preview else "Generate Motion")
+            row.operator("animatica.generate", text="Generate")
 
         _draw_take_options(layout, context, settings, model, in_preview or batch_waiting)
         if not in_preview and not batch_waiting:
@@ -623,7 +628,7 @@ def _draw_review(layout, context, settings, arm) -> None:
     # Another character focused while this take waits: say why nothing switched.
     focused = properties.armature_of(context.view_layer.objects.active)
     if single and settings.follow_active and focused is not None and focused != arm:
-        info.label(text=f"Accept or Reject to switch to {focused.name}", icon='INFO')
+        info.label(text=f"Fine-tune or Discard this take to switch to {focused.name}", icon='INFO')
     loops = [a.animation_data.action.get("animatica_loop") for a in arms
              if a.animation_data and a.animation_data.action]
     loops = [lp for lp in loops if lp]
@@ -696,10 +701,11 @@ def _draw_review(layout, context, settings, arm) -> None:
     row = box.row(align=True)
     row.scale_y = 1.3
     if single:
-        # Accept adds the take to the NLA, above any kept before; nothing is
-        # replaced, so the button says only that.
-        row.operator("animatica.accept", icon='CHECKMARK', text="Accept")
-        row.operator("animatica.reject", icon='X')
+        # the bar's own choices, in its words: no Accept (fine-tuning keeps
+        # the take), Redo for another go, Discard to throw it away
+        row.operator("animatica.toolbar_redo", icon='FILE_REFRESH', text="Redo")
+        row.operator("animatica.keep_frame", icon='KEYFRAME_HLT', text="Key This Frame")
+        row.operator("animatica.reject", icon='X', text="Discard")
         # Re-roll just the active block (keeping its neighbours) — otherwise
         # only reachable by right-clicking a timeline strip. With a single
         # block this is Generate Again, so only when there are blocks to keep.

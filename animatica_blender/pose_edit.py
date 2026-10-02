@@ -681,6 +681,12 @@ class ANIMATICA_OT_set_key_pose(Operator):
         key_poses.invalidate_plan()
         key_poses.request_rebuild()
         n = len(key_poses.take_keys(context.scene))
+        if frame in key_poses.dropped_frames(context.scene):
+            # a key the take would leave out: said here, where it was made
+            self.report({'WARNING'}, f"Key pose set at frame {frame}, outside the take's blocks, so "
+                                     "Generate leaves it out. Click the hint above the bar to stretch "
+                                     "the block over it")
+            return {'FINISHED'}
         self.report({'INFO'}, f"Key pose set at frame {frame}. Generate will pass through {n} key pose"
                               + ("s" if n != 1 else ""))
         return {'FINISHED'}

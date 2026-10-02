@@ -160,7 +160,7 @@ def generation_blockers(
     #    real request; unconditioned motion between nothing is noise, and the
     #    server has no way to answer it.
     if not written and not has_constraint:
-        out.append("Type a prompt, or key a pose")
+        out.append("Type a prompt first")      # short: the bar's button shows it whole
 
     # 2. Longer than the model can make in one go. Seconds are the model's
     #    own, since the server converts frames with the model's fps.

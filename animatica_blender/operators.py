@@ -848,6 +848,23 @@ def generation_running(context) -> bool:
     return False
 
 
+def esc_cancels(op, event) -> bool:
+    """Esc cancels a generation only when pressed twice within two seconds.
+    One stray Esc (closing a menu, leaving a text field) threw the take away."""
+    import time
+    if event.type != 'ESC' or event.value != 'PRESS':
+        return False
+    now = time.monotonic()
+    if now - getattr(op, "_esc_at", 0.0) < 2.0:
+        return True
+    op._esc_at = now
+    try:
+        op.report({'INFO'}, "Press Esc again to cancel the take")
+    except Exception:                                    # noqa: BLE001
+        pass
+    return False
+
+
 def ends_cleanly(modal):
     """Run a generation operator's ``cancel`` when its modal raises.
 
@@ -1294,6 +1311,7 @@ class ANIMATICA_OT_generate(Operator):
     # ----- thread body -----------------------------------------------------
     def _worker(self, server_url: str, req: dict) -> None:
         try:
+            mmcp_client.clear_failure()
             client = mmcp_client.MmcpClient(server_url)
             self._result = client.generate(req)
         except Exception as exc:                         # noqa: BLE001 — surfaced to UI
@@ -1307,7 +1325,7 @@ class ANIMATICA_OT_generate(Operator):
     def modal(self, context, event):
         settings = context.scene.animatica
 
-        if event.type == 'ESC' or settings.cancel_requested:
+        if esc_cancels(self, event) or settings.cancel_requested:
             self._cleanup(context)
             self.report({'INFO'}, "Generation cancelled (the request still finishes on the server)")
             return {'CANCELLED'}
@@ -1325,7 +1343,7 @@ class ANIMATICA_OT_generate(Operator):
             if _announce_quota(context, self._error):
                 self.report({'INFO'}, "Generation limit reached")
             else:
-                self.report({'ERROR'}, f"Generation failed: {self._error}")
+                self.report({'ERROR'}, f"The take failed. {mmcp_client.note_failure(self._error)}")
             return {'CANCELLED'}
 
         if self._result is None:
@@ -2176,6 +2194,7 @@ class ANIMATICA_OT_generate_pose(Operator):
     # ----- thread body -----------------------------------------------------
     def _worker(self, server_url: str, req: dict) -> None:
         try:
+            mmcp_client.clear_failure()
             client = mmcp_client.MmcpClient(server_url)
             self._result = client.generate(req)
         except Exception as exc:                         # noqa: BLE001
@@ -2189,7 +2208,7 @@ class ANIMATICA_OT_generate_pose(Operator):
     def modal(self, context, event):
         s = context.scene.animatica
 
-        if event.type == 'ESC' or s.cancel_requested:
+        if esc_cancels(self, event) or s.cancel_requested:
             self._cleanup(context)
             self.report({'INFO'}, "Pose generation cancelled")
             return {'CANCELLED'}
@@ -2206,7 +2225,7 @@ class ANIMATICA_OT_generate_pose(Operator):
             if _announce_quota(context, self._error):
                 self.report({'INFO'}, "Generation limit reached")
             else:
-                self.report({'ERROR'}, f"Pose generation failed: {self._error}")
+                self.report({'ERROR'}, f"The pose failed. {mmcp_client.note_failure(self._error)}")
             return {'CANCELLED'}
 
         if self._result is None:
@@ -2380,6 +2399,14 @@ class ANIMATICA_OT_allow_online(Operator):
     Access). Animatica makes motion on its servers, so it needs this"""
     bl_idname = "animatica.allow_online"
     bl_label = "Allow Online Access"
+
+    def invoke(self, context, event):
+        # a Blender setting for every add-on, not only this one: asked, never flipped by a click
+        return context.window_manager.invoke_confirm(
+            self, event, title="Allow online access?",
+            message="This turns on Blender's Preferences > System > Allow Online Access, for every "
+                    "add-on. Animatica needs it to make motion on its servers.",
+            confirm_text="Allow", icon='QUESTION')
 
     def execute(self, context):
         try:
