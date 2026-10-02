@@ -38,6 +38,8 @@ HIT = 5.0
 DEPTH = 0.6                # of the spacing, into the view per slice
 RING_MIN = 1.2             # m: the loop's ring, never smaller than this across its middle
 RING_SPACING = 1.6         # the ring's slices this many Spacings apart (a body is wider than a step)
+RING_TILT = 32.0           # degrees: the drum seen from this far above, its far half rising on screen
+RING_BACK = 0.35           # of the radius: the ring stands this far behind the character
 
 
 def _label(context, bone) -> str:
@@ -140,9 +142,19 @@ def offset_of(context, s):
             d.z = 0.0
             return d
 
+        # the drum seen from a little above, in the view's own terms: its far
+        # half rises on screen (laid in the view's depth it was a flat line,
+        # the ghosts at the back hidden behind the front ones), and it stands a
+        # little behind the character, the near slices clear of the live body
+        up = rv3d.view_rotation @ Vector((0.0, 1.0, 0.0))
+        tilt = math.radians(RING_TILT)
+        back = into * (radius * RING_BACK)
+
         def round_at(frame):
             a = 2 * math.pi * key_poses.frames_from(frame, c, span) / period
-            return right * (radius * math.sin(a)) + into * (radius * (1 - math.cos(a))) - travel(frame)
+            depth = radius * (1 - math.cos(a))
+            return (right * (radius * math.sin(a)) + into * (depth * math.cos(tilt))
+                    + up * (depth * math.sin(tilt)) + back - travel(frame))
         return round_at
 
     def at(frame):
