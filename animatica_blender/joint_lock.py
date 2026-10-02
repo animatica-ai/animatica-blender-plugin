@@ -272,21 +272,33 @@ def _draw():
         hot = [tuple(mw @ Vector(lk["pos"])) for lk in stored(arm) if lk["start"] <= f <= lk["end"]]
     if not pts and not hot:
         return
-    shader = gpu.shader.from_builtin('POINT_UNIFORM_COLOR')
-    gpu.state.blend_set('ALPHA')
-    gpu.state.depth_test_set('NONE')
-    try:
-        small = 12.0 if _preview["pick"] else 5.0
-        for coords, color, size in ((pts, _PATH, small), (hot, _LOCKED, 14.0 if big else 9.0)):
-            if not coords:
+    # in screen space, as diamonds: GPU point size is ignored on Metal, and a
+    # marker to click should be the same size however far the camera is
+    from bpy_extras import view3d_utils
+    region, rv3d = ctx.region, ctx.region_data
+    if region is None or rv3d is None:
+        return
+    px = ctx.preferences.system.ui_scale
+    verts, colors, tris = [], [], []
+    small = 9.0 if _preview["pick"] else 3.5
+    for coords, color, size in ((pts, _PATH, small), (hot, _LOCKED, 12.0 if big else 6.0)):
+        for co in coords:
+            xy = view3d_utils.location_3d_to_region_2d(region, rv3d, co)
+            if xy is None:
                 continue
-            gpu.state.point_size_set(size * ctx.preferences.system.ui_scale)
-            batch = batch_for_shader(shader, 'POINTS', {"pos": coords})
-            shader.bind()
-            shader.uniform_float("color", color)
-            batch.draw(shader)
+            r = size * px
+            b = len(verts)
+            verts += [(xy.x, xy.y + r), (xy.x + r, xy.y), (xy.x, xy.y - r), (xy.x - r, xy.y)]
+            colors += [color] * 4
+            tris += [(b, b + 1, b + 2), (b, b + 2, b + 3)]
+    if not verts:
+        return
+    shader = gpu.shader.from_builtin('SMOOTH_COLOR')
+    gpu.state.blend_set('ALPHA')
+    try:
+        shader.bind()
+        batch_for_shader(shader, 'TRIS', {"pos": verts, "color": colors}, indices=tris).draw(shader)
     finally:
-        gpu.state.point_size_set(1.0)
         gpu.state.blend_set('NONE')
 
 
@@ -515,7 +527,7 @@ def register():
     for c in _classes:
         bpy.utils.register_class(c)
     if _handle[0] is None:
-        _handle[0] = bpy.types.SpaceView3D.draw_handler_add(_draw, (), 'WINDOW', 'POST_VIEW')
+        _handle[0] = bpy.types.SpaceView3D.draw_handler_add(_draw, (), 'WINDOW', 'POST_PIXEL')
 
 
 def unregister():

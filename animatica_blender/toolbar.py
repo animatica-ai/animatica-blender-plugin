@@ -848,9 +848,9 @@ def _draw_reach(context, rect, u, size, hot, first, last):
     verts, tris = [], []
     for (xa, ya), (xb, yb) in zip(pts, pts[1:]):
         if ya > base + 0.5 or yb > base + 0.5:
-            k = len(verts)
+            n = len(verts)       # not k: that is the Intensity, written below (it read 11600%)
             verts += [(xa, base), (xb, base), (xb, yb), (xa, ya)]
-            tris += [(k, k + 1, k + 2), (k, k + 2, k + 3)]
+            tris += [(n, n + 1, n + 2), (n, n + 2, n + 3)]
     st.triangles(verts, tris, st.with_alpha(st.SOFT_ORANGE, 0.3))    # one batch, not 32
     st.lines(list(zip(pts, pts[1:])), max(1.0, 1.4 * u), st.with_alpha(st.SOFT_ORANGE, 0.95))
     st.lines([((mid, base), (mid, top))], max(1.0, u), (1, 1, 1, 0.6))

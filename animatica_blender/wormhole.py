@@ -4,9 +4,9 @@
 An onion skin draws each pose where the character was at that frame, so a
 take that stays in place -- a punch, a turn, a crouch -- piles every slice on
 the body and none can be read, let alone grabbed. The zoetrope moves each
-slice out along a time axis: the past one way, the future the other, both
-receding into depth, so the take reads as a tunnel through the frame you are
-on.
+slice out along a time axis across the view: the past one way, the future
+the other, side by side and flat, like a strip of film (receding into depth,
+the far slices shrank in perspective and the poses could not be compared).
 
 Each slice carries handles on the joints the Autoposer is steered by (hands,
 feet, hips, head). Drag one and that frame's body is solved around it -- the
@@ -35,7 +35,7 @@ from . import ui_style as st
 MAX_PARTS = 96
 HANDLE_R = 4.5             # logical px
 HIT = 5.0
-DEPTH = 0.6                # of the spacing, into the view per slice
+DEPTH = 0.0                # of the spacing, into the view per slice: flat, every slice the body's size
 RING_MIN = 1.2             # m: the loop's ring, never smaller than this across its middle
 RING_SPACING = 1.6         # the ring's slices this many Spacings apart (a body is wider than a step)
 RING_TILT = 32.0           # degrees: the drum seen from this far above, its far half rising on screen

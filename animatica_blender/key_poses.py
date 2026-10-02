@@ -622,6 +622,32 @@ def _trail_color_list(settings, p, frames, current: int):
     return colors
 
 
+_side_colors: dict = {}
+
+
+def _colors_for(name, colors):
+    """The trail colours for ``name``: tinted by its side for a hand or foot.
+    The same list object back for the same input, so the batch cache holds."""
+    side = _trail_side_of.get(name)
+    if side is None:
+        return colors
+    got = _side_colors.get(side)
+    if got is not None and got[0] is colors:
+        return got[1]
+    tr, tg, tb = TRAIL_SIDE_TINT[side]
+    m = TRAIL_SIDE_MIX
+    tinted = [(r + (tr - r) * m, g + (tg - g) * m, b + (tb - b) * m, a) for r, g, b, a in colors]
+    _side_colors[side] = (colors, tinted)
+    return tinted
+
+
+def _side_label(name) -> str:
+    side = _trail_side_of.get(name)
+    if side is None:
+        return ""
+    return f"{side} {'hand' if _trail_group_of.get(name) == 'HANDS' else 'foot'}"
+
+
 def _rank_from_playhead(frames, current: int) -> dict:
     """How many key poses each one is from the playhead, either way.
 
@@ -711,6 +737,13 @@ _TRAIL_GROUP = {"Hips": "HIPS", "Head": "HEAD", "LeftHand": "HANDS", "RightHand"
                 "LeftFoot": "FEET", "RightFoot": "FEET"}
 #: traced bone -> its Trail Joints group, filled in as the bones are resolved
 _trail_group_of: dict[str, str] = {}
+#: traced bone -> "L" or "R" for the hands and feet (the character's own sides)
+_trail_side_of: dict[str, str] = {}
+#: the sides' tints, as port and starboard: left red, right green. Mixed into
+#: the block colour, so which leg is which reads at a glance (the four limb
+#: paths were one colour, and crossing legs could not be told apart)
+TRAIL_SIDE_TINT = {"L": (1.0, 0.36, 0.30), "R": (0.30, 0.88, 0.42)}
+TRAIL_SIDE_MIX = 0.6
 
 
 def _trail_bones(arm) -> list[str]:
@@ -744,6 +777,8 @@ def _trail_bones(arm) -> list[str]:
         if pb is not None and pb.name not in names:
             names.append(pb.name)
             _trail_group_of[pb.name] = _TRAIL_GROUP[joint]
+            if joint.startswith(("Left", "Right")):
+                _trail_side_of[pb.name] = joint[0]
 
     # A rig that names its root something else still gets its trajectory
     # traced — that is the one line the plan is mostly about.
@@ -2267,7 +2302,8 @@ def _draw_trail(settings, p, warp=None) -> None:
 
         raw = points
         points = _trail_live(name, frames, points)
-        pts, cols = points, colors
+        mine = _colors_for(name, colors)
+        pts, cols = points, mine
         wkey = getattr(warp, "key", None) if warp is not None else ()
         steady = points is raw and wkey is not None      # nothing moving it this frame
         if steady:
@@ -2276,7 +2312,7 @@ def _draw_trail(settings, p, warp=None) -> None:
             # held by reference, compared by identity: an id() alone came back
             # for a new list once the old one was freed -- with the old colours
             got = _trail_batches.get((name, wkey))
-            batch = got[2] if got is not None and got[0] is raw and got[1] is colors else None
+            batch = got[2] if got is not None and got[0] is raw and got[1] is mine else None
             if batch is None:
                 if len(_trail_batches) > 64:
                     _trail_batches.clear()
@@ -2286,9 +2322,9 @@ def _draw_trail(settings, p, warp=None) -> None:
                     if len(kept) < 2:
                         continue
                     pts = [tuple(Vector(points[i]) + o) for i, o in kept]
-                    cols = [colors[i] for i, _o in kept]
+                    cols = [mine[i] for i, _o in kept]
                 batch = batch_for_shader(line, 'LINE_STRIP', {"pos": pts, "color": cols})
-                _trail_batches[(name, wkey)] = (raw, colors, batch)
+                _trail_batches[(name, wkey)] = (raw, mine, batch)
             line.bind()
             line.uniform_float("viewportSize", viewport)
             line.uniform_float("lineWidth", TRAIL_WIDTH * px)
@@ -2300,7 +2336,7 @@ def _draw_trail(settings, p, warp=None) -> None:
             kept = [(i, warp(f)) for i, f in enumerate(frames)]
             kept = [(i, o) for i, o in kept if o is not None]
             pts = [tuple(Vector(points[i]) + o) for i, o in kept]
-            cols = [colors[i] for i, _o in kept]
+            cols = [mine[i] for i, _o in kept]
             if len(pts) < 2:
                 continue
         # The path itself, changing colour where the prompt blocks change.
@@ -2352,11 +2388,13 @@ def _draw_trail_markers(settings, p, region, rv3d, current: int, warp=None) -> N
     vert_colors: list[tuple[float, float, float, float]] = []
     indices: list[tuple[int, int, int]] = []
 
+    labels = []
     for name in shown_trail_bones(settings):
         points = trail["points"].get(name)
         if not points or len(points) != len(colors):
             continue
         points = _trail_live(name, frames, points)
+        mine = _colors_for(name, colors)
         for i, frame in enumerate(frames):
             at = points[i]
             if warp is not None:
@@ -2372,9 +2410,11 @@ def _draw_trail_markers(settings, p, region, rv3d, current: int, warp=None) -> N
             elif frame == current:
                 radius, color = TRAIL_CURRENT_RADIUS, TRAIL_CURRENT_COLOR
             elif frame in key_frames:
-                radius, color = TRAIL_KEY_RADIUS, colors[i]
+                radius, color = TRAIL_KEY_RADIUS, mine[i]
             else:
-                radius, color = TRAIL_DOT_RADIUS, colors[i]
+                radius, color = TRAIL_DOT_RADIUS, mine[i]
+            if frame == current and _side_label(name):
+                labels.append((co.x, co.y, _side_label(name), TRAIL_SIDE_TINT[_trail_side_of[name]]))
             base = len(verts)
             verts.extend(_diamond(co.x, co.y, radius * px))
             vert_colors.extend([color] * 4)
@@ -2387,6 +2427,13 @@ def _draw_trail_markers(settings, p, region, rv3d, current: int, warp=None) -> N
     batch_for_shader(
         shader, 'TRIS', {"pos": verts, "color": vert_colors}, indices=indices,
     ).draw(shader)
+    # which limb is which, written where each one is now
+    font_id = 0
+    blf.size(font_id, int(LABEL_SIZE * px))
+    for x, y, text, rgb in labels:
+        blf.position(font_id, x + 9 * px, y - 4 * px, 0)
+        blf.color(font_id, *rgb, 0.95)
+        blf.draw(font_id, text)
 
 
 def _draw_root_path() -> None:
