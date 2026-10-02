@@ -903,6 +903,30 @@ class ANIMATICA_OT_handle_transform(bpy.types.Operator):
         self._angle0 = math.atan2(self._mouse0[1] - self._c2.y, self._mouse0[0] - self._c2.x)
         for h in sel:
             h.ap_enabled = True
+        # through time, as a drag is: a turned hand turns on the frames around
+        # it too, with the falloff, and the ghosts and the trail show it live
+        from . import carry, wormhole
+        from .autoposer import poser
+        self._f0 = int(context.scene.frame_current)
+        self._radius = int(context.scene.animatica.trail_radius)
+        self._through = bool(context.scene.tool_settings.use_keyframe_insert_auto or wormhole.editable(context))
+        picked = {poser.joint_bone(arm, h.ap_joint).name for h in sel
+                  if h.ap_ety != 2 and poser.joint_bone(arm, h.ap_joint) is not None}
+        self._bone = next(iter(picked)) if len(picked) == 1 else ""
+        self._floor = floor_cap(arm, self._snap)
+        self._carry = carry.Carry(context, arm, self._f0, self._radius if self._through else 0,
+                                  self._snap["bases"], dragged=self._bone,
+                                  held=[b for b in carry.held_ends(arm, hs) if b not in picked])
+        # the solve of the pose as it is, nothing moved or turned: the edit is
+        # measured from it, so the poser's own small changes are not part of it
+        still = (effectors(arm, hs, self._snap, rot_over={h.name: self._snap["joints"][h.ap_joint][1]
+                                                          for h in sel if h.ap_joint in self._snap["joints"]})
+                 if self.mode == 'ROTATE' else
+                 effectors(arm, hs, self._snap, targets={n: p for n, p in self._starts.items() if p is not None}))
+        if not solve(context, arm, still, self._floor):
+            self._carry.set_base({pb.name: pb.matrix_basis.copy() for pb in arm.pose.bones})
+        restore(arm, self._snap)
+        context.view_layer.update()
         _drag.update(active=True, name=sel[0].name, error="")
         _guide.update(center=self._center.copy(), axis="")
         self._header(context)
@@ -940,7 +964,17 @@ class ANIMATICA_OT_handle_transform(bpy.types.Operator):
                 if h.name in self._names and h.ap_joint in self._snap["joints"]:
                     rot[h.name] = Ra @ self._snap["joints"][h.ap_joint][1]
             eff = effectors(self._arm, hs, self._snap, rot_over=rot)
-        self._error = solve(context, self._arm, eff, floor_cap(self._arm, self._snap))
+        self._error = solve(context, self._arm, eff, self._floor)
+        if not self._error:
+            # this frame as the edit leaves it, and the frames around it with it
+            self._carry.set_after({pb.name: pb.matrix_basis.copy() for pb in self._arm.pose.bones})
+            bases = self._carry.pose_at(self._f0)
+            for name in self._carry.edited:
+                self._arm.pose.bones[name].matrix_basis = bases[name]
+            context.view_layer.update()
+            if self._through:
+                from . import wormhole
+                wormhole.show_through(context, self._carry, self._bone)
         _drag["error"] = self._error
         context.area.tag_redraw()
 
@@ -973,6 +1007,10 @@ class ANIMATICA_OT_handle_transform(bpy.types.Operator):
         _guide.update(center=None, axis="")
         context.area.header_text_set(None)
         hs = {h.name: h for h in items(context.scene, self._arm)}
+        from . import key_poses, wormhole
+        keep = not cancel and self._through and self._carry.changed()
+        if not keep:
+            wormhole.end_through(context, None)
         if cancel:
             restore(self._arm, self._snap)
             for n, (en, rot) in self._was.items():
@@ -987,7 +1025,11 @@ class ANIMATICA_OT_handle_transform(bpy.types.Operator):
             for n in self._names:
                 if n in hs:
                     hs[n].ap_rot = True         # turned by hand: it keeps that turn
-        if context.scene.tool_settings.use_keyframe_insert_auto:
+        if keep:
+            n = wormhole.end_through(context, self._carry)
+            key_poses.flash_keyed(self._f0)
+            self.report({'INFO'}, wormhole.edit_report(self._carry, n))
+        elif context.scene.tool_settings.use_keyframe_insert_auto:
             key_pose(context, self._arm)
         context.area.tag_redraw()
         return {'FINISHED'}

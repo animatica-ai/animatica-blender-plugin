@@ -219,16 +219,64 @@ class Carry:
     def changed(self) -> bool:
         return bool(self.delta)
 
-    def weight(self, g) -> float:
+    def _key_weight(self, g) -> float:
+        """The share of the edit a frame that holds a key (or f0) is given."""
         from .curve_edit import falloff
         if g == self.f0:
             return 1.0
         return falloff(g - self.f0, self.radius) if self.radius > 0 else 0.0
 
+    def weight(self, g) -> float:
+        """The share of the edit frame ``g`` ends up with. A frame with a key
+        gets the falloff's share (its key is updated); a frame without one is
+        given no key, so it follows the curve between the keys either side --
+        f0's new one among them -- and that is what it shows here."""
+        keyed = self.keyed()
+        if g == self.f0 or g in keyed:
+            return self._key_weight(g)
+        prev = max((k for k in keyed | {self.f0} if k < g), default=None)
+        nxt = min((k for k in keyed | {self.f0} if k > g), default=None)
+        if prev is None and nxt is None:
+            return 0.0
+        if prev is None:                 # before the first key: it holds that key
+            return self._key_weight(nxt)
+        if nxt is None:
+            return self._key_weight(prev)
+        t = (g - prev) / float(nxt - prev)
+        t = t * t * (3.0 - 2.0 * t)      # an ease, as the curve's handles give
+        return self._key_weight(prev) * (1.0 - t) + self._key_weight(nxt) * t
+
+    def keyed(self) -> set:
+        """The frames that hold a key on the body's curves (the action's own)."""
+        k = getattr(self, "_keyed", None)
+        if k is None:
+            from . import constraints_ui
+            k = set()
+            if self.action is not None:
+                for fc in constraints_ui.iter_action_fcurves(self.action):
+                    bone = fc.data_path.split('"')[1] if fc.data_path.startswith('pose.bones["') else None
+                    if bone in self.edited:
+                        k.update(int(round(p.co.x)) for p in fc.keyframe_points)
+            self._keyed = k
+        return k
+
+    def span(self) -> tuple:
+        """``(lo, hi)``: the frames the edit can change, f0's reach and, on a
+        sparse take, out to the keys either side of it."""
+        keyed = self.keyed()
+        lo, hi = self.f0 - self.radius - 1, self.f0 + self.radius + 1
+        before = [k for k in keyed if k <= lo]
+        after = [k for k in keyed if k >= hi]
+        lo = max(before) if before else lo - 120
+        hi = min(after) if after else hi + 120
+        return lo, hi
+
     def frames(self) -> list:
-        """The frames the edit reaches, f0 left out."""
+        """The frames whose keys the edit updates, f0 left out: only those
+        that hold a key already -- an edit never adds one."""
+        keyed = self.keyed()
         return [g for g in range(self.f0 - self.radius, self.f0 + self.radius + 1)
-                if g != self.f0 and self.weight(g) > 1e-3]
+                if g != self.f0 and g in keyed and self._key_weight(g) > 1e-3]
 
     def original(self, g) -> dict:
         b = self._orig.get(g)
@@ -237,7 +285,11 @@ class Carry:
         return b
 
     def pose_at(self, g) -> dict:
-        """Frame ``g``'s bases with its share of the edit (all of it at f0)."""
+        """Frame ``g``'s bases with its share of the edit (all of it at f0).
+        A frame with no key gets none, and follows the curves through the new
+        keys: that is read off the curves themselves (see _probed)."""
+        if g != self.f0 and g not in self.keyed():
+            return self._probed(g)
         w = self.weight(g)
         orig = self.before if g == self.f0 else self.original(g)
         if w <= 1e-3 or not self.delta:
@@ -257,13 +309,70 @@ class Carry:
                 reach(self.rig, out, self.dragged, mats0[self.dragged].translation + self._dragged_move * w)
         return out
 
+    def _probed(self, g) -> dict:
+        """Frame ``g`` (no key there) as the curves will give it once the edit
+        is keyed. Blender's own interpolation decides that -- its handles bend
+        with the new keys -- so it is asked: the keys are written, the frames
+        read, and every curve put back exactly as it was, in one go."""
+        key = (self.radius, id(self.after))
+        if getattr(self, "_probe_key", None) != key:
+            self._probe_key, self._probe = key, None
+        if self._probe is None:
+            lo, hi = self.span()
+            keyed = self.keyed()
+            want = [f for f in range(lo, hi + 1) if f != self.f0 and f not in keyed]
+            self._probe = self._read_through_keys(want) if self.delta else {}
+        return self._probe.get(g) or self.original(g)
+
+    def _read_through_keys(self, frames) -> dict:
+        from . import constraints_ui, pose_edit
+        if self.action is None or not frames:
+            return {}
+        curves = {(fc.data_path, fc.array_index): fc for fc in constraints_ui.iter_action_fcurves(self.action)}
+        writes = [(self.f0, self.channels(self.pose_at(self.f0)))]
+        writes += [(k, self.channels(self.pose_at(k))) for k in self.frames()]
+        undo = []          # (fc, keyframe, None) for an added key; (fc, keyframe, (y, hl, hr)) for a changed one
+        touched = set()
+        try:
+            for frame, channels in writes:
+                for path, index, value in pose_edit._continuous_quaternions(self.action, frame, channels):
+                    fc = curves.get((path, index))
+                    if fc is None:
+                        continue
+                    kp = next((k for k in fc.keyframe_points if int(round(k.co.x)) == frame), None)
+                    if kp is None:
+                        if frame != self.f0:
+                            continue                 # an edit adds a key on its own frame only
+                        kp = fc.keyframe_points.insert(frame, value)
+                        undo.append((fc, frame, None))
+                    else:
+                        undo.append((fc, frame, (kp.co.y, kp.handle_left.y, kp.handle_right.y)))
+                        kp.co.y = value
+                        kp.handle_left.y = value
+                        kp.handle_right.y = value
+                    touched.add(fc)
+            for fc in touched:
+                fc.update()
+            return {f: bases_from_action(self.arm, self.action, f, self.names, self.before) for f in frames}
+        finally:
+            for fc, frame, was in reversed(undo):
+                kp = next((k for k in fc.keyframe_points if int(round(k.co.x)) == frame), None)
+                if kp is None:
+                    continue
+                if was is None:
+                    fc.keyframe_points.remove(kp)
+                else:
+                    kp.co.y, kp.handle_left.y, kp.handle_right.y = was
+            for fc in touched:
+                fc.update()
+
     # -- keying ------------------------------------------------------------
 
     def write(self) -> int:
         """Key f0 (into the take's motion where there is one, else as a key
-        pose) and the frames in reach as motion; the two
-        frames past the reach are fenced as they were, so the edit stays
-        inside it. Nothing is stepped. The frames keyed, f0 left out."""
+        pose) and update the keys already in reach with their share. No new
+        key is added anywhere else: a frame without one follows the curve.
+        Nothing is stepped. The frames updated, f0 left out."""
         from . import pose_edit
         arm = self.arm
         if arm.animation_data is None:
@@ -273,16 +382,13 @@ class Carry:
             arm.animation_data.action = self.action
         # capture everything first: a key written changes what the curves give
         reach_frames = self.frames()
-        lo, hi = self.f0 - self.radius, self.f0 + self.radius
-        fence = [g for g in (lo - 2, lo - 1, hi + 1, hi + 2)] if self.radius > 0 else []
-        fence += [g for g in range(lo, hi + 1) if g != self.f0 and g not in reach_frames]
         poses = {g: self.pose_at(g) for g in reach_frames}
-        poses.update({g: self.original(g) for g in fence})
         self.key_type = pose_edit.edit_key_type(arm, self.f0)    # before anything is written
         pose_edit.write_channels(self.action, self.f0, self.channels(self.pose_at(self.f0)), self.key_type,
                                  finish=False)
         for g, bases in sorted(poses.items()):
-            pose_edit.write_channels(self.action, g, self.channels(bases), 'GENERATED', finish=False)
+            pose_edit.write_channels(self.action, g, self.channels(bases), 'GENERATED', finish=False,
+                                     existing_only=True)
         pose_edit.finish_channels(self.action)
         return len(reach_frames)
 

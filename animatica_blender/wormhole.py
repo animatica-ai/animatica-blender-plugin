@@ -526,9 +526,10 @@ def _live_frames(context, c) -> list:
     s = _settings(context)
     if s is None or not key_poses.onion_wanted(context, s):
         return []
-    lo, hi = c.f0 - c.radius, c.f0 + c.radius
+    lo, hi = c.span()
     cur = context.scene.frame_current
-    return [f for f in key_poses.onion_frames(context.scene, s) if lo <= f <= hi and f != cur]
+    return [f for f in key_poses.onion_frames(context.scene, s)
+            if lo <= f <= hi and f != cur and (f == c.f0 or c.weight(f) > 1e-3)]
 
 
 def show_through(context, c, bone, *, force=False) -> None:
@@ -541,15 +542,16 @@ def show_through(context, c, bone, *, force=False) -> None:
     mw = c.arm.matrix_world
     # the motion trail's joints on every frame the edit reaches, where the
     # edit puts them: the trail bends with the drag, as the ghosts do
-    trail_frames = [f for f in key_poses._trail.get("frames") or ()
-                    if abs(f - c.f0) <= c.radius]
+    # (out to the keys either side on a sparse take: the frames between them
+    # follow the curve through the new key, past the reach too)
+    lo, hi = c.span()
+    moves = {g for g in range(lo, hi + 1) if g == c.f0 or c.weight(g) > 1e-3}
+    trail_frames = [f for f in key_poses._trail.get("frames") or () if f in moves]
     trail_bones = [b for b in key_poses._trail.get("bones") or () if b in c.rig.parent]
-    frames = set(trail_frames) | ({g for g in range(c.f0 - c.radius, c.f0 + c.radius + 1)
-                                   if g == c.f0 or c.weight(g) > 1e-3}
-                                  if bone in c.rig.parent and c.radius > 0 else set())
+    frames = set(trail_frames) | (moves if bone in c.rig.parent else set())
     for g in sorted(frames):
         mats = c.rig.fk(c.pose_at(g))
-        if bone in mats and (g == c.f0 or c.weight(g) > 1e-3) and c.radius > 0:
+        if bone in mats and g in moves:
             propagation["frames"][g] = mw @ mats[bone].translation
         if g in trail_frames:
             for b in trail_bones:
@@ -579,7 +581,7 @@ def end_through(context, c) -> int:
     n = c.write()
     # the ghosts stay as they are: outside the reach nothing changed, inside
     # it they were just captured -- only the rest of the reach is captured again
-    lo, hi = c.f0 - c.radius - 2, c.f0 + c.radius + 2
+    lo, hi = c.span()
     keep = {f: e for f, e in key_poses._onion["cache"].items() if not lo <= f <= hi}
     keep.update(key_poses._onion["live"])
     key_poses.seed_onion(keep)

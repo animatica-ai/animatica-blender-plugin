@@ -344,7 +344,7 @@ def _preview_from(arm, out):
 # Committing
 # ---------------------------------------------------------------------------
 
-def commit(arm, frame: int, out, key_type: str = 'KEYFRAME') -> int:
+def commit(arm, frame: int, out, key_type: str = 'KEYFRAME', *, existing_only: bool = False) -> int:
     """Write the solved pose into the rig's action at ``frame``.
 
     The solve is turned into the same ``matrix_basis`` the Autoposer would
@@ -384,7 +384,7 @@ def commit(arm, frame: int, out, key_type: str = 'KEYFRAME') -> int:
             channels += [
                 (f'pose.bones["{name}"].location', i, v) for i, v in enumerate(loc)
             ]
-    return pose_edit.write_channels(action, frame, channels, key_type)
+    return pose_edit.write_channels(action, frame, channels, key_type, existing_only=existing_only)
 
 
 # ---------------------------------------------------------------------------
@@ -650,7 +650,8 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
                                  whole_pose=whole)
             except Exception:                   # noqa: BLE001 -- one frame must not stop the stroke
                 continue
-            commit(self._arm, int(frame), out, 'GENERATED')   # carried along: motion, not key poses
+            # carried along: motion, not key poses, and only where a key already is
+            commit(self._arm, int(frame), out, 'GENERATED', existing_only=True)
             n += 1
         return n
 
@@ -766,12 +767,9 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             last, origin = getattr(self, "_last_target", None), getattr(self, "_origin", None)
             delta = last - origin if last is not None and origin is not None else None
             from . import pose_edit
-            key_type = pose_edit.edit_key_type(self._arm, frame)    # before the fence adds keys
-            if delta is not None and self._radius:
-                # the edit stays inside the reach: the pose just outside it is kept as
-                # it was -- captured before anything here is keyed
-                pose_edit.fence(self._arm, (frame - self._radius - 2, frame - self._radius - 1,
-                            frame + self._radius + 1, frame + self._radius + 2))  # two deep: auto handles settle
+            key_type = pose_edit.edit_key_type(self._arm, frame)
+            # the dragged frame is keyed; the frames around it only have the
+            # keys they already hold updated -- an edit adds no keys of its own
             written = commit(self._arm, frame, out, key_type)
             spread = self._spread(delta, whole) if delta is not None and self._radius else 0
             key_poses.flash_keyed(frame)
@@ -950,7 +948,7 @@ class ANIMATICA_OT_smooth_trail(bpy.types.Operator):
                 break
             # smoothing evens the motion out; it does not make key poses
             commit(arm, int(frames[i]), out, 'KEYFRAME' if frames[i] in key_poses.plan(context.scene)["frames"]
-                   else 'GENERATED')
+                   else 'GENERATED', existing_only=True)
             n += 1
         key_poses.invalidate_plan()
         key_poses.request_rebuild()

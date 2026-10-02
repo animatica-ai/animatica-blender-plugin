@@ -186,32 +186,6 @@ def _edited_bones(arm):
     return [pb for pb in arm.pose.bones if not pb.bone.hide]
 
 
-def fence(arm, frames) -> int:
-    """Key the pose as it is now at each of ``frames`` (as motion, not key
-    poses), in every channel: an edit spread over a stretch of
-    frames then stays inside it. Without the fence, the new keys reshape the
-    in-betweens all the way back to the next existing key -- frames well
-    outside the reach moved."""
-    scene = bpy.context.scene
-    action = _editing_action(arm)
-    if action is None:
-        return 0
-    # every channel, keyed there or not: a frame keyed in some channels and
-    # not others left the rest unfenced. Re-keying a key with its own value
-    # changes nothing (and a key pose stays one: write_channels keeps its type).
-    todo = list(frames)
-    saved = scene.frame_current
-    n = 0
-    try:
-        for f in todo:
-            scene.frame_set(f)
-            write_channels(action, f, pose_channels(arm), 'GENERATED')
-            n += 1
-    finally:
-        scene.frame_set(saved)
-    return n
-
-
 def edit_key_type(arm, frame) -> str:
     """How an edit at ``frame`` is keyed: 'GENERATED' where a take's motion
     already is (the edit reshapes the take, and the next Generate does not
@@ -274,7 +248,8 @@ def _continuous_quaternions(action, frame, channels) -> list:
     return out
 
 
-def write_channels(action, frame: int, channels, key_type: str = 'KEYFRAME', *, finish: bool = True) -> int:
+def write_channels(action, frame: int, channels, key_type: str = 'KEYFRAME', *, finish: bool = True,
+                   existing_only: bool = False) -> int:
     """Write ``(data_path, index, value)`` triples onto ``action`` at ``frame``.
 
     Goes through the F-curves directly rather than ``keyframe_insert`` for two
@@ -290,12 +265,19 @@ def write_channels(action, frame: int, channels, key_type: str = 'KEYFRAME', *, 
     from . import _bake_common, constraints_ui
 
     channels = _continuous_quaternions(action, frame, list(channels))
+    # ``existing_only``: update the keys that are there, add none -- what an
+    # edit does to the frames around the one it was made on
+    curves = ({(fc.data_path, fc.array_index): fc for fc in constraints_ui.iter_action_fcurves(action)}
+              if existing_only else None)
     written = 0
     for data_path, index, value in channels:
-        fc = constraints_ui._ensure_fcurve(action, data_path, index)
+        fc = (curves.get((data_path, index)) if existing_only
+              else constraints_ui._ensure_fcurve(action, data_path, index))
         if fc is None:
             continue
         kp = next((k for k in fc.keyframe_points if int(round(k.co.x)) == frame), None)
+        if kp is None and existing_only:
+            continue
         if kp is None:
             kp = fc.keyframe_points.insert(frame, value)
             kp.type = key_type
