@@ -1094,6 +1094,12 @@ def floor_height(arm, eff) -> float:
 #: how far (poser metres) under its lowest target the ground may be before a
 #: pose counts as in the air
 AIRBORNE = 0.5
+#: how high a joint stands off the floor (poser metres), to tell from a target
+#: where the feet must be
+_STANDS = {"Hips": 0.95, "Spine": 1.05, "Spine1": 1.15, "Spine2": 1.25, "Neck": 1.45, "Head": 1.6,
+           "LeftHand": 0.8, "RightHand": 0.8, "LeftForeArm": 1.05, "RightForeArm": 1.05,
+           "LeftLeg": 0.5, "RightLeg": 0.5, "LeftFoot": 0.08, "RightFoot": 0.08,
+           "LeftToeBase": 0.03, "RightToeBase": 0.03}
 
 
 def pose_on_ground(eng, arm, eff, **kw):
@@ -1109,9 +1115,12 @@ def pose_on_ground(eng, arm, eff, **kw):
         # put 6 m of nothing under it and the poser, which learned bodies near
         # their floor, answered with one turned upside down. Its floor goes
         # just under it instead.
-        low = [e["pos"][1] for e in eff if e.get("type") == "pos" and "pos" in e]
-        if low:
-            lift = max(lift, min(low) - AIRBORNE)
+        # where the feet are, near enough: each target less how high that joint
+        # stands off the floor (the hips held alone are a metre up, not in the air)
+        feet = [e["pos"][1] - _STANDS.get(str(e["joint"]).rsplit(":", 1)[-1], 0.9)
+                for e in eff if e.get("type") == "pos" and "pos" in e]
+        if feet:
+            lift = max(lift, min(feet) - AIRBORNE)
         if cap is not None:
             lift = min(lift, float(cap))
     if abs(lift) < 1e-4:

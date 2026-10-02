@@ -13,13 +13,31 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Added
 
-- **A floating toolbar in the viewport.** The tools you use most while
-  animating a sequence, as icons along the bottom of the viewport: step
-  between key poses, the Autoposer, Describe a pose, Set Key and Auto Key,
-  Waypoint and Pin, the prompt under the playhead, Generate (Accept, Redo,
-  the variations and Reject while a take waits), the ghosts, and the model.
-  Click the model to pick another or change the server. Anything the
-  connected model can't do is greyed out, here and in the sidebar.
+- **A floating toolbar in the viewport, in the order of the work.** Set
+  keys, Generate, Accept, then fine-tune, left to right on one bar: the
+  Autopose tool and the handle picker; step between key poses, Set Key and
+  Auto Key; Waypoint and Pin; the prompt under the playhead, with a button
+  inside the field that switches it to this frame's pose in words (Generate
+  becomes Generate Pose); Generate, or Accept, Redo, Key This Frame, the
+  variations and Reject while a take waits; the onion skin, the wormhole,
+  the trail and the reach of an edit; Options; the model. Anything the
+  connected model can't do is greyed out, here and in the sidebar. A hint
+  above the bar names the next step and why.
+- **The Autopose tool.** The Autoposer's handles on your character, no
+  control rig: drag one and the body follows, G and R with axis locks,
+  Blender's move gizmo on a picked handle, Ctrl-click to switch one on or
+  off, and Add Handle for elbows and knees.
+- **Onion skins and the wormhole.** The motion around this frame as ghosts
+  (Frames, Keyframes or All Keys, with Grease Pencil's controls), drawn
+  during playback too. The wormhole spreads them into a tunnel through time,
+  every frame an edit reaches, with the motion trail running through them;
+  each ghost can be posed where it is.
+- **Edits that carry through time.** Drag or turn a handle, on the
+  character, a ghost or a wormhole slice, and the frames around follow with
+  a falloff. Reach and Intensity are a curve on the bar you drag, and the
+  ghosts and the trail re-pose live as you edit. On a take an edit reshapes
+  its motion where it is keyed and adds no keyframes; the preview shows
+  exactly what the curves will give.
 - **Lock a block to keep its motion.** Accept keeps the take as your own
   action, keys you can edit, and locks the blocks it covered. Generate and
   Redo then leave a locked block as it is, and the blocks next to it are
