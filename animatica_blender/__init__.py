@@ -57,6 +57,7 @@ from . import picker
 from . import handles
 from . import wormhole
 from . import reach_widget
+from . import joint_lock
 from . import guidance
 
 
@@ -214,6 +215,7 @@ def register():
     handles.register()
     wormhole.register()
     reach_widget.register()
+    joint_lock.register()
     guidance.register()
     toolbar.register()
     picker.register()
@@ -248,6 +250,7 @@ def unregister():
     picker.unregister()
     toolbar.unregister()
     guidance.unregister()
+    joint_lock.unregister()
     reach_widget.unregister()
     wormhole.unregister()
     handles.unregister()

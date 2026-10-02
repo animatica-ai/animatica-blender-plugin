@@ -764,6 +764,8 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
             sub = layout.row()
             sub.active = False
             sub.label(text="Or click a point on the motion trail and drag it")
+        from . import joint_lock
+        joint_lock.draw_list(layout, arm)
         status = engine.status()
         if not (status["runtime"] and status["model"]):
             box = layout.box()

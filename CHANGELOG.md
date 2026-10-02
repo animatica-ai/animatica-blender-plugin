@@ -23,6 +23,13 @@ Proscenium, and keep the identifiers those releases actually shipped.
   zoetrope, the trail and the reach of an edit; Options; the model. Anything the
   connected model can't do is greyed out, here and in the sidebar. A hint
   above the bar names the next step and why.
+- **Lock in Place.** Pick a hand or foot (its trail point or its handle)
+  and the padlock on the bar holds it on one spot for a stretch of frames,
+  so a planted foot stops sliding. The span starts as the contact around
+  the playhead; move the mouse to set its end (Ctrl: its start), then click.
+  The leg bends to hold it, easing in and out, the hips untouched. Locks are
+  listed in the Pose panel; a new take over them is locked again, and a
+  drag inside one holds the locked joint.
 - **No Accept.** A take is yours when it arrives: while you judge it the
   bar offers Redo, Key This Frame, the variations and Discard (and Generate
   while blocks are left to make). Your first fine-tuning edit keeps it and

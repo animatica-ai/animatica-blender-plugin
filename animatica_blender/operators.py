@@ -1073,6 +1073,9 @@ def _bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int,
     if fixed:
         print("[animatica] pins put back on target: "
               + ", ".join(f"{j.split(':')[-1]}@{f} was {cm} cm off" for j, f, cm in fixed))
+    # Locks: a hand or foot locked in place over these frames holds again.
+    from . import joint_lock
+    joint_lock.reapply(arm, action, gen_start, gen_end)
     # Fingers: the model has none, so each hand gets its pose laid on.
     from . import hand_pose
     hand_pose.apply(arm, action, settings, (gen_start, gen_end))

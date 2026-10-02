@@ -199,6 +199,9 @@ class Carry:
         self.delta = {}
         self.dragged = dragged if dragged in ENDS_OF(arm) else ""
         self.held = [b for b in held if b in ENDS_OF(arm) and b != self.dragged]
+        # a joint locked on this frame is held too, or the drag moved it off its spot
+        from . import joint_lock
+        self.held += [b for b in joint_lock.held_at(arm, self.f0) if b != self.dragged and b not in self.held]
         self._orig = {}
         self._dragged_move = Vector()
 
