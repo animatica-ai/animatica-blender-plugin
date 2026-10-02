@@ -23,12 +23,14 @@ from bpy.props import StringProperty
 from . import ui_style as st
 
 WIDTH = 300.0          # logical px
-HEIGHT = 56.0
+HEIGHT = 72.0
+LABEL = 22.0           # the text's own row, above the curve
 GAP = 10.0             # above the floating bar (or its hint)
 GRIP = 7.0             # hit slop around an edge or the top
 PARTS = ("left", "right", "top")
 
-#: an edge drag keeps the scale it started with, so the edge stays under the mouse
+#: an edge drag reads the mouse at the scale it started with, so the reach
+#: grows at an even pace; the curve is drawn to fit the panel whatever it is
 _fixed = {"ppf": None}
 _hover: dict = {}
 
@@ -75,12 +77,14 @@ def geometry(context):
     shown = max(radius + 2, 6)
     w, h = WIDTH * u, HEIGHT * u
     cx = region.width / 2
-    ppf = _fixed["ppf"] or (w - 24 * u) / (2 * shown)
+    ppf = (w - 24 * u) / (2 * shown)              # always inside the panel
     x0, x1 = cx - w / 2, cx + w / 2
     y0 = top
-    base = y0 + 14 * u
-    return {"rect": (x0, y0, x1, y0 + h), "cx": cx, "base": base, "h": h - 24 * u,
-            "ppf": ppf, "shown": shown, "radius": radius, "strength": float(s.edit_strength), "u": u}
+    base = y0 + 12 * u
+    curve_h = (y0 + h) - LABEL * u - 4 * u - base
+    return {"rect": (x0, y0, x1, y0 + h), "cx": cx, "base": base, "h": curve_h,
+            "ppf": ppf, "read_ppf": _fixed["ppf"] or ppf, "shown": shown, "radius": radius,
+            "strength": float(s.edit_strength), "u": u}
 
 
 def _curve(g):
@@ -112,7 +116,10 @@ def draw(context, highlighted=True):
     st.rounded(g["rect"], 6 * u, (*st.GROUND[:3], 0.88))
     # frame ticks, the edited frame brighter
     ticks = []
+    every = next(k for k in (1, 2, 5, 10, 20) if k * g["ppf"] >= 4 * u or k == 20)   # never a comb
     for d in range(-g["shown"], g["shown"] + 1):
+        if d % every:
+            continue
         x = g["cx"] + d * g["ppf"]
         ticks.append(((x, g["base"] - (4 if d else 7) * u), (x, g["base"])))
     st.lines(ticks, max(1.0, u), (1, 1, 1, 0.22))
@@ -142,7 +149,7 @@ def draw(context, highlighted=True):
             if g["radius"] else "This frame only · drag an edge out to carry it")
     w = blf.dimensions(0, text)[0]
     blf.color(0, 1, 1, 1, 0.8)
-    blf.position(0, g["cx"] - w / 2, y1 - 11 * u, 0)
+    blf.position(0, g["cx"] - w / 2, y1 - LABEL * u + 5 * u, 0)
     blf.draw(0, text)
     gpu.state.blend_set('NONE')
 
@@ -233,7 +240,7 @@ class ANIMATICA_OT_reach_drag(bpy.types.Operator):
         s = _settings(context)
         self._was = (int(s.trail_radius), float(s.edit_strength))
         self._g = g
-        _fixed["ppf"] = g["ppf"]
+        _fixed["ppf"] = g["ppf"]          # read the mouse at this scale for the whole drag
         context.window_manager.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
@@ -246,7 +253,7 @@ class ANIMATICA_OT_reach_drag(bpy.types.Operator):
                 k = (event.mouse_region_y - g["base"]) / max(1.0, g["h"] * share)
                 s.edit_strength = max(0.0, min(1.0, k))
             else:
-                r = int(round(abs(event.mouse_region_x - g["cx"]) / g["ppf"] - 0.5))
+                r = int(round(abs(event.mouse_region_x - g["cx"]) / g["read_ppf"] - 0.5))
                 s.trail_radius = max(0, min(60, r))
             _redraw(context)
             return {'RUNNING_MODAL'}
