@@ -320,9 +320,10 @@ def _bar_items(context, arm) -> list:
     # a point on the trail picked: even out the motion around it
     if curve_edit.selected() is not None and key_poses.trail_on(s):
         out.append(Item("smooth", "smooth", "animatica.smooth_trail", group=8))
-    # a hand or foot picked: hold it on one spot for a stretch of frames
-    from . import joint_lock
-    if joint_lock.target(context) is not None:
+    # hold a hand or foot on one spot for a stretch of frames: always there once
+    # there is motion (it was hidden until a foot was picked, and not found)
+    from . import pose_edit
+    if pose_edit._editing_action(arm) is not None:
         out.append(Item("lock", "lock", "animatica.lock_joint", group=8))
     out.append(Item("options", "options", "animatica.toolbar_menu", {"menu": "ANIMATICA_PT_options"},
                     group=9))
@@ -536,7 +537,7 @@ def _shelf_lift(area, region) -> float:
 
 #: what goes first when even the compact bar does not fit, and where it is then:
 #: the Options popover beside Generate shows whatever was folded into it
-FOLD = ("lock", "smooth", "pin", "waypoint", "picker", "reach", "wormhole", "onion", "trail", "model", "auto_key",
+FOLD = ("smooth", "pin", "waypoint", "picker", "reach", "wormhole", "onion", "trail", "model", "auto_key",
         "key_steps", "autopose", "set_key")
 #: folded together: one without the other would be half a control
 _FOLD_TOGETHER = {"key_steps": ("key_prev", "key_next")}
@@ -1005,7 +1006,7 @@ TIPS = {
     "reach": ("Reach \u00b7 Intensity", "How far an edit spreads to the frames around it, and how strongly they follow. Drag sideways to set Reach (frames on either side) and up or down to set Intensity. A wide reach makes a smooth change through the motion, a narrow one makes a local fix. The ghosts and the Timeline update as you drag, and your next edit uses the new values"),
     "wormhole": ("Zoetrope", "Spread the onion skin out in space, earlier frames to the left and later ones to the right. Frames that overlap become readable side by side, and you can pose each one without moving the playhead"),
     "trail": ("Motion Trail", "Show the path of the hands, feet, hips and head. Good motion moves in arcs, and the trail shows where it doesn't. Click a point on it and drag, and the frames around it follow"),
-    "lock": ("Lock in Place", "Hold the picked hand or foot on one spot for a stretch of frames, so a planted foot stops sliding. It starts as the contact around the playhead; move the mouse to set the end (Ctrl: the start), then click. A new take over those frames is locked again"),
+    "lock": ("Lock in Place", "Hold a hand or foot on one spot for a stretch of frames, so a planted foot stops sliding. Click this, then click the foot. The frames start as the contact around the playhead; move the mouse to set the end (Ctrl: the start), then click. A new take over those frames is locked again"),
     "smooth": ("Smooth Motion Here", "Even out the picked joint's path around the picked point. Use it when a generated take wobbles. It fixes the arc without making a new take"),
     "waypoint": ("Add Waypoint", "Mark where the character should be at this frame. A prompt can say \u201cto the door\u201d, but only a waypoint says where the door is"),
     "pin": ("Pin a Hand or Foot", "Hold a hand or foot to a target, like a rail or a door handle, so the contact stays put instead of sliding"),

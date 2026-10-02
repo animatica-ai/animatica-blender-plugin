@@ -39,6 +39,9 @@ SEARCH = 90
 STILL_M = 0.012
 STILL_SHARE = 0.2
 STILL_MAX = 0.03
+#: events that move the view, let through while a hand or foot is picked
+_NAVIGATE = {'MIDDLEMOUSE', 'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'TRACKPADPAN', 'TRACKPADZOOM',
+             'MOUSEROTATE', 'MOUSESMARTZOOM', 'TIMER'}
 #: logical px of mouse travel per frame while the span is set
 PX_PER_FRAME = 6.0
 
@@ -236,10 +239,10 @@ def reapply(arm, action, lo, hi) -> int:
 # Drawing: the span being set, and the locks on the playhead
 # ---------------------------------------------------------------------------
 
-_preview = {"on": False, "points": [], "pos": None}
+_preview = {"on": False, "points": [], "pos": None, "pick": [], "hover": -1}
 _handle = [None]
 _LOCKED = (1.0, 0.78, 0.25, 1.0)
-_PATH = (1.0, 1.0, 1.0, 0.35)
+_PATH = (1.0, 1.0, 1.0, 0.55)
 
 
 def _draw():
@@ -253,7 +256,13 @@ def _draw():
         return
     mw = arm.matrix_world
     pts, hot = [], []
-    if _preview["on"]:
+    big = []
+    if _preview["pick"]:
+        # choosing: the hands and feet that can be locked, the one under the mouse lit
+        for i, p in enumerate(_preview["pick"]):
+            (big if i == _preview["hover"] else pts).append(tuple(mw @ p))
+        hot = big
+    elif _preview["on"]:
         for p, locked in _preview["points"]:
             (hot if locked else pts).append(tuple(mw @ p))
         if _preview["pos"] is not None:
@@ -267,7 +276,8 @@ def _draw():
     gpu.state.blend_set('ALPHA')
     gpu.state.depth_test_set('NONE')
     try:
-        for coords, color, size in ((pts, _PATH, 5.0), (hot, _LOCKED, 9.0)):
+        small = 12.0 if _preview["pick"] else 5.0
+        for coords, color, size in ((pts, _PATH, small), (hot, _LOCKED, 14.0 if big else 9.0)):
             if not coords:
                 continue
             gpu.state.point_size_set(size * ctx.preferences.system.ui_scale)
@@ -291,9 +301,9 @@ def _redraw(context):
 # ---------------------------------------------------------------------------
 
 class ANIMATICA_OT_lock_joint(bpy.types.Operator):
-    """Lock the picked hand or foot where it is at the playhead, for a stretch of frames.
-    Fixes a foot that slides while it should be planted. Move the mouse to set
-    the end (Ctrl: the start), then click"""
+    """Lock a hand or foot where it is at the playhead, for a stretch of frames.
+    Fixes a foot that slides while it should be planted. Click this, click the
+    foot, move the mouse to set how long (Ctrl: the start), then click"""
     bl_idname = "animatica.lock_joint"
     bl_label = "Lock in Place"
     bl_options = {'REGISTER', 'UNDO'}
@@ -310,17 +320,38 @@ class ANIMATICA_OT_lock_joint(bpy.types.Operator):
         return key_poses._target(key_poses._settings(context.scene)) is not None
 
     def invoke(self, context, event):
-        from . import key_poses, pose_edit
-        got = target(context)
-        if got is None:
-            self.report({'WARNING'}, "Pick a hand or foot first: its point on the motion trail, or its handle")
-            return {'CANCELLED'}
-        self.bone, self.frame = got
+        from . import carry, key_poses, pose_edit
         arm = key_poses._target(key_poses._settings(context.scene))
-        action = pose_edit._editing_action(arm)
+        action = pose_edit._editing_action(arm) if arm is not None else None
         if action is None:
-            self.report({'WARNING'}, "There is no motion to lock yet")
+            self.report({'WARNING'}, "There is no motion to lock yet. Generate a take or key some poses first")
             return {'CANCELLED'}
+        self._arm, self._action = arm, action
+        self._region, self._rv3d = context.region, context.region_data
+        context.window_manager.modal_handler_add(self)
+        got = target(context)
+        if got is None or self._rv3d is None:
+            # nothing picked: pick it here, by clicking the hand or foot itself
+            if self._rv3d is None:
+                self.report({'WARNING'}, "Click Lock in Place from the viewport's bar")
+                return {'CANCELLED'}
+            mats = carry.Rig(arm).fk({pb.name: pb.matrix_basis.copy() for pb in arm.pose.bones})
+            self._ends = [b for b in carry.ENDS_OF(arm)]
+            _preview.update(pick=[mats[b].translation.copy() for b in self._ends], hover=-1, on=False)
+            self._phase = "pick"
+            context.window.cursor_modal_set('EYEDROPPER')
+            if context.area:
+                context.area.header_text_set("Lock in Place   |   Click the hand or foot to lock   |   Esc: cancel")
+            _redraw(context)
+            return {'RUNNING_MODAL'}
+        self._begin_span(context, event, *got)
+        return {'RUNNING_MODAL'}
+
+    def _begin_span(self, context, event, bone, frame):
+        self.bone, self.frame = bone, int(frame)
+        arm, action = self._arm, self._action
+        _preview.update(pick=[], hover=-1)
+        self._phase = "span"
         self._path = Path(arm, action, self.bone, self.frame)
         self._name = label(arm, self.bone)
         self.frame_start, self.frame_end = initial_span(context, self._path, self.frame)
@@ -329,8 +360,22 @@ class ANIMATICA_OT_lock_joint(bpy.types.Operator):
         self._s0, self._e0 = self.frame_start, self.frame_end
         self._show(context)
         context.window.cursor_modal_set('SCROLL_X')
-        context.window_manager.modal_handler_add(self)
-        return {'RUNNING_MODAL'}
+
+    def _hovered(self, event) -> int:
+        from bpy_extras import view3d_utils
+        r = self._region
+        x, y = event.mouse_x - r.x, event.mouse_y - r.y
+        u = bpy.context.preferences.system.ui_scale
+        best, best_d = -1, 40.0 * u
+        mw = self._arm.matrix_world
+        for i, p in enumerate(_preview["pick"]):
+            xy = view3d_utils.location_3d_to_region_2d(r, self._rv3d, mw @ p)
+            if xy is None:
+                continue
+            d = ((xy.x - x) ** 2 + (xy.y - y) ** 2) ** 0.5
+            if d < best_d:
+                best, best_d = i, d
+        return best
 
     def _show(self, context):
         p = self._path
@@ -352,6 +397,27 @@ class ANIMATICA_OT_lock_joint(bpy.types.Operator):
             raise
 
     def _modal(self, context, event):
+        if self._phase == "pick":
+            if event.type in {'ESC', 'RIGHTMOUSE'} and event.value == 'PRESS':
+                self._end(context)
+                return {'CANCELLED'}
+            if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}:
+                h = self._hovered(event)
+                if h != _preview["hover"]:
+                    _preview["hover"] = h
+                    if context.area:
+                        context.area.header_text_set(
+                            f"Lock in Place   |   Click to lock the {label(self._arm, self._ends[h]).lower()}"
+                            if h >= 0 else "Lock in Place   |   Click the hand or foot to lock   |   Esc: cancel")
+                    _redraw(context)
+                return {'RUNNING_MODAL'}
+            if event.type == 'LEFTMOUSE' and event.value == 'PRESS':
+                h = self._hovered(event)
+                if h >= 0:
+                    self._begin_span(context, event, self._ends[h], context.scene.frame_current)
+                return {'RUNNING_MODAL'}
+            # turning and zooming the view to find the foot still work
+            return {'PASS_THROUGH'} if event.type in _NAVIGATE else {'RUNNING_MODAL'}
         u = context.preferences.system.ui_scale
         if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}:
             grab = "start" if event.ctrl else "end"
@@ -377,7 +443,7 @@ class ANIMATICA_OT_lock_joint(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
     def _end(self, context):
-        _preview.update(on=False, points=[], pos=None)
+        _preview.update(on=False, points=[], pos=None, pick=[], hover=-1)
         context.window.cursor_modal_restore()
         if context.area:
             context.area.header_text_set(None)
