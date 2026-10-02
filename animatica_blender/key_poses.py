@@ -1527,7 +1527,7 @@ def _onion_ranks(scene, settings) -> dict:
 def onion_look(settings, rank: int, n_side: int, frames_away: int | None = None):
     """``(rgb, alpha)`` of an onion skin ``rank`` key poses away (negative:
     before). Fade takes it down towards a quarter by the furthest one. In the
-    wormhole, ``frames_away`` from the playhead: the slice is as solid as the
+    zoetrope, ``frames_away`` from the playhead: the slice is as solid as the
     share of a drag it would take -- the falloff, drawn as the tunnel."""
     rgb = tuple(settings.onion_color_before if rank < 0 else settings.onion_color_after)
     alpha = float(settings.onion_opacity)
@@ -1638,7 +1638,7 @@ def playing() -> bool:
 def onion_frames(scene, settings) -> list[int]:
     """The frames the Frames-mode onion skin shows: Step apart, either side of
     the playhead (as Grease Pencil's, not cut to the scene's range). The
-    wormhole shows the frames within Reach instead -- the ones a drag here
+    zoetrope shows the frames within Reach instead -- the ones a drag here
     moves -- so what you see is what an edit carries."""
     c, step = int(scene.frame_current), max(1, int(settings.onion_step))
     if settings.onion_mode == 'FRAMES':
@@ -1655,7 +1655,7 @@ def onion_frames(scene, settings) -> list[int]:
 
 
 def wormhole_step(settings) -> int:
-    """Frames between wormhole slices: its Step, grown so a side never holds
+    """Frames between zoetrope slices: its Step, grown so a side never holds
     more than WORMHOLE_MAX_SIDE."""
     reach = max(1, int(settings.trail_radius))
     return max(int(settings.wormhole_step), math.ceil(reach / WORMHOLE_MAX_SIDE))
@@ -1675,7 +1675,7 @@ def _trail_live(name, frames, points):
 
 
 def _trail_warp(context, settings):
-    """In Pose with the wormhole on, ``frame -> offset`` that carries the
+    """In Pose with the zoetrope on, ``frame -> offset`` that carries the
     motion trail into the tunnel (None past the reach); else None, and the
     trail is drawn where the motion is."""
     if bar_mode(context) != 'POSE':

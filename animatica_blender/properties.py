@@ -997,8 +997,8 @@ class AnimaticaSettings(PropertyGroup):
         name="Reach",
         description=(
             "How many frames either side follow when you drag a point on the motion "
-            "trail, a handle or a wormhole slice, fading out with distance (0: that "
-            "frame only). The wormhole shows exactly these frames, and the Timeline the "
+            "trail, a handle or a zoetrope slice, fading out with distance (0: that "
+            "frame only). The zoetrope shows exactly these frames, and the Timeline the "
             "falloff. The mouse wheel changes it during a drag, as with proportional editing"
         ),
         default=6, min=0, max=60,
@@ -1055,7 +1055,7 @@ class AnimaticaSettings(PropertyGroup):
         update=lambda self, context: _redraw_3d_views(),
     )
     onion_wormhole: BoolProperty(
-        name="Wormhole",
+        name="Zoetrope",
         description=(
             "Spread the onion skins out into a tunnel instead of piling them on the character: "
             "the past one way, the future the other, receding into depth. Each has handles: "
@@ -1066,14 +1066,14 @@ class AnimaticaSettings(PropertyGroup):
     )
     wormhole_count: IntProperty(
         name="Slices",
-        description="(No longer used: the wormhole shows the frames within Reach)",
+        description="(No longer used: the zoetrope shows the frames within Reach)",
         default=5, min=1, max=12,
         options={'HIDDEN'},
     )
     wormhole_step: IntProperty(
         name="Step",
         description=(
-            "Frames between the wormhole's slices. It shows the frames within Reach, "
+            "Frames between the zoetrope's slices. It shows the frames within Reach, "
             "the ones a drag moves; past 12 a side the step grows so they stay readable"
         ),
         default=1, min=1, max=12,
@@ -1081,7 +1081,7 @@ class AnimaticaSettings(PropertyGroup):
     )
     wormhole_spacing: FloatProperty(
         name="Spacing",
-        description="How far apart the wormhole's slices are",
+        description="How far apart the zoetrope's slices are",
         default=0.22, min=0.05, max=3.0, subtype='DISTANCE', unit='LENGTH',
         update=lambda self, context: _redraw_3d_views(),
     )

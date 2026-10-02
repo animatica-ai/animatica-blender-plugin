@@ -69,7 +69,7 @@ PLACEHOLDER = "Describe what happens here…"
 #: the field's editing index while it holds the pose description, not a block's prompt
 POSE_FIELD = -2
 #: the buttons of the take slot, whose widths the prompt field gives way to
-TAKE_IDS = {"connect", "generate", "working", "accept", "redo", "keep", "var_prev", "var_label", "var_next",
+TAKE_IDS = {"connect", "generate", "working", "redo", "keep", "var_prev", "var_label", "var_next",
             "reject", "generate_pose"}
 EXPECTED_SECONDS = 30.0
 
@@ -326,7 +326,14 @@ def _review_items(context, arm, keyed) -> list:
     s = context.scene.animatica
     if not s.is_previewing or batch.pending(s) or batch.failures(s):
         return []
-    out = [Item("accept", "accept", "animatica.accept", label="Accept", primary=True, group=5),
+    # no Accept: the take is yours when it comes, fine-tuning it keeps it. What
+    # there is to decide: make the rest (Generate, when blocks are left),
+    # retry this one, or throw it away
+    out = []
+    if _more_to_make(context, arm):
+        out.append(Item("generate", "generate", "animatica.toolbar_generate", label="Generate",
+                        primary=True, group=5))
+    out += [
            # one Redo: the block under the playhead, Shift for the whole take
            Item("redo", "redo", "animatica.toolbar_redo", label="Redo", group=6),
            Item("keep", "set_key", "animatica.keep_frame", label="Key This Frame",
@@ -337,8 +344,20 @@ def _review_items(context, arm, keyed) -> list:
         out.append(Item("var_label", "", None, label=f"{take.index + 1}/{take.count}",
                         enabled=False, group=6))
         out.append(Item("var_next", "var_next", "animatica.show_variation", {"step": 1}, group=6))
-    out.append(Item("reject", "reject", "animatica.reject", label="Reject", group=7))
+    out.append(Item("reject", "reject", "animatica.reject", label="Discard", group=7))
     return out
+
+
+def _more_to_make(context, arm) -> bool:
+    """Whether there is a block the take did not cover (and nobody locked):
+    something left for Generate while the take is judged."""
+    s = context.scene.animatica
+    span = arm.get("animatica_take_range")
+    if span is None or len(span) < 2:
+        return False
+    lo, hi = int(span[0]), int(span[1])
+    return any(getattr(b, "enabled", True) and not b.locked and not (b.frame_start < hi and b.frame_end > lo)
+               for b in s.prompt_blocks)
 
 
 def _working(s):
@@ -427,9 +446,9 @@ def _take_width(u: float, size: float) -> float:
     Reject), or the longest single button. The prompt field gives up what
     the buttons of the moment do not use, so the bar keeps one length and
     no button moves under the mouse when a take arrives."""
-    review = (_plain_width("Accept", True, u, size) + _plain_width("Redo", True, u, size)
+    review = (_plain_width("Generate", True, u, size) + _plain_width("Redo", True, u, size)
               + _plain_width("Key This Frame", True, u, size) + GAP * u
-              + _plain_width("Reject", True, u, size) + 2 * GROUP_GAP * u)
+              + _plain_width("Discard", True, u, size) + 2 * GROUP_GAP * u)
     single = max(_plain_width(t, True, u, size)
                  for t in ("Generate · 99 keys", "Sign in to Generate", "Allow Online Access", "99 s  ·  Cancel"))
     return max(review, single)
@@ -954,7 +973,7 @@ TIPS = {
     "auto_key": ("Auto Keying", "Blender's record button. Why: on, every pose you make is kept; off, you choose what to keep with I"),
     "onion": ("Onion Skin", "The motion around this frame as ghosts: green before, blue after. Why: a key pose has to fit what comes before and after it. Mode, opacity, colours: Pose Options"),
     "reach": ("Reach \u00b7 Intensity", "How far an edit carries to the frames around it, and how strongly they follow. Drag sideways for Reach (frames either side), up or down for Intensity. Why: a wider reach makes a smooth change through the motion, a narrow one a local fix; the ghosts, the Timeline and the next edit follow as you drag"),
-    "wormhole": ("Wormhole", "The onion skin spread out into a tunnel through time: earlier to the left, later to the right. Why: frames that overlap become readable side by side, and each can be posed without moving the playhead"),
+    "wormhole": ("Zoetrope", "The onion skin spread out into a tunnel through time: earlier to the left, later to the right. Why: frames that overlap become readable side by side, and each can be posed without moving the playhead"),
     "trail": ("Motion Trail", "The path the hands, feet, hips and head take. Why: good motion moves in arcs; the trail shows where it does not. Click a point, then drag: the frames around it follow"),
     "smooth": ("Smooth Motion Here", "Even out the picked joint's path around the picked point. Why: a generated take can wobble; this fixes the arc without making a new take"),
     "waypoint": ("Add Waypoint", "Where the character should be at this frame. Why: a prompt can say \u201cto the door\u201d but not where the door is; a waypoint does"),
@@ -962,9 +981,8 @@ TIPS = {
     "prompt": ("Prompt", "What happens in the block under the playhead. Click and type. Why: one action per block (\u201cwalks to the door\u201d, then \u201csits\u201d) is followed more closely than several in one"),
     "generate": ("Generate", "Make the take. Why: one motion that goes through your key poses, follows your prompts and ends at your waypoints"),
     "working": ("Cancel", "Stop the take being made"),
-    "accept": ("Accept", "Keep this take. Why: its blocks are locked, so a later Generate leaves what you are happy with alone"),
     "redo": ("Redo", "Make the block under the playhead again (Shift: the whole take). Why: a different take, still steered through your key poses; Key This Frame first to keep a good moment"),
-    "reject": ("Reject", "Throw this take away and go back to what you had. Why: your key poses and prompts stay; change one and Generate again"),
+    "reject": ("Discard", "Throw this take away and go back to what you had. Why: your key poses and prompts stay; change one and Generate again. (There is no Accept: the take is yours, and fine-tuning it keeps it)"),
     "var_prev": ("Previous Version", "Show the take's previous version"),
     "var_next": ("Next Version", "Show the take's next version"),
     "options": ("Take Options", "Loop, in place, versions, and the Reach of a drag. Why: versions give you several takes to choose from in one go"),
@@ -1002,7 +1020,7 @@ def tip(context, it) -> str:
     elif it.id == "pose_prompt" and not it.enabled:
         line = _describe_blocker(context) or line
     elif it.id == "options" and pose_mode_on(context):
-        title, line = "Pose Options", ("Onion skin and wormhole, and whether a described pose stands on the "
+        title, line = "Pose Options", ("Onion skin and zoetrope, and whether a described pose stands on the "
                                        "ground. Why: onion skins show whether this pose fits the motion "
                                        "around it; standing on the ground stops a described pose floating")
     elif it.id in ("auto_key", "onion", "trail", "wormhole"):
@@ -1153,6 +1171,9 @@ class ANIMATICA_OT_toolbar_generate(bpy.types.Operator):
         return why[0] if why else "Make the take: motion from your prompts, key poses and waypoints"
 
     def invoke(self, context, event):
+        # the take being judged is kept first: Generate makes the rest
+        from .operators import keep_take
+        keep_take(context)
         return bpy.ops.animatica.generate('INVOKE_DEFAULT')
 
 
@@ -1312,7 +1333,7 @@ class ANIMATICA_PT_options(_Popover, bpy.types.Panel):
             # the frames an edit reaches: Reach is its range
             wormhole = s.onion_wormhole
             col.prop(s, "wormhole_step" if wormhole else "onion_step", text="Step")
-            col.prop(s, "onion_wormhole", text="Wormhole")
+            col.prop(s, "onion_wormhole", text="Zoetrope")
             if wormhole:
                 col.prop(s, "wormhole_spacing", text="Spacing")
         else:
@@ -1334,9 +1355,9 @@ class ANIMATICA_PT_options(_Popover, bpy.types.Panel):
 
 
 class ANIMATICA_OT_toolbar_wormhole(bpy.types.Operator):
-    """The wormhole: the onion skin spread out into a tunnel you can pose"""
+    """The zoetrope: the onion skin spread out into a tunnel you can pose"""
     bl_idname = "animatica.toolbar_wormhole"
-    bl_label = "Wormhole"
+    bl_label = "Zoetrope"
     bl_options = {'INTERNAL'}
 
     def invoke(self, context, event):
@@ -1756,7 +1777,7 @@ class ANIMATICA_PT_overlay(bpy.types.Panel):
             sub.prop(s, "onion_after", text="After")
         if s.onion_mode == 'FRAMES':
             split.prop(s, "onion_step", text="Step")
-            split.prop(s, "onion_wormhole", text="Wormhole")
+            split.prop(s, "onion_wormhole", text="Zoetrope")
         split.prop(s, "onion_opacity", text="Opacity", slider=True)
         split.prop(s, "onion_fade", text="Fade")
         split.prop(s, "onion_color_before", text="Before")

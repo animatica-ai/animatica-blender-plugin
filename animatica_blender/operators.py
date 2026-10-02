@@ -1537,6 +1537,27 @@ def _remove_orphan_takes(*, past_fake_user: bool = False) -> int:
     return len(gone)
 
 
+def keep_take(context) -> bool:
+    """A take still being judged is kept the moment it is worked on: an edit
+    on it, or the next Generate. It was Accept's job, a click that changed
+    nothing you could see; now the take is yours when it arrives, Redo and
+    Discard stay while you judge it, and fine-tuning it is the keeping.
+    True when a take was kept."""
+    s = getattr(context.scene, "animatica", None)
+    if s is None or not s.is_previewing or s.is_generating:
+        return False
+    try:
+        from . import batch
+        if batch.pending(s) or batch.failures(s):
+            return False
+    except Exception:                                   # noqa: BLE001
+        pass
+    try:
+        return bpy.ops.animatica.accept('EXEC_DEFAULT', promote=False) == {'FINISHED'}
+    except RuntimeError:
+        return False
+
+
 def _lock_take_blocks(settings, arm) -> int:
     """Lock the blocks the take on *arm* covered. Returns how many."""
     if arm is None:
@@ -1583,6 +1604,11 @@ class ANIMATICA_OT_accept(Operator):
     )
     bl_options = {'REGISTER', 'UNDO'}
 
+    #: keys changed while the take showed become key poses (KEYFRAME). Not when
+    #: the take is kept by fine-tuning it: those edits reshape the take, and
+    #: a key pose for each would steer the next Generate through every tweak
+    promote: bpy.props.BoolProperty(default=True, options={'HIDDEN', 'SKIP_SAVE'})
+
     @classmethod
     def poll(cls, context):
         s = context.scene.animatica
@@ -1612,7 +1638,8 @@ class ANIMATICA_OT_accept(Operator):
                 # does not read them as key poses; a later Reject restores its
                 # own copy of the action, which has them, instead of stripping
                 # GENERATED keys. Keys the artist typed over them are theirs.
-                preview_session.promote_edits(arm.animation_data.action)
+                if self.promote:
+                    preview_session.promote_edits(arm.animation_data.action)
                 # What the take shows is kept, as a normal Accept keeps it: the
                 # travel re-pathed onto an edited trajectory stays in the keys,
                 # the original keys kept for switching back go, and so does the
@@ -1654,7 +1681,8 @@ class ANIMATICA_OT_accept(Operator):
             session = preview_session.get(arm) or {}
             fill_end = max([int(context.scene.frame_end)]
                            + [int(f) for f in (session.get("frame_range") or [])[1:2]])
-            preview_session.promote_edits(preview_action)
+            if self.promote:
+                preview_session.promote_edits(preview_action)
             preview_session.forget_baseline(preview_action)
 
             # In place: the take is already in place if the toggle was on

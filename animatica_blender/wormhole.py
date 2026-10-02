@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The wormhole: the onion skin spread out in space, and posed where it lies.
+"""The zoetrope: the onion skin spread out in space, and posed where it lies.
 
 An onion skin draws each pose where the character was at that frame, so a
 take that stays in place -- a punch, a turn, a crouch -- piles every slice on
-the body and none can be read, let alone grabbed. The wormhole moves each
+the body and none can be read, let alone grabbed. The zoetrope moves each
 slice out along a time axis: the past one way, the future the other, both
 receding into depth, so the take reads as a tunnel through the frame you are
 on.
@@ -61,14 +61,14 @@ def _rv3d(context):
 
 
 def shown(context) -> bool:
-    """The wormhole: the onion skins spread out into the tunnel."""
+    """The zoetrope: the onion skins spread out into the tunnel."""
     from . import key_poses
     s = _settings(context)
     return bool(s is not None and s.onion_wormhole and key_poses.onion_wanted(context, s))
 
 
 def editable(context) -> bool:
-    """Whether the ghosts can be posed: the wormhole's slices, or the plain
+    """Whether the ghosts can be posed: the zoetrope's slices, or the plain
     onion skins (Frames) where they lie -- the same handles, offset or not."""
     from . import key_poses
     s = _settings(context)
@@ -337,7 +337,7 @@ class ANIMATICA_GT_wormhole(bpy.types.Gizmo):
 
 class ANIMATICA_GGT_wormhole(bpy.types.GizmoGroup):
     bl_idname = "ANIMATICA_GGT_wormhole"
-    bl_label = "Wormhole"
+    bl_label = "Zoetrope"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'WINDOW'
     bl_options = {'PERSISTENT', 'SCALE'}
@@ -360,7 +360,7 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
     Autoposer moves that frame's body, its switched-on handles holding. The frames around it
     follow with the falloff (wheel: how far). Keyed at that frame; the playhead stays where it is"""
     bl_idname = "animatica.wormhole_drag"
-    bl_label = "Pose a Wormhole Slice"
+    bl_label = "Pose a Zoetrope Slice"
     bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
 
     index: IntProperty(options={'HIDDEN', 'SKIP_SAVE'})
@@ -588,6 +588,8 @@ def end_through(context, c) -> int:
     carry.clear_live()
     key_poses.invalidate_plan()
     key_poses.request_rebuild()
+    from .operators import keep_take
+    keep_take(context)              # fine-tuning a take is keeping it
     return n
 
 
@@ -625,7 +627,7 @@ def clear_propagation() -> None:
 
 def draw_propagation(context, with_offsets: bool) -> None:
     """Where the dragged joint goes through time, in orange: a dot on each
-    frame within reach (on its slice in the wormhole), joined in frame order."""
+    frame within reach (on its slice in the zoetrope), joined in frame order."""
     if not propagation["frames"]:
         return
     region, rv3d = context.region, _rv3d(context)

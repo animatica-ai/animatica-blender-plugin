@@ -789,6 +789,8 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             key_poses.flash_keyed(frame)
             key_poses.invalidate_plan()
             key_poses.request_rebuild()
+            from .operators import keep_take
+            keep_take(context)          # fine-tuning a take is keeping it
             what = "whole pose moved" if whole else f"{_canonical(self._arm, self.bone)} moved"
             self.report({'INFO'}, f"{what} at frame {frame}"
                         + (f", and {spread} frames around it" if spread else "")
@@ -966,6 +968,8 @@ class ANIMATICA_OT_smooth_trail(bpy.types.Operator):
             n += 1
         key_poses.invalidate_plan()
         key_poses.request_rebuild()
+        from .operators import keep_take
+        keep_take(context)
         self.report({'INFO'}, f"Smoothed {_canonical(arm, bone)} over {n} frames")
         return {'FINISHED'}
 

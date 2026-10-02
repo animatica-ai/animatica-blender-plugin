@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """An Autoposer edit carried through time.
 
-A drag on a handle -- on the live character or on a wormhole slice -- is
+A drag on a handle -- on the live character or on a zoetrope slice -- is
 solved at its frame by the Autoposer, the whole body following, exactly as a
 single-frame edit is. What the solve changed, bone by bone (a turn and a
 move in each bone's own parent space), is then laid over the frames around

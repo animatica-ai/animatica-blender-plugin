@@ -2,7 +2,7 @@
 """The reach of an edit, on the floating bar: a falloff curve to drag.
 
 When a pose edit carries to the frames around it (the Autopose tool with
-onion skins or the wormhole on, or Auto Keying), how far it carries and how
+onion skins or the zoetrope on, or Auto Keying), how far it carries and how
 strongly were two numbers in a popover. On the bar they are a tile with the
 falloff drawn in it (toolbar._draw_reach): drag it sideways for Reach, up or
 down for Intensity. The ghosts' fade and the next edit follow as you drag;

@@ -379,6 +379,8 @@ def key_pose(context, arm) -> int:
                                  pose_edit.edit_key_type(arm, frame))
     key_poses.invalidate_plan()
     key_poses.flash_keyed(frame)
+    from .operators import keep_take
+    keep_take(context)              # fine-tuning a take is keeping it
     return n
 
 

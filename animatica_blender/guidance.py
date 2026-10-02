@@ -55,10 +55,10 @@ def next_step(context) -> dict | None:
     if s.is_previewing:
         out.append(dict(
             id="review",
-            text="Judge it: Accept keeps it \u00b7 Key This Frame saves a good moment \u00b7 Redo retries",
-            why="Accept keeps the take and locks its blocks, so a later Generate leaves it alone. "
-                "Key This Frame turns a frame you like into a key pose, so the next Redo goes "
-                "through it and keeps what was good. Redo makes the block again",
+            text="It's yours: fine-tune it with the handles \u00b7 Redo retries \u00b7 Discard throws it away",
+            why="There is nothing to accept: the take is in your scene. Your first edit on it keeps "
+                "it for good and locks its blocks, so a later Generate leaves them alone. Key This "
+                "Frame turns a frame you like into a key pose, so a Redo goes through it",
             op=None, props={}))
     elif in_take:
         # an accepted take under the playhead: fine-tune it
