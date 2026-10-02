@@ -194,6 +194,76 @@ def apply(arm, action, bone, start, end, pos, *, path=None) -> int:
     return n
 
 
+# ---------------------------------------------------------------------------
+# Non-destructive: what a lock changed is kept, and given back
+# ---------------------------------------------------------------------------
+
+def _chain_paths(arm, bone) -> list:
+    from . import pose_edit
+    pb = arm.pose.bones.get(bone)
+    out = []
+    while pb is not None and len(out) < 3:
+        out.append(f'pose.bones["{pb.name}"].{pose_edit._rotation_path(pb)}')
+        pb = pb.parent
+    return out
+
+
+def _curves_of(action, paths) -> dict:
+    from . import constraints_ui
+    want = set(paths)
+    return {(fc.data_path, fc.array_index): fc for fc in constraints_ui.iter_action_fcurves(action)
+            if fc.data_path in want}
+
+
+def capture(arm, action, bone, start, end) -> dict:
+    """The keys a lock on ``start``..``end`` may change, as they are now:
+    ``{"path|index": [[frame, y, hl_x, hl_y, hr_x, hr_y, interpolation, type], ...]}``,
+    and the channels that had no curve at all."""
+    lo, hi = start - EASE, end + EASE
+    paths = _chain_paths(arm, bone)
+    curves = _curves_of(action, paths)
+    keys, missing = {}, []
+    for path in paths:
+        for i in range(4):
+            fc = curves.get((path, i))
+            if fc is None:
+                missing.append(f"{path}|{i}")
+                continue
+            keys[f"{path}|{i}"] = [
+                [int(round(k.co.x)), k.co.y, k.handle_left.x, k.handle_left.y,
+                 k.handle_right.x, k.handle_right.y, k.interpolation, k.type]
+                for k in fc.keyframe_points if lo <= int(round(k.co.x)) <= hi]
+    return {"lo": lo, "hi": hi, "keys": keys, "missing": missing}
+
+
+def restore(arm, action, orig) -> None:
+    """Give back what a lock changed: the keys in its frames as ``capture``
+    found them, the keys it added gone."""
+    if not orig or action is None:
+        return
+    from . import constraints_ui
+    lo, hi = int(orig["lo"]), int(orig["hi"])
+    names = set(orig["keys"]) | set(orig.get("missing", ()))
+    for fcurves in constraints_ui._iter_fcurve_collections(action):
+        for fc in list(fcurves):
+            name = f"{fc.data_path}|{fc.array_index}"
+            if name not in names:
+                continue
+            kps = fc.keyframe_points
+            for j in range(len(kps) - 1, -1, -1):
+                if lo <= int(round(kps[j].co.x)) <= hi:
+                    kps.remove(kps[j])
+            for f, y, hlx, hly, hrx, hry, interp, kind in orig["keys"].get(name, ()):
+                k = kps.insert(f, y, options={'FAST'})
+                k.interpolation, k.type = interp, kind
+                k.handle_left_type = k.handle_right_type = 'FREE'
+                k.handle_left = (hlx, hly)
+                k.handle_right = (hrx, hry)
+            fc.update()
+            if len(kps) == 0:
+                fcurves.remove(fc)     # a curve the lock made, on a channel that had none
+
+
 def stored(arm) -> list:
     try:
         return list(json.loads(arm.get(PROP, "[]")))
@@ -205,18 +275,46 @@ def _store(arm, locks) -> None:
     arm[PROP] = json.dumps(locks)
 
 
-def add(arm, bone, start, end, pos) -> None:
-    # a new lock on the same joint replaces the ones it overlaps
-    locks = [lk for lk in stored(arm) if not (lk["bone"] == bone and lk["start"] <= end and lk["end"] >= start)]
-    locks.append({"bone": bone, "start": int(start), "end": int(end), "pos": [float(x) for x in pos]})
-    _store(arm, sorted(locks, key=lambda lk: (lk["start"], lk["bone"])))
-
-
-def remove(arm, index) -> None:
+def lock(arm, action, bone, start, end, pos, path=None) -> int:
+    """Lock ``bone`` on ``pos`` over ``start``..``end``, keeping what it
+    changes so the lock can be taken off again. A lock on the same joint that
+    overlaps is taken off first. The frames written (0: nothing locked)."""
+    for i in reversed([i for i, lk in enumerate(stored(arm))
+                       if lk["bone"] == bone and lk["start"] <= end + EASE and lk["end"] >= start - EASE]):
+        remove(arm, action, i)
+        path = None                     # the motion under it changed back
+    orig = capture(arm, action, bone, start, end)
+    n = apply(arm, action, bone, start, end, pos, path=path)
+    if not n:
+        restore(arm, action, orig)
+        return 0
     locks = stored(arm)
-    if 0 <= index < len(locks):
-        locks.pop(index)
-        _store(arm, locks)
+    locks.append({"bone": bone, "start": int(start), "end": int(end), "pos": [float(x) for x in pos],
+                  "orig": orig})
+    _store(arm, sorted(locks, key=lambda lk: (lk["start"], lk["bone"])))
+    return n
+
+
+def remove(arm, action, index) -> bool:
+    """Take a lock off: its frames as they were before it."""
+    locks = stored(arm)
+    if not 0 <= index < len(locks):
+        return False
+    restore(arm, action, locks[index].get("orig"))
+    locks.pop(index)
+    _store(arm, locks)
+    return True
+
+
+def relock(arm, action, index, start, end) -> int:
+    """Change a lock's frames: the motion given back, then locked again over
+    the new ones (from the original motion, not over the old lock)."""
+    locks = stored(arm)
+    if not 0 <= index < len(locks):
+        return 0
+    lk = locks[index]
+    remove(arm, action, index)
+    return lock(arm, action, lk["bone"], int(start), int(end), lk["pos"])
 
 
 def held_at(arm, frame) -> list:
@@ -228,10 +326,14 @@ def held_at(arm, frame) -> list:
 def reapply(arm, action, lo, hi) -> int:
     """After a new take: the locks over it hold again. The locks re-applied."""
     n = 0
-    for lk in stored(arm):
+    locks = stored(arm)
+    for lk in locks:
         if lk["bone"] in arm.pose.bones and lk["start"] <= hi and lk["end"] >= lo:
+            # the new take is the motion now: what taking the lock off gives back
+            lk["orig"] = capture(arm, action, lk["bone"], lk["start"], lk["end"])
             if apply(arm, action, lk["bone"], lk["start"], lk["end"], lk["pos"]):
                 n += 1
+    _store(arm, locks)
     return n
 
 
@@ -571,11 +673,10 @@ class ANIMATICA_OT_lock_joint(bpy.types.Operator):
         anchor = min(max(int(self.frame), start), end)
         path = Path(arm, action, self.bone, anchor, min(start, anchor) - EASE, max(end, anchor) + EASE)
         pos = path.at[anchor]
-        n = apply(arm, action, self.bone, start, end, pos, path=path)
+        n = lock(arm, action, self.bone, start, end, pos, path=path)
         if not n:
             self.report({'WARNING'}, f"{label(arm, self.bone)} could not be locked: it needs two parent bones (a leg or an arm)")
             return {'CANCELLED'}
-        add(arm, self.bone, start, end, pos)
         key_poses.invalidate_plan()
         key_poses.request_rebuild()
         from .operators import keep_take
@@ -585,9 +686,15 @@ class ANIMATICA_OT_lock_joint(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def _after_edit(context):
+    from . import key_poses
+    key_poses.invalidate_plan()
+    key_poses.request_rebuild()
+    _redraw(context)
+
+
 class ANIMATICA_OT_unlock_joint(bpy.types.Operator):
-    """Remove this lock. The motion stays as it is now, but a new take over
-    these frames is no longer locked"""
+    """Remove this lock and give these frames back their motion as it was before"""
     bl_idname = "animatica.unlock_joint"
     bl_label = "Remove Lock"
     bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
@@ -595,12 +702,55 @@ class ANIMATICA_OT_unlock_joint(bpy.types.Operator):
     index: bpy.props.IntProperty()
 
     def execute(self, context):
-        from . import key_poses
+        from . import key_poses, pose_edit
         arm = key_poses._target(key_poses._settings(context.scene))
         if arm is None:
             return {'CANCELLED'}
-        remove(arm, self.index)
-        _redraw(context)
+        locks = stored(arm)
+        if not 0 <= self.index < len(locks):
+            return {'CANCELLED'}
+        lk = locks[self.index]
+        remove(arm, pose_edit._editing_action(arm), self.index)
+        _after_edit(context)
+        self.report({'INFO'}, f"{label(arm, lk['bone'])} unlocked: frames {lk['start']}\u2013{lk['end']} "
+                              "are back as they were")
+        return {'FINISHED'}
+
+
+class ANIMATICA_OT_lock_range(bpy.types.Operator):
+    """Change which frames this lock holds. The motion is given back first, then
+    locked again over the new frames"""
+    bl_idname = "animatica.lock_range"
+    bl_label = "Lock Frames"
+    bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
+
+    index: bpy.props.IntProperty(options={'HIDDEN'})
+    frame_start: bpy.props.IntProperty(name="From")
+    frame_end: bpy.props.IntProperty(name="To")
+
+    def invoke(self, context, event):
+        from . import key_poses
+        arm = key_poses._target(key_poses._settings(context.scene))
+        locks = stored(arm) if arm is not None else []
+        if not 0 <= self.index < len(locks):
+            return {'CANCELLED'}
+        self.frame_start, self.frame_end = locks[self.index]["start"], locks[self.index]["end"]
+        return context.window_manager.invoke_props_dialog(self, width=220, title="Lock these frames")
+
+    def execute(self, context):
+        from . import key_poses, pose_edit
+        arm = key_poses._target(key_poses._settings(context.scene))
+        if arm is None or not 0 <= self.index < len(stored(arm)):
+            return {'CANCELLED'}
+        a, b = sorted((int(self.frame_start), int(self.frame_end)))
+        if b - a < 1:
+            self.report({'WARNING'}, "A lock needs at least two frames")
+            return {'CANCELLED'}
+        name = label(arm, stored(arm)[self.index]["bone"])
+        if not relock(arm, pose_edit._editing_action(arm), self.index, a, b):
+            return {'CANCELLED'}
+        _after_edit(context)
+        self.report({'INFO'}, f"{name} now locked on frames {a}\u2013{b}")
         return {'FINISHED'}
 
 
@@ -614,10 +764,11 @@ def draw_list(layout, arm) -> None:
     for i, lk in enumerate(locks):
         row = col.row(align=True)
         row.label(text=f"{label(arm, lk['bone'])}  {lk['start']}–{lk['end']}")
+        row.operator("animatica.lock_range", text="", icon='GREASEPENCIL').index = i
         row.operator("animatica.unlock_joint", text="", icon='X').index = i
 
 
-_classes = (ANIMATICA_OT_lock_joint, ANIMATICA_OT_unlock_joint)
+_classes = (ANIMATICA_OT_lock_joint, ANIMATICA_OT_unlock_joint, ANIMATICA_OT_lock_range)
 
 
 def register():
