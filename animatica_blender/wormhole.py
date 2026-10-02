@@ -77,11 +77,7 @@ def editable(context) -> bool:
 
 def _ranked(context, s):
     from . import key_poses
-    shown_frames = key_poses.onion_frames(context.scene, s)
-    c = context.scene.frame_current
-    before = [f for f in shown_frames if f < c]
-    after = [f for f in shown_frames if f > c]
-    return [(f, -(len(before) - i)) for i, f in enumerate(before)] + [(f, i + 1) for i, f in enumerate(after)]
+    return key_poses.onion_ranked(context.scene, s)
 
 
 def _hips(entry):
@@ -102,10 +98,8 @@ def offsets(context, s, ranked) -> dict:
         return {}
     if not s.onion_wormhole:
         return {f: Vector() for f, _r in ranked}        # plain onion skins: where they are
-    spacing = float(s.wormhole_spacing)
-    right = rv3d.view_rotation @ Vector((1.0, 0.0, 0.0))
-    into = rv3d.view_rotation @ Vector((0.0, 0.0, -1.0))
-    return {f: right * (r * spacing) + into * (abs(r) * spacing * DEPTH) for f, r in ranked}
+    at = offset_of(context, s)
+    return {f: at(f) for f, _r in ranked} if at is not None else {}
 
 
 def offset_of(context, s):
@@ -122,6 +116,30 @@ def offset_of(context, s):
     spacing = float(s.wormhole_spacing)
     right = rv3d.view_rotation @ Vector((1.0, 0.0, 0.0))
     into = rv3d.view_rotation @ Vector((0.0, 0.0, -1.0))
+    span = key_poses.loop_span(s)
+    if span is not None:
+        # a loop: the cycle round a ring, the frame you are on at the front --
+        # a zoetrope's drum, seen from just above
+        period = span[1] - span[0]
+        slices = max(4, len(key_poses.onion_frames(context.scene, s)) + 1)
+        radius = max(0.45, spacing * slices / (2 * math.pi))
+
+        # each slice spins in place: its travel along the ground taken out, so
+        # a walking cycle turns round the character instead of trailing off
+        here, where = _hips_now(context, s), _hips_by_frame(s)
+
+        def travel(frame):
+            p = where(frame)
+            if p is None or here is None:
+                return Vector()
+            d = p - here
+            d.z = 0.0
+            return d
+
+        def round_at(frame):
+            a = 2 * math.pi * key_poses.frames_from(frame, c, span) / period
+            return right * (radius * math.sin(a)) + into * (radius * (1 - math.cos(a))) - travel(frame)
+        return round_at
 
     def at(frame):
         d = frame - c
@@ -129,6 +147,35 @@ def offset_of(context, s):
             return None
         r = d / step
         return right * (r * spacing) + into * (abs(r) * spacing * DEPTH)
+    return at
+
+
+def _hips_now(context, s):
+    """The live character's hips (world), or None."""
+    from . import key_poses
+    from .autoposer import poser
+    arm = key_poses._target(s)
+    pb = poser.joint_pose_bone(arm, "Hips") if arm is not None else None
+    return (arm.matrix_world @ pb.head) if pb is not None else None
+
+
+def _hips_by_frame(s):
+    """``frame -> hips (world)`` from what is already captured: the onion
+    skin's joints, else the trail's hips."""
+    from . import key_poses
+    trail = key_poses._trail
+    name = next((b for b in trail.get("bones") or () if b.rsplit(":", 1)[-1].lower() in {"hips", "pelvis"}), None)
+    pts = trail.get("points", {}).get(name) if name else None
+    index = {f: i for i, f in enumerate(trail.get("frames") or ())}
+
+    def at(frame):
+        e = key_poses.onion_entry(frame)
+        if e and e.get("joints"):
+            h = _hips(e)
+            if h is not None:
+                return h
+        i = index.get(frame)
+        return Vector(pts[i]) if pts and i is not None and i < len(pts) else None
     return at
 
 

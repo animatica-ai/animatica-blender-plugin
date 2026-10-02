@@ -69,7 +69,7 @@ PLACEHOLDER = "Describe what happens here…"
 #: the field's editing index while it holds the pose description, not a block's prompt
 POSE_FIELD = -2
 #: the buttons of the take slot, whose widths the prompt field gives way to
-TAKE_IDS = {"connect", "generate", "working", "redo", "keep", "var_prev", "var_label", "var_next",
+TAKE_IDS = {"connect", "generate", "working", "redo", "keep", "var_prev", "var_label", "var_next", "loop",
             "reject", "generate_pose"}
 EXPECTED_SECONDS = 30.0
 
@@ -273,6 +273,12 @@ def _bar_items(context, arm) -> list:
     # 5-7 the take: Generate, or the take at work, or the take to judge
     kind, text, op = gate(context)
     busy = s.is_generating or s.is_previewing
+    # a loop is one way to make it, not a setting: beside Generate
+    model = mmcp_client.cached_model(s.model_id) or {}
+    if model.get("supports_loop") and not posing:
+        one = sum(1 for b in s.prompt_blocks if getattr(b, "enabled", True)) <= 1
+        out.append(Item("loop", "loop", "animatica.toolbar_toggle", {"name": "loop"}, on=bool(s.loop),
+                        enabled=(one or s.loop) and not s.is_generating, group=5))
     review = _review_items(context, arm, keyed)
     if kind in ("offline", "connect") and not busy:
         out.append(Item("connect", "connect", op, label=text, primary=True, group=5))
@@ -989,6 +995,7 @@ TIPS = {
     "add_char": ("Add a Character", "A ready-made rigged character to animate"),
     "use_rig": ("Use Selected Rig", "Animate the armature you have selected (or the one its mesh is bound to)"),
     "examples": ("Examples", "Open an example scene, ready to Generate"),
+    "loop": ("Loop", "The next take as a seamless cycle: its last frame runs into its first and it repeats. Why: a walk, a run or an idle for a game has to come round without a seam; edits on it keep it one, and the zoetrope shows it as a ring"),
     "pose_text": ("Pose This Frame in Words", "On: the field describes this frame's pose and Generate Pose makes it, keyed at the playhead. Off: back to the take's prompt and Generate. Why: a key pose you can say is quicker to type than to pose"),
     "pose_prompt": ("Describe a Pose", "A pose in words, keyed at the playhead. Click and type; Enter makes it. Why: a starting pose in seconds, to refine with the handles"),
     "generate_pose": ("Generate Pose", "Make the pose you described and key it at the playhead. Why: a starting pose in seconds, to refine with the handles"),
@@ -1007,6 +1014,8 @@ def tip(context, it) -> str:
         from . import handles
         if arm is not None and handles.tool_active(context):
             title, line = "Autopose (on)", "Back to Blender's Select tool; the pose and keys stay"
+    elif it.id == "loop" and not it.enabled:
+        line = "A loop is one block: remove or merge the others to make one. Why: the model samples one block as a cycle"
     elif it.id == "generate_pose":
         why = _describe_blocker(context)
         if why:
@@ -1131,6 +1140,9 @@ class ANIMATICA_OT_bar_click(bpy.types.Operator):
 # ---------------------------------------------------------------------------
 
 _TOGGLE_TIPS = {
+    "loop": "Loop: the next take is a seamless cycle, its last frame running into its first. "
+            "One block; walk and run cycles work best at two to four seconds. Edits on a loop "
+            "keep it a loop, and the zoetrope turns into a ring",
     "show_picker": "Handle picker: the character in T-pose with the Autoposer's handles on it. "
                    "Pick them, switch them on or off, set their slack, add or remove them",
     "auto_key_pose": "Auto-key: key the pose as you pose it. Off: only Set Key writes one",

@@ -1590,9 +1590,8 @@ def _keep_as_own_action(arm, take, source) -> None:
         source.use_fake_user = True
     take.name = name[:63]
     take.use_fake_user = False
-    for key in (_KEPT_KEY, "animatica_loop"):
-        if key in take:
-            del take[key]
+    if _KEPT_KEY in take:
+        del take[_KEPT_KEY]             # (a loop's record stays: edits keep it a loop)
 
 
 class ANIMATICA_OT_accept(Operator):
@@ -1690,8 +1689,9 @@ class ANIMATICA_OT_accept(Operator):
             if bool(getattr(s, "inplace", False)) and preview_action is not None:
                 _apply_inplace_constraint(arm, enabled=True)
 
-            loop = preview_action is not None and preview_action.get("animatica_loop") is not None
-            if preview_action is not None and _is_motion_bake_action(preview_action) and not loop:
+            # a loop too: kept as the artist's action, its Cycles repeat and its
+            # record of the cycle with it, so editing it keeps it a loop
+            if preview_action is not None and _is_motion_bake_action(preview_action):
                 # The take stays on the rig as the artist's own action: keys
                 # they can edit, locked against the next Generate.
                 _keep_inplace(arm, [preview_action])

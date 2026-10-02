@@ -1635,12 +1635,67 @@ def playing() -> bool:
     return False
 
 
+def loop_span(settings):
+    """``(start, cut)`` of the loop the rig plays -- its cycle is start..cut,
+    and cut is start again -- or None when it is not a loop."""
+    action = _action(_target(settings))
+    meta = action.get("animatica_loop") if action is not None else None
+    try:
+        lo, hi = int(round(float(meta["start"]))), int(round(float(meta["cut"])))
+    except (TypeError, KeyError, ValueError):
+        return None
+    return (lo, hi) if hi - lo >= 4 else None
+
+
+def loop_wrap(f, span) -> int:
+    """Frame ``f`` brought into the cycle."""
+    lo, hi = span
+    return lo + (int(f) - lo) % (hi - lo)
+
+
+def frames_from(f, c, span=None) -> int:
+    """Frames from ``c`` to ``f``, signed: in a loop the short way round."""
+    d = int(f) - int(c)
+    if span is None:
+        return d
+    p = span[1] - span[0]
+    d = (d + p // 2) % p - p // 2
+    return d
+
+
+def onion_ranked(scene, settings) -> list:
+    """``[(frame, rank)]`` of the onion skins on show: rank -1, -2... before
+    the playhead and 1, 2... after it (in a loop, the short way round)."""
+    span = loop_span(settings)
+    c = int(scene.frame_current)
+    shown = onion_frames(scene, settings)
+    keyed = sorted(shown, key=lambda f: frames_from(f, c, span))
+    before = [f for f in keyed if frames_from(f, c, span) < 0]
+    after = [f for f in keyed if frames_from(f, c, span) > 0]
+    return [(f, -(len(before) - i)) for i, f in enumerate(before)] + [(f, i + 1) for i, f in enumerate(after)]
+
+
 def onion_frames(scene, settings) -> list[int]:
     """The frames the Frames-mode onion skin shows: Step apart, either side of
     the playhead (as Grease Pencil's, not cut to the scene's range). The
     zoetrope shows the frames within Reach instead -- the ones a drag here
     moves -- so what you see is what an edit carries."""
     c, step = int(scene.frame_current), max(1, int(settings.onion_step))
+    span = loop_span(settings) if settings.onion_mode == 'FRAMES' else None
+    if span is not None:
+        # a loop: the zoetrope shows the whole cycle round its ring; the
+        # plain onion skins the Reach either side, round the seam
+        lo, hi = span
+        here = loop_wrap(c, span)
+        if settings.onion_wormhole:
+            step = max(int(settings.wormhole_step), math.ceil((hi - lo) / (2 * WORMHOLE_MAX_SIDE)))
+            frames = {lo + k * step for k in range(math.ceil((hi - lo) / step))}
+        else:
+            reach = max(1, int(settings.trail_radius))
+            step = max(step, math.ceil(reach / WORMHOLE_MAX_SIDE))
+            frames = {loop_wrap(c + k * step, span) for k in range(-max(1, reach // step), max(1, reach // step) + 1)}
+        frames.discard(here)
+        return sorted(frames, key=lambda f: frames_from(f, c, span))
     if settings.onion_mode == 'FRAMES':
         # the frames an edit here reaches, every Step: the ghosts are what a
         # drag will move (plain onion skins and the wormhole alike)
@@ -1818,11 +1873,10 @@ def _draw_onion_frames(settings, scene, scene_depth, xray) -> None:
     """The Frames-mode onion skins from the cache, faintest first -- during
     playback too."""
     current = scene.frame_current
-    shown = onion_frames(scene, settings)
-    before = [f for f in shown if f < current]
-    after = [f for f in shown if f > current]
-    ranked = [(f, -(len(before) - i)) for i, f in enumerate(before)] + \
-             [(f, i + 1) for i, f in enumerate(after)]
+    span = loop_span(settings)
+    ranked = onion_ranked(scene, settings)
+    before = [f for f, r in ranked if r < 0]
+    after = [f for f, r in ranked if r > 0]
     shader = _shader()
     offsets = {}
     if settings.onion_wormhole:
@@ -1837,7 +1891,8 @@ def _draw_onion_frames(settings, scene, scene_depth, xray) -> None:
         batches = onion_entry(frame)
         if batches is None:
             continue
-        rgb, alpha = onion_look(settings, r, len(before) if r < 0 else len(after), frame - current)
+        rgb, alpha = onion_look(settings, r, len(before) if r < 0 else len(after),
+                                frames_from(frame, current, span))
         moved = True
         gpu.matrix.push()
         # the wormhole: this slice out along the time axis; and a nudge behind the body

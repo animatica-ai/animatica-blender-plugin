@@ -179,6 +179,16 @@ class Carry:
             now = {pb.name: pb.matrix_basis.copy() for pb in arm.pose.bones}
             before = bases_from_action(arm, self.action, self.f0, self.names, now)
         self.before = {n: before[n].copy() for n in self.names}
+        # a loop: the edit is made on the cycle's own frames, round its seam,
+        # and its last frame kept its first again -- so it stays a loop
+        from . import key_poses
+        settings = getattr(context.scene, "animatica", None)
+        self.loop = key_poses.loop_span(settings) if settings is not None else None
+        self._wrapped = False
+        if self.loop is not None:
+            w = key_poses.loop_wrap(self.f0, self.loop)
+            self._wrapped = w != self.f0      # the playhead on a repeat of the cycle
+            self.f0 = w
         self.after = self.before
         self.base = self.before        # what the edit is measured from (see set_base)
         self.delta = {}
@@ -221,16 +231,22 @@ class Carry:
 
     def _key_weight(self, g) -> float:
         """The share of the edit a frame that holds a key (or f0) is given."""
+        from . import key_poses
         from .curve_edit import reach_weight
         if g == self.f0:
             return 1.0
-        return reach_weight(g - self.f0, self.radius) if self.radius > 0 else 0.0
+        d = key_poses.frames_from(g, self.f0, self.loop)
+        if d == 0:
+            return 1.0                       # the cycle's last frame is its first
+        return reach_weight(d, self.radius) if self.radius > 0 else 0.0
 
     def weight(self, g) -> float:
         """The share of the edit frame ``g`` ends up with. A frame with a key
         gets the falloff's share (its key is updated); a frame without one is
         given no key, so it follows the curve between the keys either side --
         f0's new one among them -- and that is what it shows here."""
+        if self.loop is not None:
+            return self._key_weight(g)       # a loop's frames are all keyed
         keyed = self.keyed()
         if g == self.f0 or g in keyed:
             return self._key_weight(g)
@@ -263,6 +279,8 @@ class Carry:
     def span(self) -> tuple:
         """``(lo, hi)``: the frames the edit can change, f0's reach and, on a
         sparse take, out to the keys either side of it."""
+        if self.loop is not None:
+            return self.loop
         keyed = self.keyed()
         lo, hi = self.f0 - self.radius - 1, self.f0 + self.radius + 1
         before = [k for k in keyed if k <= lo]
@@ -275,6 +293,13 @@ class Carry:
         """The frames whose keys the edit updates, f0 left out: only those
         that hold a key already -- an edit never adds one."""
         keyed = self.keyed()
+        if self.loop is not None:
+            from . import key_poses
+            lo, hi = self.loop
+            near = {key_poses.loop_wrap(g, self.loop) for g in range(self.f0 - self.radius, self.f0 + self.radius + 1)}
+            if lo in near or self.f0 == lo:
+                near.add(hi)                 # the last frame is the first again: kept so
+            return sorted(g for g in near if g != self.f0 and g in keyed and self._key_weight(g) > 1e-3)
         return [g for g in range(self.f0 - self.radius, self.f0 + self.radius + 1)
                 if g != self.f0 and g in keyed and self._key_weight(g) > 1e-3]
 
@@ -291,7 +316,9 @@ class Carry:
         if g != self.f0 and g not in self.keyed():
             return self._probed(g)
         w = self.weight(g)
-        orig = self.before if g == self.f0 else self.original(g)
+        # on a repeat of a loop the pose on show carries the cycles' travel:
+        # the loop's own frame is what is keyed
+        orig = self.before if (g == self.f0 and not self._wrapped) else self.original(g)
         if w <= 1e-3 or not self.delta:
             return orig
         out = dict(orig)
