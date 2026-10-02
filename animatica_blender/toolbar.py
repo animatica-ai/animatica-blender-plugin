@@ -70,6 +70,7 @@ PLACEHOLDER = "Describe what happens here…"
 POSE_FIELD = -2
 #: the buttons of the take slot, whose widths the prompt field gives way to
 TAKE_IDS = {"connect", "generate", "working", "redo", "keep", "var_prev", "var_label", "var_next", "loop",
+            *(f"var_{i}" for i in range(8)),
             "reject", "generate_pose"}
 EXPECTED_SECONDS = 30.0
 
@@ -351,10 +352,11 @@ def _review_items(context, arm, keyed) -> list:
                 enabled=not keyed, group=6)]
     take = variations.take_of(arm)
     if take is not None and take.count > 1:
-        out.append(Item("var_prev", "var_prev", "animatica.show_variation", {"step": -1}, group=6))
-        out.append(Item("var_label", "", None, label=f"{take.index + 1}/{take.count}",
-                        enabled=False, group=6))
-        out.append(Item("var_next", "var_next", "animatica.show_variation", {"step": 1}, group=6))
+        # one button per version, the one showing lit: any of them in one click
+        # (stepping through 4 with a counter was slow, and lost your place)
+        for i in range(min(take.count, 8)):
+            out.append(Item(f"var_{i}", "", "animatica.show_variation", {"index": i}, label=str(i + 1),
+                            on=i == take.index, group=6))
     out.append(Item("reject", "reject", "animatica.reject", label="Discard", group=7))
     return out
 
@@ -1109,6 +1111,10 @@ def tip(context, it) -> str:
             line += "\nClick to show the reason in the status bar"
         else:
             line += "\nClick to do it"
+    elif it.id.startswith("var_") and it.id[4:].isdigit():
+        title = f"Version {int(it.id[4:]) + 1}" + (" (showing)" if it.on else "")
+        line = ("Show this version of the take. All versions come from the same generation and keep your "
+                "key poses, so switching does not generate again. The one showing is the one you keep")
     elif it.id == "hint_close":
         title, line = "Hide this hint", "Hide it for the rest of the session. Turn hints on or off in Options"
     elif it.id == "model":
