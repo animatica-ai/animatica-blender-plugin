@@ -221,10 +221,10 @@ class Carry:
 
     def _key_weight(self, g) -> float:
         """The share of the edit a frame that holds a key (or f0) is given."""
-        from .curve_edit import falloff
+        from .curve_edit import reach_weight
         if g == self.f0:
             return 1.0
-        return falloff(g - self.f0, self.radius) if self.radius > 0 else 0.0
+        return reach_weight(g - self.f0, self.radius) if self.radius > 0 else 0.0
 
     def weight(self, g) -> float:
         """The share of the edit frame ``g`` ends up with. A frame with a key

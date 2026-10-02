@@ -56,6 +56,7 @@ from . import toolbar
 from . import picker
 from . import handles
 from . import wormhole
+from . import reach_widget
 from . import guidance
 
 
@@ -203,6 +204,7 @@ def register():
     variations.register()
     handles.register()
     wormhole.register()
+    reach_widget.register()
     guidance.register()
     toolbar.register()
     picker.register()
@@ -237,6 +239,7 @@ def unregister():
     picker.unregister()
     toolbar.unregister()
     guidance.unregister()
+    reach_widget.unregister()
     wormhole.unregister()
     handles.unregister()
     variations.unregister()

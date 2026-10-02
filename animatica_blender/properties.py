@@ -1004,6 +1004,16 @@ class AnimaticaSettings(PropertyGroup):
         default=6, min=0, max=60,
         update=lambda self, context: _redraw_3d_views(),
     )
+    edit_strength: FloatProperty(
+        name="Intensity",
+        description=(
+            "How strongly the frames around an edit follow it: 100% gives them the whole "
+            "falloff, 0% leaves them be and only the edited frame changes. The edited frame "
+            "always takes the whole edit. Drag the curve's top in the viewport to change it"
+        ),
+        default=1.0, min=0.0, max=1.0, subtype='FACTOR',
+        update=lambda self, context: _redraw_3d_views(),
+    )
     # Onion skin, in Pose -- Grease Pencil's own controls, in its words
     onion_mode: EnumProperty(
         name="Mode",

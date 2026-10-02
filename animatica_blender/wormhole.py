@@ -240,6 +240,13 @@ def draw(context, highlighted=True):
         if pb is not None:
             here[pb.name] = arm.matrix_world @ pb.head
     live = set() if hide_handles else {p[0] for p in _parts(context)}
+    # the reach control's panel: labels that would land on it are left out
+    try:
+        from . import reach_widget
+        g = reach_widget.geometry(context) if reach_widget.visible(context) else None
+        panel = g["rect"] if g else None
+    except Exception:                                   # noqa: BLE001
+        panel = None
     for f, r, off, joints in slices:
         rgb, _a = key_poses.onion_look(s, r, max(1, sum(1 for x in slices if (x[1] < 0) == (r < 0))))
         if f in live:
@@ -263,6 +270,9 @@ def draw(context, highlighted=True):
             text = str(f)
             w, h = blf.dimensions(0, text)
             x, y = co.x - w / 2, co.y - 16 * u
+            if panel and x + w + 4 * u >= panel[0] and x - 4 * u <= panel[2] \
+                    and y + h + 3 * u >= panel[1] and y - 3 * u <= panel[3]:
+                continue
             # a backing, as the trail's label: the slice's colour on a wall did not read
             st.rounded((x - 4 * u, y - 3 * u, x + w + 4 * u, y + h + 3 * u), 3 * u, (0.08, 0.08, 0.09, 0.8))
             blf.color(0, *rgb, 1.0)
@@ -273,6 +283,8 @@ def draw(context, highlighted=True):
     if hips is not None and slices and s.onion_wormhole:
         foot = hips - Vector((0, 0, hips.z - min(min(j.values(), key=lambda v: v.z).z for _f, _r, _o, j in slices)))
         co = view3d_utils.location_3d_to_region_2d(region, rv3d, foot)
+        if co is not None and panel and panel[0] <= co.x <= panel[2] and panel[1] <= co.y - 32 * u <= panel[3]:
+            co = None                   # the caption would sit on the reach control
         if co is not None:
             blf.size(0, 10 * u)
             text = "\u25c0 earlier  \u00b7  later \u25b6"

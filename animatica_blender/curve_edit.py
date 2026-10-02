@@ -403,12 +403,26 @@ def falloff(d: int, radius: int) -> float:
     return 3 * (1 - t) ** 2 - 2 * (1 - t) ** 3
 
 
+def reach_weight(d: int, radius: int) -> float:
+    """The share of an edit a frame ``d`` from the edited one gets: the
+    falloff over Reach, times Intensity for every frame but the edited one
+    (that one always takes the whole edit)."""
+    w = falloff(d, radius)
+    if d == 0:
+        return w
+    try:
+        k = float(bpy.context.scene.animatica.edit_strength)
+    except Exception:                           # noqa: BLE001
+        k = 1.0
+    return w * k
+
+
 def _bent(bone: str, index: int, delta: Vector, radius: int):
     """The dragged joint's trail with the move spread over the radius."""
     from . import key_poses
     points = key_poses._trail["points"].get(bone) or []
     lo, hi = max(0, index - radius - 1), min(len(points), index + radius + 2)
-    return [Vector(points[i]) + delta * falloff(i - index, radius) for i in range(lo, hi)]
+    return [Vector(points[i]) + delta * reach_weight(i - index, radius) for i in range(lo, hi)]
 
 
 def _draw():
@@ -642,7 +656,7 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         n = 0
         for i, frame in enumerate(frames):
             d = i - self._index
-            w = falloff(d, self._radius)
+            w = reach_weight(d, self._radius)
             if d == 0 or w <= 1e-3 or i >= len(points):
                 continue
             try:

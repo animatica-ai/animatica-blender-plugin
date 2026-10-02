@@ -889,7 +889,7 @@ def _draw_reach(g, fx):
         reach = idle_reach()
         if reach is None:
             return
-    from .curve_edit import falloff
+    from .curve_edit import reach_weight
     f0, radius = reach
     u = g.u
     y0, h = g.b0, (g.b1 - g.b0)
@@ -899,7 +899,7 @@ def _draw_reach(g, fx):
     fill = 0.3 if idle else 0.38
     pts = []
     for f in range(f0 - radius - 1, f0 + radius + 2):
-        w = falloff(f - f0, radius)
+        w = reach_weight(f - f0, radius)
         pts.append((f, fx(f), y0 + h * w))
     for (fa, xa, ya), (fb, xb, yb) in zip(pts, pts[1:]):
         if ya <= y0 + 0.5 and yb <= y0 + 0.5:

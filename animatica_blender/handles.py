@@ -1177,7 +1177,8 @@ class ANIMATICA_TL_autopose(bpy.types.WorkSpaceTool):
 
 
 def _ensure_gizmos():
-    for gg in (ANIMATICA_GGT_handles, ANIMATICA_GGT_handle_xform):
+    from . import reach_widget
+    for gg in (ANIMATICA_GGT_handles, ANIMATICA_GGT_handle_xform, reach_widget.ANIMATICA_GGT_reach):
         try:
             bpy.context.window_manager.gizmo_group_type_ensure(gg.bl_idname)
         except Exception:                                   # noqa: BLE001

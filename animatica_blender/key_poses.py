@@ -1519,8 +1519,8 @@ def onion_look(settings, rank: int, n_side: int, frames_away: int | None = None)
     rgb = tuple(settings.onion_color_before if rank < 0 else settings.onion_color_after)
     alpha = float(settings.onion_opacity)
     if frames_away is not None and settings.onion_wormhole:
-        from .curve_edit import falloff
-        w = falloff(frames_away, max(1, int(settings.trail_radius)))
+        from .curve_edit import reach_weight
+        w = reach_weight(frames_away, max(1, int(settings.trail_radius)))
         return rgb, alpha * (0.2 + 0.8 * w)
     if settings.onion_fade and n_side > 1:
         alpha *= 1.0 - 0.75 * (abs(rank) - 1) / (n_side - 1)
