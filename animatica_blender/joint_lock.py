@@ -239,65 +239,153 @@ def reapply(arm, action, lo, hi) -> int:
 # Drawing: the span being set, and the locks on the playhead
 # ---------------------------------------------------------------------------
 
-_preview = {"on": False, "points": [], "pos": None, "pick": [], "hover": -1}
+_preview = {"on": False, "points": [], "pos": None, "pick": [], "hover": -1,
+            "names": [], "span": None, "name": "", "say": ""}
 _handle = [None]
+_tl_handle = [None]
+
+
+def step_text() -> str:
+    """The step a lock being made is on, for the line above the bar ("" when none)."""
+    return _preview["say"]
 _LOCKED = (1.0, 0.78, 0.25, 1.0)
 _PATH = (1.0, 1.0, 1.0, 0.55)
 
 
+def _diamonds(verts, colors, tris, xy, r, color):
+    b = len(verts)
+    verts += [(xy.x, xy.y + r), (xy.x + r, xy.y), (xy.x, xy.y - r), (xy.x - r, xy.y)]
+    colors += [color] * 4
+    tris += [(b, b + 1, b + 2), (b, b + 2, b + 3)]
+
+
+def _text(x, y, text, color, size):
+    import blf
+    blf.size(0, size)
+    blf.color(0, *color)
+    blf.position(0, x, y, 0)
+    blf.draw(0, text)
+
+
 def _draw():
+    ctx = bpy.context
+    from bpy_extras import view3d_utils
+    from . import key_poses
+    try:
+        arm = key_poses._target(key_poses._settings(ctx.scene))
+    except Exception:                                   # noqa: BLE001
+        return
+    region, rv3d = ctx.region, ctx.region_data
+    if arm is None or region is None or rv3d is None:
+        return
+    mw = arm.matrix_world
+    px = ctx.preferences.system.ui_scale
+
+    def at(p):
+        return view3d_utils.location_3d_to_region_2d(region, rv3d, mw @ Vector(p))
+
+    verts, colors, tris, texts, line = [], [], [], [], []
+    if _preview["pick"]:
+        # 1 of 2: the hands and feet, named, the one under the mouse lit
+        for i, p in enumerate(_preview["pick"]):
+            xy = at(p)
+            if xy is None:
+                continue
+            lit = i == _preview["hover"]
+            _diamonds(verts, colors, tris, xy, (12.0 if lit else 8.0) * px, _LOCKED if lit else _PATH)
+            name = _preview["names"][i] if i < len(_preview["names"]) else ""
+            texts.append((xy.x + 14 * px, xy.y - 5 * px, name, _LOCKED if lit else (1, 1, 1, 0.9)))
+    elif _preview["on"]:
+        # 2 of 2: the path, the frames that will hold thick, the spot, the ends numbered
+        span = _preview["span"]
+        for p, locked in _preview["points"]:
+            xy = at(p)
+            if xy is None:
+                continue
+            if locked:
+                line.append((xy.x, xy.y, 0.0))
+            else:
+                _diamonds(verts, colors, tris, xy, 3.0 * px, _PATH)
+        if _preview["pos"] is not None:
+            xy = at(_preview["pos"])
+            if xy is not None:
+                _diamonds(verts, colors, tris, xy, 10.0 * px, _LOCKED)
+                if span:
+                    texts.append((xy.x + 14 * px, xy.y + 8 * px,
+                                  f"{_preview['name']} stays here, {span[0]}\u2013{span[1]}", _LOCKED))
+    else:
+        # locked: on a frame a lock holds, its spot and what it is
+        f = ctx.scene.frame_current
+        for lk in stored(arm):
+            if lk["start"] <= f <= lk["end"]:
+                xy = at(lk["pos"])
+                if xy is None:
+                    continue
+                _diamonds(verts, colors, tris, xy, 7.0 * px, _LOCKED)
+                texts.append((xy.x + 11 * px, xy.y - 5 * px,
+                              f"{label(arm, lk['bone'])} locked {lk['start']}\u2013{lk['end']}", _LOCKED))
+    if not verts and not line and not texts:
+        return
+    gpu.state.blend_set('ALPHA')
+    try:
+        if len(line) >= 2:
+            sh = gpu.shader.from_builtin('POLYLINE_UNIFORM_COLOR')
+            sh.bind()
+            sh.uniform_float("viewportSize", (region.width, region.height))
+            sh.uniform_float("lineWidth", 6.0 * px)
+            sh.uniform_float("color", (*_LOCKED[:3], 0.9))
+            batch_for_shader(sh, 'LINE_STRIP', {"pos": line}).draw(sh)
+        if verts:
+            sh = gpu.shader.from_builtin('SMOOTH_COLOR')
+            sh.bind()
+            batch_for_shader(sh, 'TRIS', {"pos": verts, "color": colors}, indices=tris).draw(sh)
+        for x, y, text, color in texts:
+            _text(x, y, text, color, int(12 * px))
+    finally:
+        gpu.state.blend_set('NONE')
+
+
+def _draw_timeline():
+    """The locks in the Timeline and Dope Sheet: an orange band over each one's
+    frames, named; the one being made, brighter."""
     ctx = bpy.context
     from . import key_poses
     try:
         arm = key_poses._target(key_poses._settings(ctx.scene))
     except Exception:                                   # noqa: BLE001
         return
-    if arm is None:
+    region = ctx.region
+    if arm is None or region is None or not hasattr(region, "view2d"):
         return
-    mw = arm.matrix_world
-    pts, hot = [], []
-    big = []
-    if _preview["pick"]:
-        # choosing: the hands and feet that can be locked, the one under the mouse lit
-        for i, p in enumerate(_preview["pick"]):
-            (big if i == _preview["hover"] else pts).append(tuple(mw @ p))
-        hot = big
-    elif _preview["on"]:
-        for p, locked in _preview["points"]:
-            (hot if locked else pts).append(tuple(mw @ p))
-        if _preview["pos"] is not None:
-            hot.append(tuple(mw @ _preview["pos"]))
-    else:
-        f = ctx.scene.frame_current
-        hot = [tuple(mw @ Vector(lk["pos"])) for lk in stored(arm) if lk["start"] <= f <= lk["end"]]
-    if not pts and not hot:
-        return
-    # in screen space, as diamonds: GPU point size is ignored on Metal, and a
-    # marker to click should be the same size however far the camera is
-    from bpy_extras import view3d_utils
-    region, rv3d = ctx.region, ctx.region_data
-    if region is None or rv3d is None:
+    bands = [(lk["start"], lk["end"], f"{label(arm, lk['bone'])} locked", 0.35) for lk in stored(arm)]
+    if _preview["on"] and _preview["span"]:
+        a, b = _preview["span"]
+        bands.append((a, b, f"{_preview['name']}: locking", 0.7))
+    if not bands:
         return
     px = ctx.preferences.system.ui_scale
-    verts, colors, tris = [], [], []
-    small = 9.0 if _preview["pick"] else 3.5
-    for coords, color, size in ((pts, _PATH, small), (hot, _LOCKED, 12.0 if big else 6.0)):
-        for co in coords:
-            xy = view3d_utils.location_3d_to_region_2d(region, rv3d, co)
-            if xy is None:
-                continue
-            r = size * px
-            b = len(verts)
-            verts += [(xy.x, xy.y + r), (xy.x + r, xy.y), (xy.x, xy.y - r), (xy.x - r, xy.y)]
-            colors += [color] * 4
-            tris += [(b, b + 1, b + 2), (b, b + 2, b + 3)]
-    if not verts:
-        return
-    shader = gpu.shader.from_builtin('SMOOTH_COLOR')
+    top = region.height - 26 * px
+    h = 14 * px
+    verts, tris = [], []
+    sh = gpu.shader.from_builtin('UNIFORM_COLOR')
     gpu.state.blend_set('ALPHA')
     try:
-        shader.bind()
-        batch_for_shader(shader, 'TRIS', {"pos": verts, "color": colors}, indices=tris).draw(shader)
+        for a, b, text, alpha in bands:
+            x0 = region.view2d.view_to_region(a - 0.5, 0, clip=False)[0]
+            x1 = region.view2d.view_to_region(b + 0.5, 0, clip=False)[0]
+            if x1 < 0 or x0 > region.width:
+                continue
+            sh.bind()
+            sh.uniform_float("color", (*_LOCKED[:3], alpha))
+            batch_for_shader(sh, 'TRIS', {"pos": [(x0, top - h), (x1, top - h), (x1, top), (x0, top)]},
+                             indices=[(0, 1, 2), (0, 2, 3)]).draw(sh)
+            import blf
+            blf.size(0, int(10 * px))
+            tw = blf.dimensions(0, text)[0]
+            if tw + 8 * px <= x1 - max(x0, 0):
+                _text(max(x0, 0) + 4 * px, top - h + 3 * px, text, (0.1, 0.08, 0.02, 1.0), int(10 * px))
+            else:   # too narrow to hold its name: written after it
+                _text(x1 + 4 * px, top - h + 3 * px, text, _LOCKED, int(10 * px))
     finally:
         gpu.state.blend_set('NONE')
 
@@ -349,7 +437,11 @@ class ANIMATICA_OT_lock_joint(bpy.types.Operator):
                 return {'CANCELLED'}
             mats = carry.Rig(arm).fk({pb.name: pb.matrix_basis.copy() for pb in arm.pose.bones})
             self._ends = [b for b in carry.ENDS_OF(arm)]
-            _preview.update(pick=[mats[b].translation.copy() for b in self._ends], hover=-1, on=False)
+            _preview.update(pick=[mats[b].translation.copy() for b in self._ends], hover=-1, on=False,
+                            names=[label(arm, b).replace("Left ", "L ").replace("Right ", "R ")
+                                   for b in self._ends],
+                            say="Lock in Place \u00b7 1 of 2: click the hand or foot that should stay put "
+                                "\u00b7 Esc cancels")
             self._phase = "pick"
             context.window.cursor_modal_set('EYEDROPPER')
             if context.area:
@@ -362,7 +454,7 @@ class ANIMATICA_OT_lock_joint(bpy.types.Operator):
     def _begin_span(self, context, event, bone, frame):
         self.bone, self.frame = bone, int(frame)
         arm, action = self._arm, self._action
-        _preview.update(pick=[], hover=-1)
+        _preview.update(pick=[], hover=-1, names=[])
         self._phase = "span"
         self._path = Path(arm, action, self.bone, self.frame)
         self._name = label(arm, self.bone)
@@ -391,6 +483,11 @@ class ANIMATICA_OT_lock_joint(bpy.types.Operator):
 
     def _show(self, context):
         p = self._path
+        n = self.frame_end - self.frame_start + 1
+        _preview.update(span=(self.frame_start, self.frame_end), name=self._name,
+                        say=f"Lock in Place \u00b7 2 of 2: {self._name}, frames {self.frame_start}\u2013"
+                            f"{self.frame_end} ({n}) \u00b7 move the mouse \u2190\u2192 for the end, Ctrl for "
+                            "the start \u00b7 click to lock")
         _preview.update(on=True, pos=p.at.get(self.frame),
                         points=[(p.at[f], self.frame_start <= f <= self.frame_end)
                                 for f in range(max(p.lo, self.frame_start - 24), min(p.hi, self.frame_end + 24) + 1)])
@@ -455,7 +552,7 @@ class ANIMATICA_OT_lock_joint(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
     def _end(self, context):
-        _preview.update(on=False, points=[], pos=None, pick=[], hover=-1)
+        _preview.update(on=False, points=[], pos=None, pick=[], hover=-1, names=[], span=None, name="", say="")
         context.window.cursor_modal_restore()
         if context.area:
             context.area.header_text_set(None)
@@ -528,11 +625,16 @@ def register():
         bpy.utils.register_class(c)
     if _handle[0] is None:
         _handle[0] = bpy.types.SpaceView3D.draw_handler_add(_draw, (), 'WINDOW', 'POST_PIXEL')
+    if _tl_handle[0] is None:
+        _tl_handle[0] = bpy.types.SpaceDopeSheetEditor.draw_handler_add(_draw_timeline, (), 'WINDOW', 'POST_PIXEL')
 
 
 def unregister():
     if _handle[0] is not None:
         bpy.types.SpaceView3D.draw_handler_remove(_handle[0], 'WINDOW')
         _handle[0] = None
+    if _tl_handle[0] is not None:
+        bpy.types.SpaceDopeSheetEditor.draw_handler_remove(_tl_handle[0], 'WINDOW')
+        _tl_handle[0] = None
     for c in reversed(_classes):
         bpy.utils.unregister_class(c)

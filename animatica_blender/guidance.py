@@ -36,7 +36,14 @@ def next_step(context) -> dict | None:
     A first take comes quickest from a prompt alone, so the prompt and
     Generate come first and key poses are offered as the way to steer it
     (posing first meant a 225 MB download before anything moved)."""
-    from . import key_poses, mmcp_client, pose_edit, properties, waypoints
+    from . import joint_lock, key_poses, mmcp_client, pose_edit, properties, waypoints
+    step = joint_lock.step_text()
+    if step:
+        # a lock being made: the step it is on, where the eye is (the header
+        # line alone was missed, and the click looked like it did nothing)
+        return dict(id="lock_step", text=step, why="Lock in Place holds a hand or foot on one spot "
+                    "for the frames you choose, so a planted foot stops sliding. Esc cancels",
+                    op=None, props={})
     scene = context.scene
     s = scene.animatica
     arm = properties._live_armature(s.target_armature)
