@@ -174,42 +174,25 @@ _pose_job = {"on": False}
 
 
 def mode_of(context) -> str:
-    """The bar's mode: 'POSE' (this frame) or 'MOTION' (the take). A take
-    being made is Motion's; one waiting for review is either's -- both carry
-    its Accept and Reject, so posing a frame of it is a click away."""
-    s = context.scene.animatica
-    if s.is_generating and not _pose_job["on"]:
-        return 'MOTION'
-    if not s.is_generating:
-        _pose_job["on"] = False
-    return s.bar_mode
+    """One bar, no modes: kept for the code that still asks."""
+    return 'POSE'
 
 
 def pose_mode_on(context) -> bool:
-    return mode_of(context) == 'POSE'
+    return True
 
 
 def items(context, mode: str | None = None) -> list[Item]:
-    """The buttons for what is happening now, in groups left to right. Two
-    sets: Pose works on this frame, Motion on the take; ``mode`` asks for
-    one of them whatever the bar shows (to measure it)."""
+    """The buttons, in the order the work goes: pose and key the moments,
+    say where it goes, say what happens and Generate, judge the take, then
+    fine-tune it. One bar: nothing moves to another mode on the way."""
     from . import mmcp_client, properties
 
     s = context.scene.animatica
     arm = properties._live_armature(s.target_armature)
     if arm is None:
         return _setup_items(context)
-    mode = mode or mode_of(context)
-    locked = s.is_generating and not _pose_job["on"]
-
-    # the switch, first and always in the same place
-    out = [
-        Item("mode_pose", "mode_pose", "animatica.bar_mode", {"mode": 'POSE'}, label="Pose",
-             on=mode == 'POSE', enabled=not locked, group=0),
-        Item("mode_motion", "mode_motion", "animatica.bar_mode", {"mode": 'MOTION'}, label="Motion",
-             on=mode == 'MOTION', group=0),
-    ]
-    out += _pose_items(context, arm) if mode == 'POSE' else _motion_items(context, arm)
+    out = _bar_items(context, arm)
     # what makes it: the model, at the far end -- set up once, changed rarely
     if s.model_id not in ("", "NONE") and mmcp_client.cached_model(s.model_id) is not None:
         out.append(Item("model", "model", "animatica.toolbar_model", label=_short(s.model_id),
@@ -238,63 +221,90 @@ def _key_steps(group):
             Item("key_next", "key_next", "animatica.step_key_pose", {"direction": 'NEXT'}, group=group)]
 
 
-def _pose_items(context, arm) -> list:
-    """This frame: pose it (handles, or words), key it, see the key poses
-    either side."""
-    from . import key_poses, mmcp_client
-    from .autoposer import poser
+def _typing_pose() -> bool:
+    from .timeline_overlay import inline_edit_state as edit
+    return bool(edit["active"] and edit["index"] == POSE_FIELD)
+
+
+def _bar_items(context, arm) -> list:
+    """Set keyframes, Generate, Accept, then fine-tune: the groups in that
+    order. The take's own buttons (Generate, or Accept and Reject while one
+    waits) sit after the field that says what it is."""
+    from . import curve_edit, handles, key_poses, mmcp_client, wormhole
     s = context.scene.animatica
+    here = block_at(s, context.scene.frame_current)
     keyed = key_poses.keyed_here(context.scene)
+    n_keys = len(key_poses.take_keys(context.scene))
     autokey = bool(context.scene.tool_settings.use_keyframe_insert_auto)
-    prev, nxt = _key_steps(2)
-    from . import handles
     active = handles.tool_active(context)
+
+    def can(tool):
+        # greyed out when the connected model can't use it
+        return mmcp_client.tool_available(s.model_id, tool)
+
+    # 1 pose it
     out = [Item("autopose", "autopose", "animatica.toolbar_autoposer", on=active, group=1)]
     if active or handles.has(context.scene, arm):
         out.append(Item("picker", "picker", "animatica.toolbar_toggle", {"name": "show_picker"},
                         on=bool(s.show_picker), group=1))
-    out += [
-        prev]
+    # 2 key it
+    prev, nxt = _key_steps(2)
+    out.append(prev)
     if not s.is_previewing:
-        # a key, added: one look whatever the frame holds -- the Timeline's
-        # diamonds say which frames are keyed (in review, the take's Key This
-        # Frame does it)
+        # in review the take's Key This Frame does it
         out.append(Item("set_key", "set_key_add", "animatica.set_key_pose", group=2))
-    out += [
-        nxt,
-        # Blender's own record button: one record button, not two
-        Item("auto_key", "auto_key", "animatica.toolbar_autokey", on=autokey, rec=autokey, group=2),
-        Item("onion", "onion", "animatica.toolbar_overlay", {"part": "GHOSTS"},
-             on=key_poses.ghosts_on(s), group=3),
-        Item("wormhole", "wormhole", "animatica.toolbar_wormhole",
-             on=bool(s.onion_wormhole) and key_poses.ghosts_on(s) and s.onion_mode == 'FRAMES', group=3),
-    ]
-    # how far, and how strongly, an edit carries to the frames around it: there
-    # whenever one would (the Autopose tool with the ghosts on, or Auto Keying)
-    from . import wormhole
-    if active and (autokey or wormhole.editable(context)):
-        out.append(Item("reach", "", "animatica.reach_drag", {"part": "bar"}, group=3, width="reach"))
-    out += [
-        Item("pose_prompt", "", "animatica.toolbar_pose_prompt", label=(s.last_pose_prompt or "").strip(),
-             enabled=mmcp_client.tool_available(s.model_id, "describe"), group=4, width="field"),
-    ]
+    out += [nxt,
+            # Blender's own record button: one record button, not two
+            Item("auto_key", "auto_key", "animatica.toolbar_autokey", on=autokey, rec=autokey, group=2)]
+    # 3 where it goes
+    out += [Item("waypoint", "waypoint", "animatica.add_waypoint", enabled=can("waypoint"), group=3,
+                 badge=bool(_waypoint_hint(context))),
+            Item("pin", "pin", "animatica.add_effector_target", enabled=can("pin"), group=3)]
+    # 4 what happens: the block's prompt, and a pose of this frame in words at its end
+    out += [Item("prompt", "", "animatica.toolbar_prompt_here", label=_prompt_label(s, here),
+                 enabled=can("prompt"), group=4, width="field"),
+            Item("pose_text", "mode_pose", "animatica.toolbar_pose_prompt", on=_typing_pose(),
+                 enabled=can("describe") and not s.is_generating, group=4, width="field_btn")]
+    # 5-7 the take: Generate, or the take at work, or the take to judge
     kind, text, op = gate(context)
+    busy = s.is_generating or s.is_previewing
     review = _review_items(context, arm, keyed)
-    if s.is_generating:
+    if kind in ("offline", "connect") and not busy:
+        out.append(Item("connect", "connect", op, label=text, primary=True, group=5))
+    elif kind == "model" and not busy:
+        out.append(Item("generate", "model", op, label=text, primary=True, group=5))
+    elif kind == "sign_in" and not busy:
+        out.append(Item("generate", "generate", op, label=text, primary=True, group=5))
+    elif s.is_generating:
         out.append(_working(s))
     elif review:
-        out += review                         # a take waiting: the same Accept and Reject as Motion's
-    elif kind in ("offline", "connect"):
-        out.append(Item("connect", "connect", op, label=text, primary=True, group=5))
-    elif kind == "sign_in":
-        out.append(Item("generate", "generate", op, label=text, primary=True, group=5))
+        out += review
     else:
-        why = _describe_blocker(context)
-        words = (s.last_pose_prompt or "").strip()
-        out.append(Item("generate_pose", "generate", "animatica.toolbar_pose_generate",
-                        label="Generate Pose", primary=bool(words) and not why, enabled=not why, group=5))
-    out.append(Item("options", "options", "animatica.toolbar_menu", {"menu": "ANIMATICA_PT_pose_options"},
-                    group=8))
+        # blocked: the button says what is missing (short enough to read), the tooltip the rest
+        if kind == "blocked" and len(text) <= 24:
+            label = text
+        elif n_keys:
+            label = f"Generate · {n_keys} key{'s' if n_keys != 1 else ''}"
+        else:
+            label = "Generate"
+        out.append(Item("generate", "generate", "animatica.toolbar_generate", label=label,
+                        primary=kind == "ready", enabled=kind == "ready", group=5))
+    # 8 fine-tune it: see the motion around this frame, its path, and how far an edit carries
+    out += [
+        Item("onion", "onion", "animatica.toolbar_overlay", {"part": "GHOSTS"},
+             on=key_poses.ghosts_on(s), group=8),
+        Item("wormhole", "wormhole", "animatica.toolbar_wormhole",
+             on=bool(s.onion_wormhole) and key_poses.ghosts_on(s) and s.onion_mode == 'FRAMES', group=8),
+        Item("trail", "trail", "animatica.toolbar_overlay", {"part": "TRAIL"},
+             on=key_poses.trail_on(s), group=8),
+    ]
+    if active and (autokey or wormhole.editable(context)):
+        out.append(Item("reach", "", "animatica.reach_drag", {"part": "bar"}, group=8, width="reach"))
+    # a point on the trail picked: even out the motion around it
+    if curve_edit.selected() is not None and key_poses.trail_on(s):
+        out.append(Item("smooth", "smooth", "animatica.smooth_trail", group=8))
+    out.append(Item("options", "options", "animatica.toolbar_menu", {"menu": "ANIMATICA_PT_options"},
+                    group=9))
     return out
 
 
@@ -326,63 +336,6 @@ def _working(s):
     # a click on it cancels -- a Cancel beside it made the bar jump
     return Item("working", "cancel", "animatica.cancel", label=f"{int(elapsed)} s  ·  Cancel",
                 group=5, progress=1.0 - math.exp(-elapsed / EXPECTED_SECONDS))
-
-
-def _motion_items(context, arm) -> list:
-    """The take: getting around the key poses, the trail, where the
-    character goes, what happens, and the take itself."""
-    from . import batch, key_poses, mmcp_client, variations
-    s = context.scene.animatica
-    here = block_at(s, context.scene.frame_current)
-    keyed = key_poses.keyed_here(context.scene)
-    n_keys = len(key_poses.take_keys(context.scene))
-
-    def can(tool):
-        # greyed out when the connected model can't use it
-        return mmcp_client.tool_available(s.model_id, tool)
-
-    out = _key_steps(2) + [
-        Item("trail", "trail", "animatica.toolbar_overlay", {"part": "TRAIL"},
-             on=key_poses.trail_on(s), group=2),
-    ]
-    from . import curve_edit
-    # a point on the trail picked: even out the motion around it
-    out.append(Item("smooth", "smooth", "animatica.smooth_trail", group=2,
-                    enabled=curve_edit.selected() is not None and key_poses.trail_on(s)))
-    out += [
-        Item("waypoint", "waypoint", "animatica.add_waypoint", enabled=can("waypoint"), group=3,
-             badge=bool(_waypoint_hint(context))),
-        Item("pin", "pin", "animatica.add_effector_target", enabled=can("pin"), group=3),
-        Item("prompt", "", "animatica.toolbar_prompt_here", label=_prompt_label(s, here),
-             enabled=can("prompt"), group=4, width="field"),
-    ]
-    kind, text, op = gate(context)
-    # a take being made or waiting for review keeps its own buttons, whatever else is missing
-    busy = s.is_generating or s.is_previewing
-    if kind in ("offline", "connect") and not busy:
-        out.append(Item("connect", "connect", op, label=text, primary=True, group=5))
-    elif kind == "model" and not busy:
-        out.append(Item("generate", "model", op, label=text, primary=True, group=5))
-    elif kind == "sign_in" and not busy:
-        out.append(Item("generate", "generate", op, label=text, primary=True, group=5))
-    elif s.is_generating:
-        out.append(_working(s))
-    elif _review_items(context, arm, keyed):
-        out += _review_items(context, arm, keyed)
-    else:
-        # blocked: the button says what is missing (short enough to read), the tooltip the rest
-        if kind == "blocked" and len(text) <= 24:
-            label = text
-        elif n_keys:
-            label = f"Generate · {n_keys} key{'s' if n_keys != 1 else ''}"
-        else:
-            label = "Generate"
-        out.append(Item("generate", "generate", "animatica.toolbar_generate", label=label,
-                        primary=kind == "ready", enabled=kind == "ready", group=5))
-    # how the next take comes back (loop, in place, variations), beside the button that makes it
-    out.append(Item("options", "options", "animatica.toolbar_menu", {"menu": "ANIMATICA_PT_take_options"},
-                    group=8))           # its own group: the bar is as long in review as before
-    return out
 
 
 def _setup_items(context) -> list:
@@ -476,6 +429,8 @@ def _width(it: Item, u: float, size: float) -> float:
         return FIELD * u
     if it.width == "reach":
         return REACH * u
+    if it.width == "field_btn":
+        return BUTTON * u
     return _plain_width(it.label, bool(it.icon), u, size)
 
 
@@ -549,14 +504,6 @@ def layout(context, area, region):
     size, side, pad = TEXT_SIZE * u, BUTTON * u, PAD * u
     widths, gaps = _measure(its, u, size)
     total = sum(widths) + sum(gaps)
-    # one length in both modes: the switch, Generate and the model stay put
-    # under the mouse, and the field takes up the difference
-    if its[0].id == "mode_pose":
-        other = [it for it in items(context, 'MOTION' if its[0].on else 'POSE')
-                 if it.width not in ("hint", "hint_close")]
-        ow, og = _measure(other, u, size)
-        longest = max(total, sum(ow) + sum(og))
-        total += _grow_field(its, widths, longest - total)
     x0, x1 = _visible_span(area, region)
     room = x1 - x0 - 2 * pad
     gone = set()
@@ -738,7 +685,10 @@ def draw_bar(context, highlighted: bool = True) -> None:
             blf.draw(0, it.label)
             continue
         if it.width == "field":
-            _draw_field(it, rect, u, size, _hot(live, it), first, last)
+            # the field's ground runs on under its pose button: the button is inside it
+            btn = rects[i + 1][1] if i + 1 < len(rects) and rects[i + 1][0].width == "field_btn" else None
+            _draw_field(it, rect, u, size, _hot(live, it), first, last if btn is None else True,
+                        ground=(x0, y0, btn[2], y1) if btn else None)
             continue
         if it.width == "reach":
             _draw_reach(context, rect, u, size, _hot(live, it), first, last)
@@ -746,7 +696,17 @@ def draw_bar(context, highlighted: bool = True) -> None:
         hot = _hot(live, it)
         dim = not it.enabled and it.progress is None
         # hover lifts the segment itself: an outline round one segment of a strip read as a gap
-        if dim:
+        if it.width == "field_btn":
+            # inside the field, at its end: the field draws the ground; a soft
+            # square on hover, the accent while a pose is being typed
+            from .timeline_overlay import inline_edit_state as _edit
+            posing = _edit["active"] and _edit["index"] == POSE_FIELD
+            pad = 3 * u
+            if hot or posing:
+                st.rounded((x0 + pad, y0 + pad, x1 - pad, y1 - pad), (RADIUS - 2) * u,
+                           st.with_alpha(st.SOFT_ORANGE, 0.28) if posing else (1, 1, 1, 0.08))
+            color = None
+        elif dim:
             # unavailable reads as unavailable: hardly a tile, no colour of its own, no hover
             color = st.with_alpha(BUTTON_COLOR, 0.18)
         elif it.primary:
@@ -755,7 +715,8 @@ def draw_bar(context, highlighted: bool = True) -> None:
             color = st.ON_HOVER if hot else ON_COLOR
         else:
             color = st.TILE_HOVER if hot else BUTTON_COLOR
-        _rounded(shader, rect, RADIUS * u, color, left=first, right=last)
+        if color is not None:
+            _rounded(shader, rect, RADIUS * u, color, left=first, right=last)
         if it.progress is not None:
             # an estimate (no server progress in MMCP), in the accent, never an empty-looking stub
             w = (x1 - x0) * max(0.0, min(it.progress, 0.97))
@@ -842,17 +803,19 @@ def _draw_reach(context, rect, u, size, hot, first, last):
     blf.draw(0, text)
 
 
-def _draw_field(it, rect, u, size, hot, first, last):
+def _draw_field(it, rect, u, size, hot, first, last, ground=None):
     """The prompt, as a text field: inset, darker than the buttons, its text
-    from the left (or the placeholder, muted), cut to fit."""
+    from the left (or the placeholder, muted), cut to fit. ``ground``: the
+    whole field when a button sits inside its end (the text stays in ``rect``)."""
     from .timeline_overlay import inline_edit_state as edit
     x0, y0, x1, y1 = rect
     s = bpy.context.scene.animatica
-    pose = it.id == "pose_prompt"
-    typing = edit["active"] and edit["index"] == (
-        POSE_FIELD if pose else block_at(s, bpy.context.scene.frame_current))
-    st.rounded(rect, RADIUS * u, (0.07, 0.07, 0.075, 1.0 if it.enabled else 0.45), left=first, right=last)
-    st.outline(rect, RADIUS * u, max(1.0, u),
+    # the one field: the block's prompt, or -- typed from its pose button -- this frame's pose
+    pose = edit["active"] and edit["index"] == POSE_FIELD
+    typing = edit["active"] and edit["index"] in (POSE_FIELD, block_at(s, bpy.context.scene.frame_current))
+    box = ground or rect
+    st.rounded(box, RADIUS * u, (0.07, 0.07, 0.075, 1.0 if it.enabled else 0.45), left=first, right=last)
+    st.outline(box, RADIUS * u, max(1.0, u),
                st.with_alpha(st.SOFT_ORANGE, 0.9) if typing
                else (1, 1, 1, 0.05 if not it.enabled else 0.30 if hot else 0.12))
     if typing:
@@ -997,8 +960,7 @@ TIPS = {
     "add_char": ("Add a Character", "A ready-made rigged character to animate"),
     "use_rig": ("Use Selected Rig", "Animate the armature you have selected (or the one its mesh is bound to)"),
     "examples": ("Examples", "Open an example scene, ready to Generate"),
-    "mode_pose": ("Pose  (Alt M)", "Work on this frame: pose it with the handles or in words, key it, see the motion around it. Why: key poses decide the moments; Motion decides how to get between them"),
-    "mode_motion": ("Motion  (Alt M)", "Work on the take: what happens, where it goes, and Generate. Why: the prompts and waypoints say how to get from one key pose to the next"),
+    "pose_text": ("Pose This Frame in Words", "Describe a pose and it is made and keyed at the playhead. Why: a key pose you can say is quicker to type than to pose"),
     "pose_prompt": ("Describe a Pose", "A pose in words, keyed at the playhead. Click and type; Enter makes it. Why: a starting pose in seconds, to refine with the handles"),
     "generate_pose": ("Generate Pose", "Make the pose you described and key it at the playhead. Why: a starting pose in seconds, to refine with the handles"),
     "keep": ("Key This Frame", "Keep the take's pose here as a key pose. Why: the next Redo is steered through it, so a good moment survives the retry"),
@@ -1016,8 +978,6 @@ def tip(context, it) -> str:
         from . import handles
         if arm is not None and handles.tool_active(context):
             title, line = "Autopose (on)", "Back to Blender's Select tool; the pose and keys stay"
-    elif it.id == "mode_pose" and not it.enabled:
-        line = "The take is being made: Pose once it is here"
     elif it.id == "generate_pose":
         why = _describe_blocker(context)
         if why:
@@ -1252,8 +1212,7 @@ class ANIMATICA_OT_toolbar_model(bpy.types.Operator):
 
 _MENU_TIPS = {
     "ANIMATICA_MT_examples": "Open an example scene: a character, prompts and poses, ready to Generate",
-    "ANIMATICA_PT_take_options": "How the next take comes back (loop, in place, versions), and the Reach of a drag",
-    "ANIMATICA_PT_pose_options": "Onion skins either side, and whether a described pose stands on the ground",
+    "ANIMATICA_PT_options": "How the next take comes back, how far an edit carries, the onion skin and the trail",
 }
 
 
@@ -1301,89 +1260,66 @@ class _Popover:
     bl_ui_units_x = 13
 
 
-class ANIMATICA_PT_pose_options(_Popover, bpy.types.Panel):
-    bl_idname = "ANIMATICA_PT_pose_options"
-    bl_label = "Pose"
+class ANIMATICA_PT_options(_Popover, bpy.types.Panel):
+    bl_idname = "ANIMATICA_PT_options"
+    bl_label = "Options"
 
     def draw(self, context):
+        from . import mmcp_client
         s = context.scene.animatica
         layout = self.layout
+
+        def column():
+            col = layout.column()
+            col.use_property_split = True
+            col.use_property_decorate = False
+            return col
+        # the next take
+        layout.label(text="Next Take", icon='PLAY')
+        col = column()
+        model = mmcp_client.cached_model(s.model_id) or {}
+        if model.get("supports_loop"):
+            row = col.row()
+            row.active = len(s.prompt_blocks) == 1          # a loop is one block
+            row.prop(s, "loop", text="Loop" if row.active else "Loop (one block)")
+        col.prop(s, "inplace", text="In Place")
+        if int((model.get("limits") or {}).get("max_num_samples") or 1) > 1:
+            col.prop(s, "variations", text="Versions")
+        # fine-tuning
+        layout.separator()
+        layout.label(text="Edits", icon='POSE_HLT')
+        col = column()
+        col.prop(s, "trail_radius", text="Reach (frames)")
+        col.prop(s, "edit_strength", text="Intensity", slider=True)
+        col.prop(s, "pose_on_ground", text="Described Pose on Ground")
+        # seeing the motion
+        layout.separator()
         layout.label(text="Onion Skin", icon='ONIONSKIN_ON')
         layout.row().prop(s, "onion_mode", expand=True)
-        col = layout.column()
-        col.use_property_split = True
-        col.use_property_decorate = False
-        wormhole = s.onion_mode == 'FRAMES' and s.onion_wormhole
-        if s.onion_mode in {'FRAMES', 'KEYFRAMES'} and not wormhole:
+        col = column()
+        if s.onion_mode == 'FRAMES':
+            # the frames an edit reaches: Reach is its range
+            wormhole = s.onion_wormhole
+            col.prop(s, "wormhole_step" if wormhole else "onion_step", text="Step")
+            col.prop(s, "onion_wormhole", text="Wormhole")
+            if wormhole:
+                col.prop(s, "wormhole_spacing", text="Spacing")
+        else:
             sub = col.column(align=True)
             sub.prop(s, "onion_before", text="Before")
             sub.prop(s, "onion_after", text="After")
-        if s.onion_mode == 'FRAMES':
-            if not wormhole:
-                col.prop(s, "onion_step", text="Step")
-            col.prop(s, "onion_wormhole", text="Wormhole")
-            if wormhole:
-                # the wormhole shows the frames a drag reaches: Reach is its range
-                col.prop(s, "trail_radius", text="Reach (frames)")
-                col.prop(s, "edit_strength", text="Intensity", slider=True)
-                col.prop(s, "wormhole_step", text="Step")
-                col.prop(s, "wormhole_spacing", text="Spacing")
-        col.prop(s, "key_pose_trail", text="Motion Trail")
         col.prop(s, "onion_opacity", text="Opacity", slider=True)
         col.prop(s, "onion_fade", text="Fade")
         col.prop(s, "onion_color_before", text="Before")
         col.prop(s, "onion_color_after", text="After")
-        layout.separator()
-        layout.label(text="Described Pose")
-        layout.prop(s, "pose_on_ground", text="Stand on the Ground")
+        col.prop(s, "key_pose_trail", text="Motion Trail")
         layout.separator()
         layout.prop(s, "show_hints", text="Next-Step Hints")
         _draw_folded(layout, context)
-
-
-class ANIMATICA_OT_bar_mode(bpy.types.Operator):
-    bl_idname = "animatica.bar_mode"
-    bl_label = "Pose or Motion"
-    bl_options = {'INTERNAL'}
-
-    mode: bpy.props.EnumProperty(items=(('POSE', "Pose", ""), ('MOTION', "Motion", ""),
-                                        ('TOGGLE', "Toggle", "")), options={'HIDDEN'})
-
-    @classmethod
-    def description(cls, context, properties):
-        t, line = TIPS["mode_pose" if properties.mode == 'POSE' else "mode_motion"]
-        return line
-
-    def invoke(self, context, event):
-        return self.execute(context)
-
-    def execute(self, context):
-        s = context.scene.animatica
-        mode = self.mode
-        if mode == 'TOGGLE':
-            mode = 'MOTION' if mode_of(context) == 'POSE' else 'POSE'
-        if mode == 'POSE' and s.is_generating and not _pose_job["on"]:
-            self.report({'INFO'}, "The take is being made: Pose once it is here")
-            return {'CANCELLED'}
-        s.bar_mode = mode
-        _redraw_all(context)
-        return {'FINISHED'}
-
-
-class ANIMATICA_OT_switch_mode(bpy.types.Operator):
-    """Switch the floating bar between Pose (this frame) and Motion (the take)"""
-    bl_idname = "animatica.switch_mode"
-    bl_label = "Animatica: Switch Pose / Motion"
-    bl_options = {'REGISTER'}
-
-    @classmethod
-    def poll(cls, context):
-        from . import properties
-        s = getattr(context.scene, "animatica", None)
-        return s is not None and properties._live_armature(s.target_armature) is not None
-
-    def execute(self, context):
-        return bpy.ops.animatica.bar_mode('EXEC_DEFAULT', mode='TOGGLE')
+        layout.separator()
+        row = layout.row()
+        row.active = False
+        row.label(text="More: sidebar (N) \u2192 Animatica")
 
 
 class ANIMATICA_OT_toolbar_wormhole(bpy.types.Operator):
@@ -1498,38 +1434,6 @@ class ANIMATICA_OT_toolbar_pose_generate(bpy.types.Operator):
         seed = random.randint(1, 999999) if again else int(s.seed)
         return bpy.ops.animatica.generate_pose('EXEC_DEFAULT', prompt=text, seed=seed,
                                                on_ground=bool(s.pose_on_ground))
-
-
-class ANIMATICA_PT_take_options(_Popover, bpy.types.Panel):
-    bl_idname = "ANIMATICA_PT_take_options"
-    bl_label = "Next Take"
-
-    def draw(self, context):
-        from . import mmcp_client
-        s = context.scene.animatica
-        layout = self.layout
-        col = layout.column()
-        col.use_property_split = True
-        col.use_property_decorate = False
-        model = mmcp_client.cached_model(s.model_id) or {}
-        if model.get("supports_loop"):
-            row = col.row()
-            row.active = len(s.prompt_blocks) == 1          # a loop is one block
-            row.prop(s, "loop", text="Loop" if row.active else "Loop (one block)")
-        col.prop(s, "inplace", text="In Place")
-        if int((model.get("limits") or {}).get("max_num_samples") or 1) > 1:
-            col.prop(s, "variations", text="Versions")
-        layout.separator()
-        col = layout.column()
-        col.use_property_split = True
-        col.use_property_decorate = False
-        col.prop(s, "trail_radius", text="Reach (frames)")
-        layout.prop(s, "show_hints", text="Next-Step Hints")
-        _draw_folded(layout, context)
-        layout.separator()
-        row = layout.row()
-        row.active = False
-        row.label(text="More: sidebar (N) → Animatica")
 
 
 class ANIMATICA_OT_use_selected_rig(bpy.types.Operator):
@@ -1833,12 +1737,12 @@ class ANIMATICA_PT_overlay(bpy.types.Panel):
 # ---------------------------------------------------------------------------
 
 _classes = (ANIMATICA_OT_toolbar_toggle, ANIMATICA_OT_toolbar_generate, ANIMATICA_OT_toolbar_redo,
-            ANIMATICA_OT_toolbar_autoposer, ANIMATICA_OT_bar_mode, ANIMATICA_OT_toolbar_pose_prompt,
-            ANIMATICA_OT_switch_mode, ANIMATICA_OT_toolbar_autokey, ANIMATICA_OT_toolbar_overlay,
+            ANIMATICA_OT_toolbar_autoposer, ANIMATICA_OT_toolbar_pose_prompt,
+ANIMATICA_OT_toolbar_autokey, ANIMATICA_OT_toolbar_overlay,
             ANIMATICA_OT_toolbar_wormhole, ANIMATICA_PT_overlay,
-            ANIMATICA_OT_toolbar_pose_generate, ANIMATICA_PT_pose_options,
+            ANIMATICA_OT_toolbar_pose_generate, ANIMATICA_PT_options,
             ANIMATICA_MT_toolbar_models, ANIMATICA_OT_toolbar_model,
-            ANIMATICA_OT_toolbar_menu, ANIMATICA_PT_take_options, ANIMATICA_OT_use_selected_rig,
+            ANIMATICA_OT_toolbar_menu, ANIMATICA_OT_use_selected_rig,
             ANIMATICA_OT_toolbar_prompt_here, ANIMATICA_OT_bar_prompt_edit, ANIMATICA_OT_bar_click,
             ANIMATICA_GT_toolbar_bar, ANIMATICA_GGT_toolbar)
 _NS = "_animatica_toolbar_handle"            # an older copy drew from a handler
@@ -1868,11 +1772,6 @@ def register():
             pass
     if not bpy.app.timers.is_registered(_tick):
         bpy.app.timers.register(_tick, first_interval=1.0, persistent=True)
-    # Alt M: Pose / Motion -- an add-on keymap entry, so Preferences > Keymap can change it
-    kc = bpy.context.window_manager.keyconfigs.addon
-    if kc is not None:
-        km = kc.keymaps.new(name="3D View", space_type='VIEW_3D')
-        _keymaps.append((km, km.keymap_items.new(ANIMATICA_OT_switch_mode.bl_idname, 'M', 'PRESS', alt=True)))
 
 
 _keymaps: list = []

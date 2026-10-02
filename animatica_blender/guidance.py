@@ -30,77 +30,70 @@ def _seconds(scene, frames: int) -> float:
 
 
 def next_step(context) -> dict | None:
-    """``{id, text, why, op, props}`` for the hint to show now, or None."""
-    from . import key_poses, properties, toolbar, waypoints
+    """``{id, text, why, op, props}`` for the hint to show now, or None.
+
+    The work goes: key the moments, say what happens, Generate, judge the
+    take and Accept it, then fine-tune it by hand. Each hint is the next of
+    those still to do here."""
+    from . import key_poses, pose_edit, properties, waypoints
     scene = context.scene
     s = scene.animatica
     arm = properties._live_armature(s.target_armature)
     if arm is None or s.is_generating:
         return None
-    mode = toolbar.mode_of(context)
     keys = key_poses.take_keys(scene)
     blocks = [b for b in s.prompt_blocks if b.enabled]
+    text_all = " ".join((b.prompt or "") for b in blocks)
+    unprompted = [b for b in blocks if not (b.prompt or "").strip()]
     out = []
+    in_take = False
+    try:
+        in_take = pose_edit.edit_key_type(arm, int(scene.frame_current)) == 'GENERATED'
+    except Exception:                                    # noqa: BLE001
+        pass
 
     if s.is_previewing:
         out.append(dict(
             id="review",
-            text="Judge it: Accept keeps it · Key This Frame saves a good moment · Redo retries",
+            text="Judge it: Accept keeps it \u00b7 Key This Frame saves a good moment \u00b7 Redo retries",
             why="Accept keeps the take and locks its blocks, so a later Generate leaves it alone. "
                 "Key This Frame turns a frame you like into a key pose, so the next Redo goes "
                 "through it and keeps what was good. Redo makes the block again",
             op=None, props={}))
-    elif mode == 'POSE':
-        unprompted = [b for b in blocks if not (b.prompt or "").strip()]
-        if not keys:
-            out.append(dict(
-                id="pose_first_key",
-                text="Key a moment that matters (I): the take will go through it",
-                why="A key pose steers the take through that pose at that frame. Without any, "
-                    "the model decides every pose itself; two or three at the moments that "
-                    "carry the action (a contact, a peak, a landing) make it yours. Pose with "
-                    "the handles (Autopose) or describe the pose in the field",
-                op="animatica.toolbar_autoposer", props={}))
-        elif len(keys) == 1:
-            out.append(dict(
-                id="pose_second_key",
-                text="Key where the action turns: the motion between keys follows your plan",
-                why="One key pose fixes one instant; the motion either side is still the model's "
-                    "guess. A second, where the action turns (the push-off, the catch), pins "
-                    "down what happens between them",
-                op=None, props={}))
-        elif not blocks or unprompted:
-            out.append(dict(
-                id="pose_to_motion",
-                text="Say what happens between your keys in Motion (Alt M)",
-                why="Key poses fix the moments; a prompt says how to get from one to the next "
-                    "(the walk, the jump, the stumble). A block with no prompt leaves that to "
-                    "the model",
-                op="animatica.bar_mode", props={"mode": 'MOTION'}))
-        else:
-            out.append(dict(
-                id="pose_ready",
-                text="Ready for a take: switch to Motion (Alt M) and Generate",
-                why="Every block has a prompt and the key poses are set: the take is made from "
-                    "both. Keep adding keys where the action changes to steer it more",
-                op="animatica.bar_mode", props={"mode": 'MOTION'}))
-    else:
-        text_all = " ".join((b.prompt or "") for b in blocks)
-        if not blocks or not text_all.strip():
-            out.append(dict(
-                id="motion_prompt",
-                text="Type what happens here: the model moves to your words",
-                why="The prompt is what the model makes. One action per block is followed most "
-                    "closely: \u201cwalks to the door\u201d, then \u201csits down\u201d",
-                op="animatica.toolbar_prompt_here", props={}))
-        elif not keys:
-            out.append(dict(
-                id="motion_keys",
-                text="Key 2\u20133 moments in Pose (Alt M), or the model picks every pose",
-                why="Without key poses the model invents every pose. A key pose at the contact, "
-                    "the peak or the landing steers the take through it, so it does what you "
-                    "meant there",
-                op="animatica.bar_mode", props={"mode": 'POSE'}))
+    elif in_take:
+        # an accepted take under the playhead: fine-tune it
+        out.append(dict(
+            id="finetune",
+            text="Fine-tune it: drag a handle and the take reshapes around it, no keys added",
+            why="Edits on a take update its motion where it is keyed and add no keyframes. The "
+                "frames around follow by Reach and Intensity (the curve on the bar); the onion "
+                "skins and the trail show them move as you drag",
+            op="animatica.hint_finetune", props={}))
+    elif not keys:
+        out.append(dict(
+            id="pose_first_key",
+            text="Key a moment that matters (I): the take will go through it",
+            why="A key pose steers the take through that pose at that frame. Without any, "
+                "the model decides every pose itself; two or three at the moments that "
+                "carry the action (a contact, a peak, a landing) make it yours. Pose with "
+                "the handles (Autopose), or describe the pose with the button in the field",
+            op="animatica.toolbar_autoposer", props={}))
+    elif len(keys) == 1:
+        out.append(dict(
+            id="pose_second_key",
+            text="Key where the action turns: the motion between keys follows your plan",
+            why="One key pose fixes one instant; the motion either side is still the model's "
+                "guess. A second, where the action turns (the push-off, the catch), pins "
+                "down what happens between them",
+            op=None, props={}))
+    if not out and (not blocks or unprompted or not text_all.strip()):
+        out.append(dict(
+            id="motion_prompt",
+            text="Say what happens between your keys: type it in the field",
+            why="The prompt is what the model makes. One action per block is followed most "
+                "closely: \u201cwalks to the door\u201d, then \u201csits down\u201d",
+            op="animatica.toolbar_prompt_here", props={}))
+    if not s.is_previewing and not in_take:
         if _PLACES.search(text_all) and not list(waypoints.waypoints(scene)):
             out.append(dict(
                 id="motion_waypoint",
@@ -118,10 +111,40 @@ def next_step(context) -> dict | None:
                 why="The model follows one instruction per block most closely. A long block "
                     "with several actions blurs them; two blocks keep each one sharp",
                 op=None, props={}))
+        if keys and blocks and not unprompted:
+            out.append(dict(
+                id="ready",
+                text="Ready: Generate, and the take goes through your keys",
+                why="Every block has a prompt and the key poses are set: the take is made from "
+                    "both. Keep adding keys where the action changes to steer it more",
+                op="animatica.toolbar_generate", props={}))
     for h in out:
         if h["id"] not in dismissed:
             return h
     return None
+
+
+class ANIMATICA_OT_hint_finetune(bpy.types.Operator):
+    """Fine-tune the take: the Autopose tool and the onion skins on, so a drag
+    reshapes the take and you see the frames around it follow"""
+    bl_idname = "animatica.hint_finetune"
+    bl_label = "Fine-tune"
+    bl_options = {'INTERNAL', 'UNDO'}
+
+    def invoke(self, context, event):
+        return self.execute(context)
+
+    def execute(self, context):
+        from . import handles
+        s = context.scene.animatica
+        s.key_pose_overlay = True
+        s.key_pose_ghosts = True
+        s.onion_mode = 'FRAMES'
+        if not handles.tool_active(context):
+            why = handles.activate(context)
+            if why:
+                self.report({'WARNING'}, why)
+        return {'FINISHED'}
 
 
 class ANIMATICA_OT_hint_why(bpy.types.Operator):
@@ -160,6 +183,7 @@ class ANIMATICA_OT_hint_dismiss(bpy.types.Operator):
 
 
 def register():
+    bpy.utils.register_class(ANIMATICA_OT_hint_finetune)
     bpy.utils.register_class(ANIMATICA_OT_hint_why)
     bpy.utils.register_class(ANIMATICA_OT_hint_dismiss)
 
@@ -167,3 +191,4 @@ def register():
 def unregister():
     bpy.utils.unregister_class(ANIMATICA_OT_hint_dismiss)
     bpy.utils.unregister_class(ANIMATICA_OT_hint_why)
+    bpy.utils.unregister_class(ANIMATICA_OT_hint_finetune)

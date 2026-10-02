@@ -1488,14 +1488,10 @@ def refresh_held_by() -> str:
 
 
 def bar_mode(context=None) -> str:
-    """The floating bar's mode -- 'POSE' (this frame) or 'MOTION' (the take) --
-    which says what the viewport draws: onion skins in Pose; the trail and
-    every key pose in Motion."""
-    try:
-        from . import toolbar
-        return toolbar.mode_of(context or bpy.context)
-    except Exception:                       # noqa: BLE001 -- never break a draw
-        return 'MOTION'
+    """There is one bar now (no Pose and Motion): what the viewport draws is
+    up to its own switches -- the onion skin and its mode, the trail, the
+    root path. Kept so the drawing code reads as it did: always 'POSE'."""
+    return 'POSE'
 
 
 def _onion_ranks(scene, settings) -> dict:
@@ -1518,7 +1514,7 @@ def onion_look(settings, rank: int, n_side: int, frames_away: int | None = None)
     share of a drag it would take -- the falloff, drawn as the tunnel."""
     rgb = tuple(settings.onion_color_before if rank < 0 else settings.onion_color_after)
     alpha = float(settings.onion_opacity)
-    if frames_away is not None and settings.onion_wormhole:
+    if frames_away is not None and settings.onion_mode == 'FRAMES':
         from .curve_edit import reach_weight
         w = reach_weight(frames_away, max(1, int(settings.trail_radius)))
         return rgb, alpha * (0.2 + 0.8 * w)
@@ -1628,10 +1624,13 @@ def onion_frames(scene, settings) -> list[int]:
     wormhole shows the frames within Reach instead -- the ones a drag here
     moves -- so what you see is what an edit carries."""
     c, step = int(scene.frame_current), max(1, int(settings.onion_step))
-    if settings.onion_wormhole:
+    if settings.onion_mode == 'FRAMES':
+        # the frames an edit here reaches, every Step: the ghosts are what a
+        # drag will move (plain onion skins and the wormhole alike)
         reach = max(1, int(settings.trail_radius))
-        step = wormhole_step(settings)
-        before = after = reach // step
+        step = wormhole_step(settings) if settings.onion_wormhole else \
+            max(step, math.ceil(reach / WORMHOLE_MAX_SIDE))
+        before = after = max(1, reach // step)
     else:
         before, after = int(settings.onion_before), int(settings.onion_after)
     out = [c - k * step for k in range(before, 0, -1)]
@@ -2062,11 +2061,6 @@ def _draw_geometry():
 
     onion = bar_mode(context) == 'POSE'
     warp = _trail_warp(context, settings)
-    if onion:
-        # Pose is about this frame: the trail stays (where the motion goes is
-        # what a pose is sculpted against; in the wormhole it runs through the
-        # slices), the root's floor path does not
-        root_ready = False
     visible = _visible_poses(context.scene, p) if ghosts_ready else []
     ranks = _rank_from_playhead(_ghosts["frames"], context.scene.frame_current)
     onion_ranks = _onion_ranks(context.scene, settings) if onion else {}
@@ -2344,8 +2338,6 @@ def _draw_screen():
     ghosts_ready = _ghosts_ready(settings)
     root_ready = _root_path_ready(settings)
     warp = _trail_warp(context, settings)
-    if bar_mode(context) == 'POSE':
-        root_ready = False
     if not trail_ready and not ghosts_ready and not root_ready:
         return
 

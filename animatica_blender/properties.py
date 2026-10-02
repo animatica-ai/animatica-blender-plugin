@@ -1041,8 +1041,8 @@ class AnimaticaSettings(PropertyGroup):
     )
     onion_step: IntProperty(
         name="Step",
-        description="Frames between the onion skins (Frames mode)",
-        default=4, min=1, max=24,
+        description="Frames between the onion skins (Frames mode: across the Reach)",
+        default=2, min=1, max=24,
         update=lambda self, context: _redraw_3d_views(),
     )
     onion_wormhole: BoolProperty(
