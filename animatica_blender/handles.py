@@ -78,6 +78,7 @@ class AnimaticaHandle(bpy.types.PropertyGroup):
     select: BoolProperty(default=False)
     aim: FloatVectorProperty(size=3, subtype='TRANSLATION')
     aim_set: BoolProperty(default=False)
+    aim_frame: IntProperty(default=-1)    # the frame the Look-at was placed on
 
 
 class Ref:
@@ -189,15 +190,32 @@ def _joint_pb(arm, joint):
     return poser.joint_pose_bone(arm, joint)
 
 
-def _seed_aim(arm, h):
+def _seed_point(arm, h) -> Vector | None:
+    """Where a Look-at starts: in front of the joint, the way it faces as posed."""
     from .autoposer import poser
     pb = _joint_pb(arm, h.ap_joint)
     if pb is None:
-        return
+        return None
     local = (pb.matrix.translation
              + (AIM_OFFSET / max(poser.unit_scale(arm), 1e-6)) * poser._aim_dir(arm, h.ap_joint).normalized())
-    h.aim = arm.matrix_world @ local
+    return arm.matrix_world @ local
+
+
+def _seed_aim(arm, h, frame=None):
+    p = _seed_point(arm, h)
+    if p is None:
+        return
+    h.aim = p
     h.aim_set = True
+    h.aim_frame = int(bpy.context.scene.frame_current if frame is None else frame)
+
+
+def _aim_stale(h, frame=None) -> bool:
+    """A Look-at placed on another frame: there the head looked somewhere else.
+    Kept, it turned the head to a point left behind -- 10 degrees of neck and
+    a dragged hand 30 degrees off -- so the pose on this frame starts from
+    where the head looks on it."""
+    return h.aim_frame != int(bpy.context.scene.frame_current if frame is None else frame)
 
 
 def world(arm, h) -> Vector | None:
@@ -206,6 +224,8 @@ def world(arm, h) -> Vector | None:
     if h.ap_ety == 2:
         if not h.aim_set:
             return None
+        if _aim_stale(h):
+            return _seed_point(arm, h) or Vector(h.aim)
         return Vector(h.aim)
     pb = _joint_pb(arm, h.ap_joint)
     if pb is None:
@@ -221,9 +241,14 @@ def world(arm, h) -> Vector | None:
 # Solving
 # ---------------------------------------------------------------------------
 
-def snapshot(arm, hs) -> dict:
+def snapshot(arm, hs, frame=None) -> dict:
     """The pose as it stands, for the handles: each joint's position (world)
-    and turn (armature space), and the deform bones' bases to go back to."""
+    and turn (armature space), and the deform bones' bases to go back to.
+    ``frame``: the one the rig is posed as (the current one by default); a
+    Look-at placed on another starts again in front of the head."""
+    for h in hs:
+        if h.ap_ety == 2 and h.aim_set and _aim_stale(h, frame):
+            _seed_aim(arm, h, frame)
     joints = {}
     for h in hs:
         pb = _joint_pb(arm, h.ap_joint)
@@ -493,7 +518,7 @@ def draw(context, highlighted=True):
             if pb is None:
                 continue
             a = view3d_utils.location_3d_to_region_2d(region, rv3d, arm.matrix_world @ pb.matrix.translation)
-            b = view3d_utils.location_3d_to_region_2d(region, rv3d, Vector(h.aim))
+            b = view3d_utils.location_3d_to_region_2d(region, rv3d, world(arm, h))
             if a is not None and b is not None:
                 # where the head looks: a line from it, with a head on the line
                 col = (1, 1, 1, 0.6)
@@ -780,6 +805,7 @@ class ANIMATICA_OT_handle_drag(bpy.types.Operator):
             target = self._target(context, event)
             if h.ap_ety == 2:
                 h.aim = target
+                h.aim_frame = self._f0
             hs = items(context.scene, self._arm)
             from . import wormhole
             # the Autoposer, always: the body follows and the switched-on handles
@@ -791,6 +817,7 @@ class ANIMATICA_OT_handle_drag(bpy.types.Operator):
             if not err and not any(x.ap_enabled for x in hs if x.name != h.name):
                 err = "No other handle holds: the whole body follows. Switch some on (Ctrl-click) to pin them"
             if not failed:
+                self._carry.move_whole(event.shift)
                 self._carry.set_after({pb.name: pb.matrix_basis.copy() for pb in self._arm.pose.bones})
                 # this frame as the edit leaves it -- the frames around it the same way
                 bases = self._carry.shown_at_f0()
@@ -1000,6 +1027,7 @@ class ANIMATICA_OT_handle_transform(bpy.types.Operator):
             for h in hs:
                 if h.name in targets and h.ap_ety == 2:
                     h.aim = targets[h.name]
+                    h.aim_frame = self._f0
             eff = effectors(self._arm, hs, self._snap, targets=targets)
         else:
             ang = math.atan2(co[1] - self._c2.y, co[0] - self._c2.x) - self._angle0

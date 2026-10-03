@@ -313,6 +313,7 @@ def solve_drag(arm, frame_index: int, dragged_bone: str, target: Vector,
     """Solve the body for this frame with one effector moved — or all of them,
     for a whole-pose move. Never touches the rig, the playhead, or the current
     pose."""
+    from . import key_poses
     from .autoposer import engine
 
     effectors = _effectors_at(arm, frame_index, dragged_bone, target,
@@ -321,14 +322,43 @@ def solve_drag(arm, frame_index: int, dragged_bone: str, target: Vector,
         raise engine.NotReady(
             "the trail follows fewer than three joints — the poser needs 3+")
     eng = engine.get()
+    floor = bool(bpy.context.scene.ap_floor)
+    # the floor holds the pose up, it never pushes it: no higher than the frame's
+    # lowest traced joint (a seat under a sitting character is not the floor)
+    lows = [Vector(p[frame_index]) for p in key_poses._trail["points"].values() if len(p) > frame_index]
+    cap = None
+    if lows:
+        low = min(lows, key=lambda v: v.z)
+        cap = _poser().to_poser(arm, arm.matrix_world.inverted() @ low).y - 0.03
     return _poser().pose_on_ground(
         eng, arm, effectors,
         bone_lengths=_poser()._bone_lengths(arm),
         ik_refine=bool(bpy.context.scene.ap_use_ik),
-        floor=bool(bpy.context.scene.ap_floor),
+        floor=floor,
         floor_joints="feet",
-        hard_floor=bool(bpy.context.scene.ap_floor),
+        hard_floor=floor,
+        toe_roll=floor,
+        toe_tips=_poser().toe_tips(arm) if floor else None,
+        floor_below=cap,
     )
+
+
+def _bases(arm, before, out):
+    """A solve as every bone's basis: the ones it drives from it, the rest as
+    ``before`` has them."""
+    full = dict(before)
+    full.update(_poser().pose_bases(arm, out["names"], out["joints"], out["rotations_6d"]))
+    return full
+
+
+def _carry_for(context, arm, frame: int, radius: int, bone: str):
+    """The edit of ``bone`` at ``frame``, as a handle drag makes it: solved
+    there and laid over the frames around it (carry.Carry), the trail's other
+    hands and feet held where they are."""
+    from . import carry, key_poses
+    ends = carry.ENDS_OF(arm)
+    held = [b for b in key_poses._trail.get("bones") or () if b in ends and b != bone]
+    return carry.Carry(context, arm, frame, radius, None, dragged=bone, held=held)
 
 
 def _preview_from(arm, out):
@@ -338,53 +368,6 @@ def _preview_from(arm, out):
     points = [_from_poser(arm, p) for p in out["joints"]]
     parents = list(engine.skeleton().parents)
     return points, parents
-
-
-# ---------------------------------------------------------------------------
-# Committing
-# ---------------------------------------------------------------------------
-
-def commit(arm, frame: int, out, key_type: str = 'KEYFRAME', *, existing_only: bool = False) -> int:
-    """Write the solved pose into the rig's action at ``frame``.
-
-    The solve is turned into the same ``matrix_basis`` the Autoposer would
-    write live (``poser.pose_bases``), then decomposed into the channels an
-    action stores. Nothing is posed on the way through, so the frame the
-    artist is looking at does not so much as flicker.
-    """
-    from . import pose_edit
-
-    action = pose_edit._editing_action(arm)
-    if action is None:
-        if arm.animation_data is None:
-            arm.animation_data_create()
-        action = bpy.data.actions.new(f"{arm.name}Action")
-        arm.animation_data.action = action
-
-    bases = _poser().pose_bases(arm, out["names"], out["joints"], out["rotations_6d"])
-    hips = pose_edit.hips_bone(arm)
-    channels = []
-    for name, basis in bases.items():
-        pb = arm.pose.bones.get(name)
-        if pb is None:
-            continue
-        loc, quat, _scale = basis.decompose()
-        path = pose_edit._rotation_path(pb)
-        if path == "rotation_quaternion":
-            values = [quat.w, quat.x, quat.y, quat.z]
-        elif path == "rotation_euler":
-            values = list(quat.to_euler(pb.rotation_mode))
-        else:
-            axis, angle = quat.to_axis_angle()
-            values = [angle, axis.x, axis.y, axis.z]
-        channels += [(f'pose.bones["{name}"].{path}', i, v) for i, v in enumerate(values)]
-        if pb.parent is None or name == hips:
-            # The root carries the body's placement; keying rotation alone
-            # would leave the character where the old key put it.
-            channels += [
-                (f'pose.bones["{name}"].location', i, v) for i, v in enumerate(loc)
-            ]
-    return pose_edit.write_channels(action, frame, channels, key_type, existing_only=existing_only)
 
 
 # ---------------------------------------------------------------------------
@@ -415,14 +398,6 @@ def reach_weight(d: int, radius: int) -> float:
     except Exception:                           # noqa: BLE001
         k = 1.0
     return w * k
-
-
-def _bent(bone: str, index: int, delta: Vector, radius: int):
-    """The dragged joint's trail with the move spread over the radius."""
-    from . import key_poses
-    points = key_poses._trail["points"].get(bone) or []
-    lo, hi = max(0, index - radius - 1), min(len(points), index + radius + 2)
-    return [Vector(points[i]) + delta * reach_weight(i - index, radius) for i in range(lo, hi)]
 
 
 def _draw():
@@ -642,32 +617,19 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         self._radius = int(getattr(context.scene.animatica, "trail_radius", 0))
         self._radius0 = self._radius
         _drag["radius"] = self._radius
+        # solved at its frame and laid over the frames around it, as a handle
+        # drag is: each frame solved anew found a different body every frame
+        # (the take shook), and keying the raw solve turned the arms 40 degrees
+        # with nothing moved
+        self._carry = _carry_for(context, arm, self.frame, self._radius, self.bone)
+        try:
+            self._carry.set_base(_bases(arm, self._carry.before, solve_drag(arm, self._index, self.bone, origin)))
+        except Exception:                       # noqa: BLE001 -- then measured from the frame as it is
+            pass
         self._solve(context, event)
         self._header(context)
         context.window_manager.modal_handler_add(self)
         return {'RUNNING_MODAL'}
-
-    def _spread(self, delta, whole) -> int:
-        """The frames around the dragged one, each moved by its share of the
-        move and solved on its own: the stroke reaches through time."""
-        from . import key_poses
-        frames = key_poses._trail["frames"]
-        points = key_poses._trail["points"].get(self.bone) or []
-        n = 0
-        for i, frame in enumerate(frames):
-            d = i - self._index
-            w = reach_weight(d, self._radius)
-            if d == 0 or w <= 1e-3 or i >= len(points):
-                continue
-            try:
-                out = solve_drag(self._arm, i, self.bone, Vector(points[i]) + delta * w,
-                                 whole_pose=whole)
-            except Exception:                   # noqa: BLE001 -- one frame must not stop the stroke
-                continue
-            # carried along: motion, not key poses, and only where a key already is
-            commit(self._arm, int(frame), out, 'GENERATED', existing_only=True)
-            n += 1
-        return n
 
     def _header(self, context):
         context.area.header_text_set(
@@ -730,14 +692,30 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             _drag["error"] = f"solve failed: {exc}"
             _drag["solve"] = None
             return False
+        from . import wormhole
         _drag["error"] = ""
         _drag["solve"] = out
-        _drag["points"], _drag["parents"] = _preview_from(self._arm, out)
-        self._origin, self._last_target = _drag["origin"].copy(), _drag["target"].copy()
-        delta = _drag["target"] - _drag["origin"]
-        _drag["bent"] = _bent(self.bone, self._index, delta, self._radius) if self._radius else None
+        self._carry.radius = self._radius
+        self._carry.move_whole(self._whole)
+        self._carry.set_after(_bases(self._arm, self._carry.before, out))
+        _drag["points"], _drag["parents"] = self._preview(out)
+        # the trail and the ghosts in reach bend as the edit will leave them
+        wormhole.show_through(context, self._carry, self.bone)
+        bent = (wormhole.propagation.get("trail") or {}).get(self.bone) or {}
+        _drag["bent"] = [bent[f] for f in sorted(bent)] if self._radius and len(bent) > 1 else None
         key_poses.tag_redraw()
         return True
+
+    def _preview(self, out):
+        """The skeleton the drag draws: the frame as the edit leaves it."""
+        points, parents = _preview_from(self._arm, out)
+        mats = self._carry.rig.fk(self._carry.pose_at(self._carry.f0))
+        mw = self._arm.matrix_world
+        for i, name in enumerate(out["names"]):
+            b = _poser().joint_bone(self._arm, name)
+            if b is not None and b.name in mats:
+                points[i] = mw @ mats[b.name].translation
+        return points, parents
 
     def modal(self, context, event):
         # Modifier presses and releases arrive as their own events; re-solving
@@ -759,42 +737,40 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
             return {'RUNNING_MODAL'}
 
         if event.type in {'RIGHTMOUSE', 'ESC'}:
+            from . import wormhole
             context.scene.animatica.trail_radius = self._radius0      # Esc takes it all back
+            wormhole.end_through(context, None)
             _clear()
             context.area.header_text_set(None)
             context.area.tag_redraw()
             return {'CANCELLED'}
 
         if event.type == 'LEFTMOUSE' and event.value == 'RELEASE':
-            from . import key_poses
+            from . import key_poses, wormhole
 
-            out = _drag["solve"]
+            solved = _drag["solve"] is not None
             error = _drag["error"]
             frame = int(_drag["frame"])
             whole = bool(_drag["whole_pose"])
             _clear()
             context.area.header_text_set(None)
             context.area.tag_redraw()
-            if out is None:
+            if not solved or not self._carry.changed():
+                wormhole.end_through(context, None)
                 self.report({'WARNING'}, error or "Nothing to key")
                 return {'CANCELLED'}
-            last, origin = getattr(self, "_last_target", None), getattr(self, "_origin", None)
-            delta = last - origin if last is not None and origin is not None else None
-            from . import pose_edit
-            key_type = pose_edit.edit_key_type(self._arm, frame)
             # the dragged frame is keyed; the frames around it only have the
             # keys they already hold updated -- an edit adds no keys of its own
-            written = commit(self._arm, frame, out, key_type)
-            spread = self._spread(delta, whole) if delta is not None and self._radius else 0
+            spread = wormhole.end_through(context, self._carry)
+            cur = context.scene.frame_current
+            if abs(cur - frame) <= self._radius:
+                context.scene.frame_set(cur)        # the frame on show was in reach: show it as keyed
             key_poses.flash_keyed(frame)
-            key_poses.invalidate_plan()
-            key_poses.request_rebuild()
-            from .operators import keep_take
-            keep_take(context)          # fine-tuning a take is keeping it
             what = "Moved the whole pose" if whole else f"Moved {_canonical(self._arm, self.bone)}"
             self.report({'INFO'}, f"{what} at frame {frame}"
                         + (f" and {spread} frames around it" if spread else "")
-                        + (". The take was updated" if key_type == 'GENERATED' else ". Keyed as a key pose"))
+                        + (". The take was updated" if getattr(self._carry, "key_type", "") == 'GENERATED'
+                           else ". Keyed as a key pose"))
             return {'FINISHED'}
 
         return {'RUNNING_MODAL'}
@@ -941,7 +917,7 @@ class ANIMATICA_OT_smooth_trail(bpy.types.Operator):
         return selected() is not None and selected_world(context) is not None
 
     def execute(self, context):
-        from . import key_poses
+        from . import key_poses, pose_edit
         bone, frame = selected()
         arm = key_poses._target(key_poses._settings(context.scene))
         trail = key_poses._trail
@@ -950,27 +926,41 @@ class ANIMATICA_OT_smooth_trail(bpy.types.Operator):
             return {'CANCELLED'}
         radius = max(1, int(context.scene.animatica.trail_radius))
         index = frames.index(frame)
-        n = 0
+        plan = key_poses.plan(context.scene)["frames"]
+        writes, action = [], None
         for i in range(max(0, index - radius), min(len(frames), index + radius + 1)):
             w = falloff(i - index, radius) * self.strength
             # the average of its neighbours, two either side
             near = [Vector(points[k]) for k in range(max(0, i - 2), min(len(points), i + 3))]
             avg = sum(near, Vector()) / len(near)
             target = Vector(points[i]).lerp(avg, w)
+            if (target - Vector(points[i])).length < 1e-4:
+                continue
+            # each frame keeps its own body and takes what the poser changes for
+            # the smoothed joint -- solved anew and keyed raw, every frame was
+            # replaced by the poser's own take on it, and the motion shook
             try:
-                out = solve_drag(arm, i, bone, target)
+                c = _carry_for(context, arm, int(frames[i]), 0, bone)
+                c.set_base(_bases(arm, c.before, solve_drag(arm, i, bone, Vector(points[i]))))
+                c.set_after(_bases(arm, c.before, solve_drag(arm, i, bone, target)))
             except Exception as exc:            # noqa: BLE001
                 self.report({'WARNING'}, f"Smoothing stopped: {exc}")
                 break
+            if c.changed():
+                writes.append((int(frames[i]), c.channels(c.pose_at(c.f0))))
+                action = c.action
+        # every frame read before any is written: a key written changes what the curves give
+        for f, channels in writes:
             # smoothing evens the motion out; it does not make key poses
-            commit(arm, int(frames[i]), out, 'KEYFRAME' if frames[i] in key_poses.plan(context.scene)["frames"]
-                   else 'GENERATED', existing_only=True)
-            n += 1
+            pose_edit.write_channels(action, f, channels, 'KEYFRAME' if f in plan else 'GENERATED',
+                                     finish=False, existing_only=True)
+        if action is not None:
+            pose_edit.finish_channels(action)
         key_poses.invalidate_plan()
         key_poses.request_rebuild()
         from .operators import keep_take
         keep_take(context)
-        self.report({'INFO'}, f"Smoothed {_canonical(arm, bone)} over {n} frames")
+        self.report({'INFO'}, f"Smoothed {_canonical(arm, bone)} over {len(writes)} frames")
         return {'FINISHED'}
 
 

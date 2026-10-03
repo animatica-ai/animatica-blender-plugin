@@ -484,7 +484,7 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
                                   held=carry.held_ends(arm, hs, h))
         try:
             self._pose(self._carry.before)
-            self._snap = handles.snapshot(arm, hs)
+            self._snap = handles.snapshot(arm, hs, f)
             self._floor = handles.floor_cap(arm, self._snap)
             # the solve of that frame as it is: the edit is measured from it
             if not handles.solve(context, arm, handles.effectors(arm, hs, self._snap), self._floor):
@@ -536,6 +536,7 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
         finally:
             self._pose(self._keep)
         if not self._error:
+            self._carry.move_whole(event.shift)
             self._carry.set_after(after)
             self._moved = True
         _drag["error"] = self._error

@@ -33,6 +33,9 @@ ENDS = ("LeftHand", "RightHand", "LeftFoot", "RightFoot")
 LIVE_MAX = 16
 #: seconds between re-reading the curves for the live preview of a sparse action
 PROBE_EVERY = 0.08
+#: how far (metres) a drag moves the body before the frame it edits is the
+#: Autoposer's own pose; up to there it eases out of the pose as it stood
+SETTLE = 0.15
 
 
 def _split(M):
@@ -92,8 +95,13 @@ def _rotate_about(rig, bases, mats, name, pivot, q):
 
 def reach(rig, bases, end, target) -> bool:
     """Two-bone IK in plain math: ``end``'s head (pose space) onto ``target``
-    by its two parents, the elbow or knee bending the way it bends, the end
-    keeping its orientation. ``bases`` is changed in place."""
+    by its two parents, the end keeping its orientation. ``bases`` is changed
+    in place.
+
+    The elbow or knee stays a hinge: the lower bone only opens or closes about
+    the axis it already bends on, then the limb swings whole from the shoulder
+    or hip. Turning each bone the shortest way onto its new spot instead bent
+    the elbow sideways -- by up to 70 degrees on a hand carried through time."""
     b2 = rig.parent.get(end)
     b1 = rig.parent.get(b2) if b2 else None
     if b1 is None:
@@ -105,6 +113,28 @@ def reach(rig, bases, end, target) -> bool:
     to = target - A
     if l1 < 1e-6 or l2 < 1e-6 or to.length < 1e-6:
         return False
+    d = max(abs(l1 - l2) + 1e-4, min(to.length, l1 + l2 - 1e-4))
+    hinge = (B - A).cross(C - B)
+    if hinge.length < math.sin(math.radians(0.5)) * l1 * l2:
+        return _reach_straight(rig, bases, mats, b1, b2, end, target, keep)
+    hinge.normalize()
+    bend_now = (B - A).angle(C - B)
+    bend = math.pi - math.acos(max(-1.0, min(1.0, (l1 * l1 + l2 * l2 - d * d) / (2 * l1 * l2))))
+    _rotate_about(rig, bases, mats, b2, B, Quaternion(hinge, bend - bend_now))
+    mats = rig.fk(bases)
+    _rotate_about(rig, bases, mats, b1, A, (mats[end].translation - A).rotation_difference(to))
+    mats = rig.fk(bases)
+    M = Matrix.Translation(mats[end].translation) @ keep.to_4x4()
+    bases[end] = rig.basis_for(mats, end, M)
+    return True
+
+
+def _reach_straight(rig, bases, mats, b1, b2, end, target, keep) -> bool:
+    """`reach` for a limb with no bend to keep: it bends in the plane of where
+    it pointed and where it goes."""
+    A, B, C = mats[b1].translation, mats[b2].translation, mats[end].translation
+    l1, l2 = (B - A).length, (C - B).length
+    to = target - A
     d = max(1e-4, min(to.length, l1 + l2 - 1e-4))
     u = to.normalized()
     bend = (B - A) - u * (B - A).dot(u)
@@ -201,7 +231,9 @@ class Carry:
         self.held = [b for b in held if b in ENDS_OF(arm) and b != self.dragged]
         # a joint locked on this frame is held too, or the drag moved it off its spot
         from . import joint_lock
-        self.held += [b for b in joint_lock.held_at(arm, self.f0) if b != self.dragged and b not in self.held]
+        self._locked = [b for b in joint_lock.held_at(arm, self.f0) if b != self.dragged and b not in self.held]
+        self.held += self._locked
+        self._held = list(self.held)
         self._orig = {}
         self._dragged_move = Vector()
 
@@ -209,30 +241,62 @@ class Carry:
 
     def set_base(self, base) -> None:
         """The solve of the pose with nothing moved. The poser never gives a
-        pose back exactly (a few degrees here and there): measured from
-        ``before``, that difference jumped in on the first move. Measured from
-        this, the edit is only what the drag changed."""
+        pose back exactly: measured from ``before`` from the first move on,
+        that difference popped in. The first stretch of a drag eases out of it
+        (see set_after)."""
         self.base = {n: base[n].copy() for n in self.names}
 
     def set_after(self, after) -> None:
-        """The pose the solve gave at f0: each bone's change from the base."""
+        """The pose the solve gave at f0, and the edit: each bone's change from
+        the pose the drag started from.
+
+        The frame being edited shows the Autoposer's pose itself. Laying only
+        what the drag changed (``after`` against ``base``) over the pose as it
+        stood turned each bone by a change solved for another pose: on a pose
+        the poser does not give back closely -- a generated crouch it re-solved
+        with the head 27 cm away -- that made bodies no solve had made, the
+        torso twisted, a wrist bent back, an elbow the wrong way, and the
+        dragged hand 10 cm off the cursor. So the edit hands over from that to
+        the solve within the first SETTLE of what the drag moves: no pop on the
+        first move, the poser's own pose once the drag is under way."""
         self.after = {n: after[n].copy() for n in self.names}
+        fb, fa = self.rig.fk(self.base), self.rig.fk(self.after)
+        moved = max(((fa[n].translation - fb[n].translation).length for n in self.edited), default=0.0)
+        k = min(1.0, moved / SETTLE)
+        k = k * k * (3.0 - 2.0 * k)
+        shown = dict(self.before)
         self.delta = {}
         for n in self.edited:
+            lb, qb, sb = _split(self.before[n])
             l0, q0, _s0 = _split(self.base[n])
             l1, q1, _s1 = _split(self.after[n])
             dq = q1 @ q0.inverted()
             if dq.w < 0.0:
                 dq.negate()
-            dl = l1 - l0
+            # what the drag changed, on the pose as it stood, handing over to the solve
+            lc, qc = lb + (l1 - l0), dq @ qb
+            if qc.dot(q1) < 0.0:
+                qc.negate()
+            loc, q = lc.lerp(l1, k), qc.slerp(q1, k)
+            shown[n] = _compose(loc, q, sb)
+            dq = q @ qb.inverted()
+            if dq.w < 0.0:
+                dq.negate()
+            dl = loc - lb
             if dl.length > 1e-7 or dq.angle > 1e-6:
                 self.delta[n] = (dl, dq)
         if self.dragged:
-            m0 = self.rig.fk(self.base)[self.dragged].translation
-            m1 = self.rig.fk(self.after)[self.dragged].translation
+            m0 = self.rig.fk(self.before)[self.dragged].translation
+            m1 = self.rig.fk(shown)[self.dragged].translation
             self._dragged_move = m1 - m0
         else:
             self._dragged_move = Vector()
+
+    def move_whole(self, on) -> None:
+        """Shift: the whole body moves, so the hands and feet the handles hold
+        go with it -- held back where they were, they were left 30-40 cm
+        behind. A joint locked in place stays on its spot."""
+        self.held = list(self._locked) if on else list(self._held)
 
     def changed(self) -> bool:
         return bool(self.delta)
