@@ -69,7 +69,7 @@ PLACEHOLDER = "Describe what happens here…"
 #: the field's editing index while it holds the pose description, not a block's prompt
 POSE_FIELD = -2
 #: the buttons of the take slot, whose widths the prompt field gives way to
-TAKE_IDS = {"connect", "generate", "working", "redo", "keep", "var_prev", "var_label", "var_next", "loop",
+TAKE_IDS = {"connect", "generate", "working", "redo", "var_prev", "var_label", "var_next", "loop",
             *(f"var_{i}" for i in range(8)),
             "reject", "generate_pose"}
 EXPECTED_SECONDS = 30.0
@@ -259,8 +259,11 @@ def _bar_items(context, arm) -> list:
     # 2 key it
     prev, nxt = _key_steps(2)
     out.append(prev)
-    if not s.is_previewing:
-        # in review the take's Key This Frame does it
+    if s.is_previewing:
+        # a take to judge: the same button in the same place keys the take's pose here
+        # (it moved to the take's buttons once, and the eye lost it)
+        out.append(Item("keep", "set_key_add", "animatica.keep_frame", enabled=not keyed, group=2))
+    else:
         out.append(Item("set_key", "set_key_add", "animatica.set_key_pose", group=2))
     out += [nxt,
             # Blender's own record button: one record button, not two
@@ -387,7 +390,7 @@ def _clipboard_items(context, group) -> list:
 
 
 def _review_items(context, arm, keyed) -> list:
-    """A take waiting for review: Accept, Redo, Key This Frame, its versions,
+    """A take waiting for review: Generate (blocks left), Redo, its versions,
     Reject. Empty when there is none."""
     from . import batch, variations
     s = context.scene.animatica
@@ -402,9 +405,7 @@ def _review_items(context, arm, keyed) -> list:
                         primary=True, group=5))
     out += [
            # one Redo: the block under the playhead, Shift for the whole take
-           Item("redo", "redo", "animatica.toolbar_redo", label="Redo", group=6),
-           Item("keep", "set_key", "animatica.keep_frame", label="Key This Frame",
-                enabled=not keyed, group=6)]
+           Item("redo", "redo", "animatica.toolbar_redo", label="Redo", group=6)]
     take = variations.take_of(arm)
     if take is not None and take.count > 1:
         # one button per version, the one showing lit: any of them in one click
@@ -533,7 +534,6 @@ def _take_width(u: float, size: float) -> float:
     the buttons of the moment do not use, so the bar keeps one length and
     no button moves under the mouse when a take arrives."""
     review = (_plain_width("Generate", True, u, size) + _plain_width("Redo", True, u, size)
-              + _plain_width("Key This Frame", True, u, size) + GAP * u
               + _plain_width("Discard", True, u, size) + 2 * GROUP_GAP * u)
     single = max(_plain_width(t, True, u, size)
                  for t in ("Generate · 99 keys", "Sign in to Generate", "Allow Online Access", "99 s  ·  Cancel"))
@@ -561,13 +561,6 @@ def _measure(its, u, size):
         for i, it in enumerate(its):
             if it.width == "field":
                 widths[i] = max(120 * u, widths[i] + _take_width(u, size) - now)
-    ids = {it.id for it in its}
-    if "key_prev" in ids and "autopose" in ids and "set_key" not in ids:
-        # Pose in review hides Set Key Pose (the take's Key This Frame does it):
-        # the field takes its place, and nothing moves under the mouse
-        for i, it in enumerate(its):
-            if it.width == "field":
-                widths[i] += _plain_width("", True, u, size) + GAP * u
     return widths, gaps
 
 
