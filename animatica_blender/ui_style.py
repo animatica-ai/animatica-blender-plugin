@@ -298,7 +298,9 @@ _textures: dict = {}
 def texture(name: str):
     if name not in _textures:
         try:
-            w, h, flat = read_png(os.path.join(ICON_DIR, name + ".png"))
+            # a name is one of this add-on's icons; a path, another's (the Autoposer's buttons)
+            path = name if os.path.isabs(name) else os.path.join(ICON_DIR, name + ".png")
+            w, h, flat = read_png(path)
             buf = gpu.types.Buffer('FLOAT', len(flat), flat)
             _textures[name] = gpu.types.GPUTexture((w, h), format='RGBA16F', data=buf)
         except Exception:                       # noqa: BLE001 -- a missing icon draws nothing

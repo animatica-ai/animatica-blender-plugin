@@ -84,30 +84,6 @@ def _draw_signin_hint(layout, context) -> bool:
 SIGN_UP_URL = "https://app.animatica.ai/signup"
 
 
-def _draw_rig_held(layout, context, settings) -> None:
-    """Say when the Autoposer is holding the rig, and offer it back.
-
-    While it holds, the action is detached: the pose on screen is the solve,
-    frame changes do not move the character, and nothing is playing. That is a
-    state the artist has to be able to see and leave — without it, the addon
-    reads as stuck in editing with no way out.
-    """
-    from . import pose_edit
-
-    arm = properties._live_armature(settings.target_armature)
-    if arm is None or not pose_edit.autoposer_holds(arm):
-        return
-    box = layout.box()
-    box.label(text="Autoposer is holding this rig", icon='INFO')
-    note = box.row()
-    note.active = False
-    if pose_edit.stash_is_stale(arm):
-        note.label(text="Its action has changed since. Giving it back keeps yours")
-    else:
-        note.label(text="Its animation is detached while you pose")
-    box.operator("animatica.give_back_rig", icon='LOOP_BACK', text="Give Back Rig")
-
-
 def _draw_set_keyframe(layout, context, settings) -> None:
     """The one button for committing a pose you posed by hand.
 
@@ -123,7 +99,6 @@ def _draw_set_keyframe(layout, context, settings) -> None:
     # Record, next to the button it automates: on, posing with the handles keys
     # itself; off, Set Keyframe is the only way a pose is written.
     row.prop(context.scene.tool_settings, "use_keyframe_insert_auto", text="", icon='REC', toggle=True)
-    _draw_rig_held(layout, context, settings)
 
 
 def _draw_duration_hint(layout, context, settings) -> None:
@@ -596,10 +571,11 @@ def _draw_review(layout, context, settings, arm) -> None:
         fps = context.scene.render.fps / (context.scene.render.fps_base or 1.0)
         frames = int(loops[0]["frames"])
         info.label(text=f"Seamless loop · {frames} frames ({frames / fps:.2f} s)", icon='LOOP_FORWARDS')
-    if single and key_poses.trail_on(settings):
-        # The lines drawn through the body are a tool, not Blender's own
-        # motion paths, and nothing else says so where they are seen.
-        info.label(text="Drag the blue trail to repose the body", icon='CURVE_PATH')
+    if single:
+        # the Autoposer's motion trail is a tool, not Blender's own motion
+        # paths, and nothing else says so where it is seen
+        from . import posing
+        posing.draw_panel("review", info, context)
 
     # A row a character: its version, and (several) keep / throw away / again.
     col = box.column(align=True)
@@ -718,18 +694,11 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
         sub.active = False
         if posing.present():
             sub.label(text="Drag a hand, a foot or the hips to pose the body")
-            from . import key_poses
-            if key_poses.trail_on(settings):
-                # The trail is a handle too; said where posing is, not in the
-                # settings that switch it on.
-                sub = layout.row()
-                sub.active = False
-                sub.label(text="Or click a point on the motion trail and drag it")
         else:
-            # a product of its own: posing by hand is not this add-on's
+            # a product of its own: posing and editing by hand are not this add-on's
             sub.label(text=f"Posing by hand comes with {posing.PRO_NAME}")
-        from . import joint_lock
-        joint_lock.draw_list(layout, arm)
+        # its rows: the rig it holds, the trail as a handle, the locks
+        posing.draw_panel("pose", layout, context)
         posing.draw_controls(layout, context)
 
         # --- the pose at this frame: proposed by the model, or stated -----
@@ -926,18 +895,12 @@ class ANIMATICA_PT_settings_viewport(AnimaticaPanelBase, Panel):
         parts.active = settings.key_pose_overlay
         grid = parts.grid_flow(row_major=True, columns=2, even_columns=True)
         grid.prop(settings, "key_pose_ghosts", text="Ghosts")
-        grid.prop(settings, "key_pose_trail", text="Trail")
         grid.prop(settings, "key_pose_root_path", text="Root Trajectory")
         grid.prop(settings, "key_pose_labels", text="Frame Numbers")
         grid.prop(settings, "key_pose_xray", text="X-Ray")
-        joints = parts.row(align=True)
-        joints.active = settings.key_pose_trail
-        for part in ("hips", "head", "hands", "feet"):
-            joints.prop(settings, f"key_pose_trail_{part}", toggle=True)
-        root = parts.row(align=True)
-        root.active = settings.key_pose_root_path
-        root.operator("animatica.edit_root_trajectory", text="Edit Root Trajectory", icon='CURVE_BEZCURVE')
-        root.operator("animatica.reset_root_trajectory", text="", icon='LOOP_BACK')
+        # the Autoposer's: the motion trail and its joints, editing the root path
+        from . import posing
+        posing.draw_panel("overlay", parts, context)
         col = parts.column()
         col.use_property_split = True
         col.use_property_decorate = False

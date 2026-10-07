@@ -11,11 +11,26 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Changed
 
-- **Posing is now Animatica Autoposer Pro, a separate add-on.** The Autopose
-  tool, the handle picker and Reset to T-Pose are no longer part of this
-  add-on. With Pro installed they appear on the bar as before. Without it,
-  the bar starts at the Key group, and you key poses the usual way: pose the
-  rig in Blender, or use Pose This Frame in Words.
+- **Posing and editing by hand are now Animatica Autoposer Pro, a separate
+  add-on.** This add-on makes the motion and shows it: prompts and blocks,
+  key poses, waypoints and pins, Generate, Redo, versions, Loop, In Place,
+  Copy/Paste Motion, the ghosts and the onion skin, and the root trajectory
+  as a view. Pro has everything that edits it by hand: the Autopose tool,
+  the handle picker and Reset to T-Pose, the motion trail (drawn, dragged,
+  Smooth), the zoetrope, Lock in Place, the reach of an edit (Reach and
+  Intensity), clicking a ghost to edit its pose, and Edit Root Trajectory.
+  With Pro installed these appear on the bar and in the panels as before.
+  Without it, the bar starts at the Key group and ends with the onion skin,
+  and you key poses the usual way: pose the rig in Blender, or use Pose This
+  Frame in Words.
+- **The onion skin's Frames mode shows Before and After.** Without Pro it
+  shows the poses Before and After the playhead, Step frames apart, as
+  Grease Pencil's onion skin does. With Pro it still shows the frames an
+  edit reaches (Reach), or the zoetrope.
+- **Settings that moved.** Reach, Intensity, the zoetrope's Step and Spacing,
+  and the trail's switches are now Pro's. A file saved with them set opens
+  with Pro's defaults. Locks keep working, and are stored on the rig as
+  before.
 
 ### Added
 
@@ -38,12 +53,11 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Fixed
 
-- **Ghosts and the motion trail keep up with your keys.** Keys deleted,
-  moved or retimed now show on the onion skin and the trail within moments.
+- **Ghosts keep up with your keys.** Keys deleted, moved or retimed now show
+  on the onion skin (and Pro's trail) within moments.
   That includes edits made while the animation plays, and edits made while
   the ghosts are still redrawing after the previous one. Before, either case
-  could leave the ghosts and the trail showing the old motion until you
-  pressed Refresh.
+  could leave them showing the old motion until you pressed Refresh.
 - **Rigify rigs read as one skeleton.** A Rigify rig's deform bones hang off
   its ORG and MCH bones, and the add-on used to guess their hierarchy from
   where the bones sit, which could root the skeleton at a thigh. The

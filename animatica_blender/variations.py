@@ -97,8 +97,8 @@ def show(context, arm, index: int) -> None:
     # everything drawn from the motion is of the version before: the ghosts,
     # the trail, the plan. A version can be baked into the same action, so
     # nothing else tells them (the ghosts stayed those of the first version)
-    from . import carry, key_poses
-    carry.clear_live()
+    from . import key_poses
+    key_poses.set_onion_live({})         # a drag's ghosts (the Autoposer's) are of it too
     key_poses._forget_ghosts()
     key_poses.invalidate_plan()
     key_poses.request_rebuild()

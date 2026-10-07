@@ -961,17 +961,6 @@ class AnimaticaSettings(PropertyGroup):
         default=True,
         update=lambda self, context: _redraw_3d_views(),
     )
-    trail_radius: IntProperty(
-        name="Reach",
-        description=(
-            "How many frames on either side move along when you drag a point on the motion "
-            "trail, a handle or a zoetrope slice, fading out with distance (0 moves that "
-            "frame only). The zoetrope shows exactly these frames, and the Timeline shows the "
-            "falloff. Use the mouse wheel during a drag to change it, as with proportional editing"
-        ),
-        default=6, min=0, max=60,
-        update=lambda self, context: _redraw_3d_views(),
-    )
     field_pose: BoolProperty(
         name="Pose in Words",
         description=(
@@ -980,16 +969,6 @@ class AnimaticaSettings(PropertyGroup):
             "and Generate makes the take"
         ),
         default=False, options={'SKIP_SAVE'},
-        update=lambda self, context: _redraw_3d_views(),
-    )
-    edit_strength: FloatProperty(
-        name="Intensity",
-        description=(
-            "How much the frames around an edit follow it. 100% gives them the full falloff, "
-            "and 0% leaves them alone so only the edited frame changes. The edited frame "
-            "always gets the whole edit. On the floating bar, drag the Reach tile up or down"
-        ),
-        default=1.0, min=0.0, max=1.0, subtype='FACTOR',
         update=lambda self, context: _redraw_3d_views(),
     )
     # Onion skin, in Pose -- Grease Pencil's own controls, in its words
@@ -1020,39 +999,8 @@ class AnimaticaSettings(PropertyGroup):
     )
     onion_step: IntProperty(
         name="Step",
-        description="Frames between the onion skins (in Frames mode, across the Reach)",
+        description="Frames between the onion skins in Frames mode",
         default=2, min=1, max=24,
-        update=lambda self, context: _redraw_3d_views(),
-    )
-    onion_wormhole: BoolProperty(
-        name="Zoetrope",
-        description=(
-            "Spread the onion skins out in depth instead of stacking them on the character, "
-            "with the past going one way and the future the other. Each one has handles, so "
-            "you can drag one to pose that frame without moving the playhead"
-        ),
-        default=False,
-        update=lambda self, context: _redraw_3d_views(),
-    )
-    wormhole_count: IntProperty(
-        name="Slices",
-        description="No longer used. The zoetrope shows the frames within Reach",
-        default=5, min=1, max=12,
-        options={'HIDDEN'},
-    )
-    wormhole_step: IntProperty(
-        name="Step",
-        description=(
-            "Frames between the zoetrope's slices. The zoetrope shows the frames within Reach, "
-            "the ones a drag moves. Beyond 12 on a side, the step grows so the slices stay readable"
-        ),
-        default=1, min=1, max=12,
-        update=lambda self, context: _redraw_3d_views(),
-    )
-    wormhole_spacing: FloatProperty(
-        name="Spacing",
-        description="How far apart the zoetrope's slices are",
-        default=0.22, min=0.05, max=3.0, subtype='DISTANCE', unit='LENGTH',
         update=lambda self, context: _redraw_3d_views(),
     )
     onion_opacity: FloatProperty(
@@ -1131,32 +1079,6 @@ class AnimaticaSettings(PropertyGroup):
         default=True,
         update=_key_poses_redraw_update,
     )
-    key_pose_trail: BoolProperty(
-        name="Motion Trail",
-        description=(
-            "Draw the path the motion actually takes, frame by frame, "
-            "coloured by the prompt block behind each stretch and marked at "
-            "every pose you keyed. It follows the joints that steer the model: "
-            "the hands and feet, the root and the head"
-        ),
-        default=True,
-        update=_key_poses_toggle_update,
-    )
-    # Which joints the motion trail shows: one toggle each, so a click turns
-    # that one on or off and leaves the others be.
-    key_pose_trail_hips: BoolProperty(
-        name="Hips", description="Trail the hips, to show where the body goes, sway included",
-        default=True, update=_key_poses_redraw_update,
-    )
-    key_pose_trail_head: BoolProperty(
-        name="Head", description="Trail the head", default=True, update=_key_poses_redraw_update,
-    )
-    key_pose_trail_hands: BoolProperty(
-        name="Hands", description="Trail both hands", default=True, update=_key_poses_redraw_update,
-    )
-    key_pose_trail_feet: BoolProperty(
-        name="Feet", description="Trail both feet", default=True, update=_key_poses_redraw_update,
-    )
     key_pose_root_path: BoolProperty(
         name="Root Trajectory",
         description=(
@@ -1165,7 +1087,7 @@ class AnimaticaSettings(PropertyGroup):
             "line, an arc, or either with easing. In place takes it out, so with "
             "In place on it shows what was removed. Coloured by speed from green "
             "(slow) to red (fast), and labelled with its shape and speed "
-            "(\"line · 1.05 m/s\"). Edit it with Edit Root Trajectory"
+            "(\"line · 1.05 m/s\"). Autoposer Pro edits it"
         ),
         default=False,
         update=_key_poses_toggle_update,
@@ -1175,15 +1097,6 @@ class AnimaticaSettings(PropertyGroup):
         description="Draw the key poses through the character instead of behind it",
         default=False,
         update=_key_poses_redraw_update,
-    )
-    editing_key_pose_frame: IntProperty(
-        name="Editing Key Pose",
-        description=(
-            "Frame of the key pose being edited, or -1. Set by clicking a "
-            "ghost and cleared by Apply or Cancel"
-        ),
-        default=-1,
-        options={"SKIP_SAVE"},
     )
     auto_key_pose: BoolProperty(
         name="Auto Key",

@@ -7,9 +7,10 @@ Select an armature with a few keyframes, click Generate, and the server
 fills in the motion using a backend MMCP-compatible motion model.
 
 Generation, retargeting and keyframe optimisation run on the backend
-server. Posing with handles is a product of its own, Animatica Autoposer Pro:
-installed alongside, its tool joins this add-on's bar and its edits carry
-through the take (posing.py is where the two meet).
+server. This add-on makes the motion and shows it (key poses, takes, the
+ghosts); editing it by hand is a product of its own, Animatica Autoposer Pro:
+installed alongside, its handles, motion trail, zoetrope and locks join this
+add-on's bar and panels and key into the take (posing.py is where the two meet).
 """
 
 bl_info = {
@@ -38,10 +39,7 @@ from . import operators
 from . import canonical_skeleton
 from . import constraints_ui
 from . import panels
-from . import autopose_sync
-from . import curve_edit
 from . import key_poses
-from . import root_edit
 from . import game_export
 from . import pose_edit
 from . import path_follow
@@ -53,10 +51,7 @@ from . import waypoints
 from . import batch
 from . import variations
 from . import toolbar
-from . import wormhole
-from . import reach_widget
 from . import retarget
-from . import joint_lock
 from . import guidance
 
 
@@ -91,7 +86,6 @@ def _animatica_load_post(dummy):
     # under the old keys. Migrate first: the hydration below reads the new
     # ones, so it would find nothing on an unmigrated file.
     migrate.run()
-    _reset_drags()                  # nor does a drag: its operator died with the old file
 
     # No generation survives a file load: one saved (or autosaved) mid-run
     # would otherwise reopen showing "Working…" with nothing to finish it.
@@ -103,16 +97,11 @@ def _animatica_load_post(dummy):
     key_poses.invalidate_plan()
     # ...and so would anything else remembered about it: the take In place
     # last sampled (editing the new file's path re-used the old file's
-    # motion), the Autoposer's last control positions, a bake still pending.
-    from . import inplace, root_edit
-    from . import posing
+    # motion), a bake still pending. (The Autoposer lets go of its own.)
+    from . import inplace
     inplace.clear_cache()
-    poser = posing.poser()
-    if poser is not None:
-        poser._LAST_KEY = None
     key_poses._rebuild_requested_at = None
     key_poses._rebuild_first_at = None
-    root_edit._pending["at"] = None
 
     # Sessions only copied onto a duplicate, and splice copies of the user's
     # action that no waiting take refers to any more (each pinned with a fake
@@ -140,16 +129,6 @@ def _animatica_load_post(dummy):
             properties.mirror_autoposer_rig(settings)
         except Exception:
             pass
-
-
-def _reset_drags() -> None:
-    try:
-        from . import posing
-        handles = posing.handles()
-        if handles is not None:
-            handles.abort_drags()
-    except Exception:                                   # noqa: BLE001
-        pass
 
 
 def _reset_runtime_flags() -> None:
@@ -201,12 +180,9 @@ def register():
     constraints_ui.register()
     panels.register()
     path_follow.register()
-    autopose_sync.register()
     key_poses.register()
-    root_edit.register()
     game_export.register()
     pose_edit.register()
-    curve_edit.register()
     timeline_operators.register()
     retarget.register()
     timeline_overlay.register_draw_handler()
@@ -215,9 +191,6 @@ def register():
     waypoints.register()
     batch.register()
     variations.register()
-    wormhole.register()
-    reach_widget.register()
-    joint_lock.register()
     guidance.register()
     toolbar.register()
 
@@ -250,9 +223,6 @@ def unregister():
 
     toolbar.unregister()
     guidance.unregister()
-    joint_lock.unregister()
-    reach_widget.unregister()
-    wormhole.unregister()
     variations.unregister()
     batch.unregister()
     waypoints.unregister()
@@ -261,12 +231,9 @@ def unregister():
     timeline_overlay.unregister_draw_handler()
     retarget.unregister()
     timeline_operators.unregister()
-    curve_edit.unregister()
     pose_edit.unregister()
     game_export.unregister()
-    root_edit.unregister()
     key_poses.unregister()
-    autopose_sync.unregister()
     path_follow.unregister()
     panels.unregister()
     constraints_ui.unregister()

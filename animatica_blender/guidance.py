@@ -36,14 +36,12 @@ def next_step(context) -> dict | None:
     A first take comes quickest from a prompt alone, so the prompt and
     Generate come first and key poses are offered as the way to steer it
     (posing first meant a 225 MB download before anything moved)."""
-    from . import joint_lock, key_poses, mmcp_client, pose_edit, properties, waypoints
-    step = joint_lock.step_text()
+    from . import key_poses, mmcp_client, pose_edit, posing, properties, waypoints
+    step = posing.hint(context)
     if step:
-        # a lock being made: the step it is on, where the eye is (the header
-        # line alone was missed, and the click looked like it did nothing)
-        return dict(id="lock_step", text=step, why="Lock in Place holds a hand or foot on one spot "
-                    "for the frames you choose, so a planted foot stops sliding. Esc cancels",
-                    op=None, props={})
+        # an edit under way (the Autoposer's Lock in Place): the step it is on, where the eye
+        # is (the header line alone was missed, and the click looked like it did nothing)
+        return step
     from . import retarget
     copied = retarget.hint(context)
     if copied is not None and copied["id"] not in dismissed:
@@ -83,7 +81,6 @@ def next_step(context) -> dict | None:
             why="Only the key poses inside the blocks steer the take. The ones outside them are "
                 "not sent. Stretch the block (click), or drag its edge in the Timeline",
             op="animatica.blocks_over_keys", props={}))
-    from . import posing
     pro = posing.present()          # the handles are Animatica Autoposer Pro's (a separate add-on)
     if s.is_previewing:
         out.append(dict(

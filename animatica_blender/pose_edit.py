@@ -1,22 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Click a ghost to edit the pose it stands for.
+"""Key a pose: Set Key Pose, Key This Frame, and the keying the Autoposer's edits use.
 
-The ghosts show where the key poses are; this makes them the handle you grab
-to change one. Clicking a ghost takes the playhead to its frame, puts the rig
-in pose mode, and — where the Autoposer is driving that rig — hands the pose
-over to it so the artist can push the body around with a handful of controls
-instead of bone by bone. **Set Keyframe** writes the result back onto
-that frame's keyframe, which is the whole point: the pose you edit is the
-constraint the next generation is asked to hit.
-
-Why a commit step exists at all
--------------------------------
-The Autoposer has to *detach* the action to work (``animatica_autoposer.take_over``):
-its solve and the action both write the same bones, and whichever runs last
-wins, so the action is stashed while the artist poses. That means the edited
-pose lives only in the pose bones, and re-attaching the action would wipe it.
-Set Keyframe therefore reads the solved pose and writes it into the stashed
-action's F-curves at the current frame, before handing the rig back.
+A key pose is what steers a generation: the take passes through it. Set Key
+Pose writes the pose you see onto this frame as your own key; Key This Frame
+keeps a take's pose as one, so the next Redo passes through it.
 
 The keys it writes are typed ``KEYFRAME``, not ``GENERATED``. On a rig
 carrying a generated take that distinction is everything: Blender preserves a
@@ -24,115 +11,18 @@ keyframe's existing type when you key over one, so a pose keyed on top of a
 bake stays typed as the model's own output and the request builder drops it.
 See :func:`constraints_ui.authored_pose_frames`.
 
-Without the Autoposer this is still useful: the click lands you on the frame,
-in pose mode, on the right rig, and Set Keyframe keys whatever you posed by
-hand.
+Editing a pose by hand is Animatica Autoposer Pro's (clicking a ghost to edit
+it, the handles, the trail): it keys through ``write_channels`` and the rest
+of the keying here, so its edits land in the take the same way.
 """
 
 from __future__ import annotations
 
 import bpy
-from bpy.props import IntProperty
 from bpy.types import Operator
 
-
-# ---------------------------------------------------------------------------
-# Autoposer interop
-#
-# Deliberately duck-typed. The Autoposer is a separate addon today and is
-# expected to move into this one; everything here asks whether it is present
-# and driving *this* rig, and degrades to plain pose-mode editing when it is
-# not. No import, no hard dependency, no version check beyond the operators
-# actually being there.
-# ---------------------------------------------------------------------------
-
+#: where the Autoposer keeps the rig's action while it holds the rig (its old control rig)
 _AP_STASHED_ACTION = "autoposer_stashed_action"
-
-
-def autoposer_available() -> bool:
-    from . import posing
-    return posing.present() and hasattr(bpy.ops.animatica_autoposer, "take_over")
-
-
-def autoposer_drives(arm) -> bool:
-    """True when the Autoposer is the thing posing this rig.
-
-    Which is now simply "it is the character we are working on": the Autoposer
-    follows Animatica's target armature rather than carrying a picker of its
-    own, so there is no longer a way for the two to disagree.
-    """
-    if arm is None or not autoposer_available():
-        return False
-    from . import posing
-    poser = posing.poser()
-    return poser is not None and poser._armature(bpy.context) is arm
-
-
-def ensure_control_rig(arm, report=None) -> bool:
-    """Give the rig its controls if it has none yet.
-
-    Building is not a step the artist should have to know about: the controls
-    are how a pose is edited, so they are made the first time a pose is
-    opened. It is one undo step and it is skipped entirely once they exist.
-    """
-    from . import posing
-
-    poser = posing.poser()
-    if arm is None or poser is None or not autoposer_available():
-        return False
-    # Live is the behaviour, not a mode: a control that moves nothing until
-    # some other command is run is a control that looks broken. The panel no
-    # longer offers the switch, so this is where it is held on.
-    bpy.context.scene.autoposer_live = True
-    poser.ensure_timer(bpy.context.scene)
-    if poser.has_controls(arm):
-        return True
-    try:
-        result = bpy.ops.animatica_autoposer.build_rig()
-    except RuntimeError as exc:
-        if report:
-            report({'WARNING'}, f"could not build the control rig: {exc}")
-        return False
-    return 'FINISHED' in result and poser.has_controls(arm)
-
-
-def autoposer_holds(arm) -> bool:
-    """True when the Autoposer currently owns the rig's action."""
-    return arm is not None and bool(arm.get(_AP_STASHED_ACTION))
-
-
-def active_session(settings, arm) -> int | None:
-    """The frame actually being edited, or None.
-
-    A recorded frame is only a live session while the playhead is still on it,
-    or while the Autoposer is holding the rig for it. Anything else is a
-    leftover — the artist scrubbed away, an undo restored an old value, a file
-    was loaded — and a leftover must never block a click or offer an Apply
-    that would write somewhere the artist is not looking.
-
-    Read-only: the panel calls this from ``draw``.
-    """
-    frame = int(getattr(settings, "editing_key_pose_frame", -1))
-    if frame < 0:
-        return None
-    scene = getattr(bpy.context, "scene", None)
-    if scene is not None and frame == int(scene.frame_current):
-        return frame
-    return None
-
-
-def stash_is_stale(arm) -> bool:
-    """The Autoposer stashed an action, but something else has bound one since.
-
-    ``take_over`` detaches the action and records its name, so while it holds
-    the rig there is nothing bound. An action bound *and* a stash recorded
-    means the two have diverged — a generation bound its result, or a key was
-    written into a new action — and the stash no longer describes the rig.
-    Handing it back then would swap the work out for what was there before.
-    """
-    if not autoposer_holds(arm):
-        return False
-    return arm.animation_data is not None and arm.animation_data.action is not None
 
 
 def _editing_action(arm):
@@ -420,224 +310,6 @@ def _target(context):
     return properties._live_armature(settings.target_armature)
 
 
-class ANIMATICA_OT_edit_key_pose(Operator):
-    bl_idname = "animatica.edit_key_pose"
-    bl_label = "Edit Key Pose"
-    bl_description = (
-        "Go to this key pose and start editing it. If the Autoposer is driving "
-        "this rig, the pose goes to the Autoposer, and Apply writes the result "
-        "back to this frame's keyframe"
-    )
-    bl_options = {'REGISTER', 'UNDO'}
-
-    frame: IntProperty(name="Frame", default=1)
-
-    @classmethod
-    def poll(cls, context):
-        return _target(context) is not None
-
-    def execute(self, context):
-        from . import key_poses
-
-        arm = _target(context)
-        settings = _settings(context)
-        frame = int(self.frame)
-
-        context.scene.frame_set(frame)
-
-        # Pose mode on the right rig, or none of the rest means anything.
-        if context.mode != 'OBJECT':
-            try:
-                bpy.ops.object.mode_set(mode='OBJECT')
-            except RuntimeError:
-                pass
-        for obj in context.view_layer.objects:
-            obj.select_set(False)
-        arm.select_set(True)
-        context.view_layer.objects.active = arm
-        try:
-            bpy.ops.object.mode_set(mode='POSE')
-        except RuntimeError:
-            self.report({'WARNING'}, "Could not enter pose mode")
-            return {'CANCELLED'}
-
-        posed = False
-        from . import posing
-        handles = posing.handles()
-        if handles is not None and handles.tool_active(context):
-            # The Autopose tool's handles sit on the pose as it is at this
-            # frame: nothing to build, nothing added to the rig.
-            handles.ensure(context.scene, arm)
-            posed = True
-
-        settings.editing_key_pose_frame = frame
-        key_poses.tag_redraw()
-        self.report(
-            {'INFO'},
-            f"Editing the pose at frame {frame}"
-            + (": drag a handle to reshape it" if posed else ""),
-        )
-        return {'FINISHED'}
-
-
-class ANIMATICA_OT_pick_ghost(Operator):
-    bl_idname = "animatica.pick_ghost"
-    bl_label = "Pick Key Pose Ghost"
-    bl_description = "Click a ghosted key pose to edit it"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        # Only where there are ghosts to pick: in a scene without a character
-        # this click (and its "Pick Key Pose Ghost" in the status bar) read as
-        # the add-on taking over the left mouse button.
-        from . import key_poses, properties
-        settings = _settings(context)
-        if settings is None or not key_poses.overlay_on(settings):
-            return False
-        return properties._live_armature(settings.target_armature) is not None
-
-    def invoke(self, context, event):
-        from . import key_poses
-
-        # This runs on every left click in the 3D view, so it has two jobs
-        # before anything else: be cheap, and never consume a click it did not
-        # mean to. Anything unexpected passes the click on untouched — a
-        # broken overlay must not break selection.
-        try:
-            if context.area is None or context.area.type != 'VIEW_3D':
-                return {'PASS_THROUGH'}
-            settings = _settings(context)
-            if not key_poses.overlay_on(settings):
-                return {'PASS_THROUGH'}
-            from . import curve_edit
-
-            # An Autoposer control wins over everything here: it is the thing
-            # the artist reached for, it sits exactly where the trail's
-            # current-frame marker is, and Blender's own selection is what
-            # should get the click.
-            if curve_edit.control_under_cursor(
-                context, event.mouse_region_x, event.mouse_region_y,
-            ):
-                return {'PASS_THROUGH'}
-
-            # A point on a motion curve then wins over the ghost behind it: it
-            # is the smaller target and the more specific intent. Clicking it
-            # SELECTS it — the gizmo that appears is what moves it. A click
-            # that went straight into a drag meant every mis-grab moved the
-            # pose before the artist could see which point they had.
-            grabbed = curve_edit.pick_point(
-                context, event.mouse_region_x, event.mouse_region_y,
-            )
-            if grabbed is not None:
-                bone, curve_frame, _world = grabbed
-                bpy.app.driver_namespace["animatica_last_ghost_pick"] = {
-                    "xy": (event.mouse_region_x, event.mouse_region_y),
-                    "hit": f"curve {bone}@{curve_frame}",
-                }
-                already = curve_edit.selected()
-                if already == (bone, curve_frame):
-                    # Second press on the point already selected: that is
-                    # deliberate enough to be a drag. It also means the curve
-                    # can still be posed where the gizmo cannot be reached —
-                    # gizmos switched off in the viewport, say.
-                    return bpy.ops.animatica.drag_motion_curve(
-                        'INVOKE_DEFAULT', bone=bone, frame=curve_frame,
-                    )
-                curve_edit.select_point(bone, curve_frame)
-                key_poses.tag_redraw()
-                self.report(
-                    {'INFO'},
-                    f"{curve_edit._canonical(key_poses._target(settings), bone)} at frame {curve_frame}. "
-                    "Drag a handle to reshape it (the mouse wheel sets how many frames "
-                    "around it move too), or use Smooth on the bar",
-                )
-                return {'FINISHED'}
-
-            # Clicking away from the curve lets it go, the way clicking empty
-            # space clears a selection everywhere else.
-            if curve_edit.selected() is not None:
-                curve_edit.clear_selection()
-                key_poses.tag_redraw()
-            frame = key_poses.pick_frame(
-                context, event.mouse_region_x, event.mouse_region_y,
-            )
-            # Leave a trace of what the last click decided. Clicking a ghost
-            # and getting nothing is indistinguishable from the binding never
-            # firing, and this is the only way to tell them apart afterwards.
-            bpy.app.driver_namespace["animatica_last_ghost_pick"] = {
-                "xy": (event.mouse_region_x, event.mouse_region_y),
-                "hit": frame,
-            }
-            if frame is not None:
-                # Switching poses mid-hand-over would strand the edit inside
-                # the Autoposer, so that one case is refused — out loud, and
-                # still passing the click on so selection behaves normally.
-                held = active_session(settings, _target(context))
-                if held is not None and held != frame and autoposer_holds(_target(context)):
-                    self.report(
-                        {'WARNING'},
-                        f"Apply or Cancel the pose at frame {held} first",
-                    )
-                    return {'PASS_THROUGH'}
-        except Exception as exc:            # noqa: BLE001 — never eat a click
-            print(f"[Animatica] ghost pick failed: {exc}")
-            return {'PASS_THROUGH'}
-        if frame is None:
-            return {'PASS_THROUGH'}
-        return bpy.ops.animatica.edit_key_pose('INVOKE_DEFAULT', frame=frame)
-
-
-class ANIMATICA_OT_give_back_rig(Operator):
-    bl_idname = "animatica.give_back_rig"
-    bl_label = "Give Back Rig"
-    bl_description = (
-        "Take the rig back from the Autoposer, which set its action aside to "
-        "hold the pose. The action is put back, unless another action has been "
-        "assigned since. In that case the new action is kept"
-    )
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        arm = _target(context)
-        return arm is not None and autoposer_holds(arm)
-
-    def execute(self, context):
-        from . import key_poses
-
-        arm = _target(context)
-        settings = _settings(context)
-        settings.editing_key_pose_frame = -1
-
-        if stash_is_stale(arm):
-            # Something bound an action after the take-over. Re-attaching the
-            # stash would replace it — the generated take, or the poses keyed
-            # since — so let go without touching what is bound.
-            kept = arm.animation_data.action.name
-            # Only the tracks the take-over muted: a stashed action's track
-            # is muted to play nothing, and a track the artist muted is theirs.
-            muted = set(arm.get("autoposer_muted_nla", []))
-            for key in ("autoposer_stashed_action", "autoposer_stashed_slot",
-                        "autoposer_stashed_slot_id", "autoposer_muted_nla"):
-                if key in arm:
-                    del arm[key]
-            for track in arm.animation_data.nla_tracks:
-                if track.name in muted:
-                    track.mute = False
-            self.report({'INFO'}, f"Autoposer let go of the rig. Kept {kept}")
-        else:
-            try:
-                bpy.ops.animatica_autoposer.release()
-            except RuntimeError as exc:
-                self.report({'WARNING'}, f"Autoposer did not release: {exc}")
-                return {'CANCELLED'}
-            self.report({'INFO'}, "Autoposer handed the rig back")
-        key_poses.invalidate_plan()
-        key_poses.request_rebuild()
-        return {'FINISHED'}
-
-
 class ANIMATICA_OT_set_key_pose(Operator):
     bl_idname = "animatica.set_key_pose"
     bl_label = "Set Key Pose"
@@ -654,10 +326,9 @@ class ANIMATICA_OT_set_key_pose(Operator):
         return _target(context) is not None
 
     def execute(self, context):
-        from . import key_poses
+        from . import key_poses, posing
 
         arm = _target(context)
-        settings = _settings(context)
         frame = int(context.scene.frame_current)
 
         action = _editing_action(arm)
@@ -679,7 +350,7 @@ class ANIMATICA_OT_set_key_pose(Operator):
             self.report({'WARNING'}, f"Nothing could be keyed on “{action.name}”")
             return {'CANCELLED'}
         key_poses.flash_keyed(frame)
-        settings.editing_key_pose_frame = -1
+        posing.end_edit(context.scene)           # a ghost clicked to edit (the Autoposer's): done
         context.scene.frame_set(frame)
         key_poses.invalidate_plan()
         key_poses.request_rebuild()
@@ -700,56 +371,15 @@ class ANIMATICA_OT_set_key_pose(Operator):
 # ---------------------------------------------------------------------------
 
 _classes = (
-    ANIMATICA_OT_edit_key_pose,
-    ANIMATICA_OT_pick_ghost,
     ANIMATICA_OT_set_key_pose,
     ANIMATICA_OT_keep_frame,
-    ANIMATICA_OT_give_back_rig,
 )
-
-_keymaps: list = []
-
-
-def _register_keymap() -> None:
-    """Bind a plain left click in the 3D view to the ghost pick.
-
-    An addon keymap entry is consulted before Blender's own, and the operator
-    returns ``PASS_THROUGH`` whenever the click is not on a ghost — so
-    selection, tools and gizmos behave exactly as they did everywhere else.
-    """
-    wm = bpy.context.window_manager
-    config = getattr(wm.keyconfigs, "addon", None)
-    if config is None:
-        return
-    km = config.keymaps.new(name="3D View", space_type='VIEW_3D')
-    # One item per modifier state we answer to, not one with modifiers read off
-    # the event: Blender matches a keymap item on the exact modifier state, so
-    # an item registered plain is never reached while Shift is held — which
-    # silently cost us the Shift variant until it was checked. Ctrl is left
-    # alone, so a Ctrl-click still means to Blender what it always did.
-    for shift in (False, True):
-        kmi = km.keymap_items.new(
-            ANIMATICA_OT_pick_ghost.bl_idname, 'LEFTMOUSE', 'PRESS', shift=shift,
-        )
-        _keymaps.append((km, kmi))
-
-
-def _unregister_keymap() -> None:
-    for km, kmi in _keymaps:
-        try:
-            km.keymap_items.remove(kmi)
-        except (RuntimeError, ReferenceError):
-            pass
-    _keymaps.clear()
-
 
 def register() -> None:
     for cls in _classes:
         bpy.utils.register_class(cls)
-    _register_keymap()
 
 
 def unregister() -> None:
-    _unregister_keymap()
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)

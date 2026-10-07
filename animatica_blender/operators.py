@@ -455,8 +455,8 @@ def _apply_inplace_constraint(armature_obj, enabled: bool) -> None:
     action = ad.action if ad is not None else None
     if action is None:
         return
-    from . import preview_session, root_edit
-    edited = root_edit.find(action) is not None
+    from . import posing, preview_session
+    edited = posing.path_edited(action)         # the Autoposer's: the root path, bent
     # The root keys this rewrites are the take's, not edits of the artist's.
     with preview_session.keeping_edits(action):
         if not enabled:
@@ -475,87 +475,11 @@ def _apply_inplace_constraint(armature_obj, enabled: bool) -> None:
 def _keep_inplace(armature_obj, actions) -> None:
     """Accept: the take stays in place; the original keys kept for switching back go,
     and so does an edited root trajectory's curve (the edit is in the keys now)."""
-    from . import inplace, root_edit
+    from . import inplace, posing
     for a in actions:
         inplace.forget(a)
-    root_edit.discard_all()
+    posing.path_discard_all()
     _drop_legacy_inplace_constraint(armature_obj)
-
-
-class ANIMATICA_OT_edit_root_trajectory(Operator):
-    """Send the take along a new path: its root trajectory as a curve to edit"""
-    bl_idname = "animatica.edit_root_trajectory"
-    bl_label = "Edit Root Trajectory"
-    bl_description = (
-        "Turn the take's root trajectory into a Bezier curve on the floor, and "
-        "edit the curve to change the path. With In place off, the character "
-        "follows the curve live as you edit, keeping the take's timing. With In "
-        "place on, the pose doesn't change and the curve is the root motion a "
-        "game export gets. Sharp new bends make the feet slide"
-    )
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        s = getattr(context.scene, "animatica", None)
-        arm = getattr(s, "target_armature", None)
-        return bool(arm is not None and arm.animation_data and arm.animation_data.action)
-
-    def execute(self, context):
-        from . import root_edit
-        s = context.scene.animatica
-        arm = s.target_armature
-        action = arm.animation_data.action
-        obj = root_edit.find(action)
-        created = obj is None
-        if created:
-            obj = root_edit.create(arm, action, context.scene)
-        if obj is None:
-            self.report({'INFO'}, "This take stays on the spot, so there is no root trajectory to edit")
-            return {'CANCELLED'}
-        s.key_pose_overlay = True
-        s.key_pose_root_path = True
-        if context.mode != 'OBJECT' and context.view_layer.objects.active is not None:
-            bpy.ops.object.mode_set(mode='OBJECT')
-        for o in context.view_layer.objects.selected:
-            o.select_set(False)
-        obj.hide_set(False)
-        obj.select_set(True)
-        context.view_layer.objects.active = obj
-        bpy.ops.object.mode_set(mode='EDIT')
-        if created:
-            root_edit.refresh(context.scene)
-        self.report({'INFO'}, "Editing the root trajectory. Move its points and handles to change the path, "
-                              "then press Tab to finish")
-        return {'FINISHED'}
-
-
-class ANIMATICA_OT_reset_root_trajectory(Operator):
-    """Go back to the fitted root trajectory"""
-    bl_idname = "animatica.reset_root_trajectory"
-    bl_label = "Reset Root Trajectory"
-    bl_description = "Drop the edited root trajectory and go back to the one fitted from the take"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    @classmethod
-    def poll(cls, context):
-        from . import root_edit
-        s = getattr(context.scene, "animatica", None)
-        arm = getattr(s, "target_armature", None)
-        ad = arm.animation_data if arm is not None else None
-        return bool(ad and ad.action and root_edit.find(ad.action) is not None)
-
-    def execute(self, context):
-        from . import root_edit
-        arm = context.scene.animatica.target_armature
-        if context.mode == 'EDIT_CURVE':
-            bpy.ops.object.mode_set(mode='OBJECT')
-        root_edit.discard(arm.animation_data.action)
-        if context.view_layer.objects.active is None or context.view_layer.objects.active == arm:
-            context.view_layer.objects.active = arm
-            arm.select_set(True)
-        root_edit.refresh(context.scene, reuse=False)
-        return {'FINISHED'}
 
 
 #: per-key properties the split carries over besides the frame and value
@@ -1073,9 +997,9 @@ def _bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int,
     if fixed:
         print("[animatica] pins put back on target: "
               + ", ".join(f"{j.split(':')[-1]}@{f} was {cm} cm off" for j, f, cm in fixed))
-    # Locks: a hand or foot locked in place over these frames holds again.
-    from . import joint_lock
-    joint_lock.reapply(arm, action, gen_start, gen_end)
+    # Locks (the Autoposer's): a hand or foot locked in place over these frames holds again.
+    from . import posing
+    posing.after_take(arm, action, gen_start, gen_end)
     # Fingers: the model has none, so each hand gets its pose laid on.
     from . import hand_pose
     hand_pose.apply(arm, action, settings, (gen_start, gen_end))
@@ -1800,9 +1724,9 @@ class ANIMATICA_OT_reject(Operator):
         arm = _live_target_armature_or_clear(s)
         if arm is not None and _refuse_in_tweak_mode(self, [arm]):
             return {'CANCELLED'}
-        from . import preview_session, root_edit, variations
+        from . import posing, preview_session, variations
         variations.forget(arm)
-        root_edit.discard_all()
+        posing.path_discard_all()
         if arm is None:
             self.report(
                 {'ERROR'},
@@ -2566,8 +2490,6 @@ _classes = (
     ANIMATICA_MT_example_poses,
     ANIMATICA_OT_accept,
     ANIMATICA_OT_reject,
-    ANIMATICA_OT_edit_root_trajectory,
-    ANIMATICA_OT_reset_root_trajectory,
     ANIMATICA_OT_cancel_generation,
     ANIMATICA_OT_signin,
     ANIMATICA_OT_signin_generate,

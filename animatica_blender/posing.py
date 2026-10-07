@@ -1,11 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Animatica Autoposer Pro, when it is installed alongside: the one place this add-on reaches it.
 
-The two are separate products: this one makes motion, the Autoposer poses. Installed together,
-the Autoposer's tool is on the bar, an edit with it carries through the frames around it, the
-ghosts and the zoetrope can be posed, and a pose keys into the take. Without it, everything
-here that poses (the Autopose tool, dragging a ghost or the motion trail) is not offered, and
-what needs to know which bone is a hand or a foot reads it off the bone names.
+The two are separate products: this one makes motion and shows it (prompts, key poses, takes,
+the ghosts), the Autoposer edits it by hand -- the Autopose handles, the motion trail, the
+zoetrope, Lock in Place, the reach of an edit, a ghost clicked to edit, the root path bent.
+Installed together, its buttons are on this add-on's bar and its rows in these panels, it samples
+and draws in this add-on's overlay pass, and its edits key into the take. Without it nothing
+here edits by hand, and what needs to know which bone is a hand or a foot reads the bone names.
+
+Everything it adds is asked for here, through its ``editing`` module, each time it is needed:
+nothing is registered into this add-on, so either can be enabled or disabled first.
 """
 
 from __future__ import annotations
@@ -20,8 +24,9 @@ PRO_ID = "animatica_autoposer"
 #: where to get it, said where a posing feature would be
 PRO_NAME = "Animatica Autoposer Pro"
 #: the bridge with the Autoposer (posing.py here, host.py there): the two combine only when both
-#: say the same number, so an older or newer Autoposer leaves this add-on working on its own
-BRIDGE = 1
+#: say the same number, so an older or newer Autoposer leaves this add-on working on its own.
+#: 2: editing moved to the Autoposer, asked through its ``editing`` module.
+BRIDGE = 2
 
 
 def package():
@@ -70,10 +75,126 @@ def tool_active(context) -> bool:
     return bool(h is not None and h.tool_active(context))
 
 
+def editing():
+    """The Autoposer's editing (its answers to this add-on), or None without it."""
+    return module("editing")
+
+
 def dragging() -> bool:
-    """A handle drag under way (the ghosts are being re-posed by it)."""
-    h = handles()
-    return bool(h is not None and h._drag.get("active"))
+    """A drag under way that poses the rig -- a handle, the trail, a zoetrope slice: its pose is
+    unkeyed until it ends, so nothing may step the playhead under it."""
+    ed = editing()
+    try:
+        return bool(ed is not None and ed.dragging())
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
+def bar_items(context, arm, where: str) -> list:
+    """The Autoposer's buttons for the bar (dicts the bar makes its items from): ``where`` is
+    "pose" (first on the bar) or "edit" (after the onion skin)."""
+    ed = editing()
+    if ed is None:
+        return []
+    try:
+        return list(ed.bar_items(context, arm, where))
+    except Exception as exc:                            # noqa: BLE001 -- never break the bar
+        print(f"[Animatica] the Autoposer's buttons: {exc}")
+        return []
+
+
+def samplers() -> list:
+    """Who else samples the motion in the ghosts' bake pass and draws in the overlay (the
+    Autoposer's motion trail)."""
+    ed = editing()
+    try:
+        return list(ed.samplers()) if ed is not None else []
+    except Exception:                                   # noqa: BLE001
+        return []
+
+
+def editing_frame(scene) -> int:
+    """The ghost whose pose is being edited, or -1."""
+    ed = editing()
+    try:
+        return int(ed.editing_frame(scene)) if ed is not None else -1
+    except Exception:                                   # noqa: BLE001
+        return -1
+
+
+def end_edit(scene) -> None:
+    """A pose was keyed: the ghost clicked to edit it is done."""
+    ed = editing()
+    if ed is not None:
+        try:
+            ed.end_edit(scene)
+        except Exception:                               # noqa: BLE001
+            pass
+
+
+def hint(context):
+    """The hint line while an edit is under way (Lock in Place's steps), or None."""
+    ed = editing()
+    try:
+        return ed.hint(context) if ed is not None else None
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def after_take(arm, action, start, end) -> None:
+    """A take was baked over these frames (the locks over them hold again)."""
+    ed = editing()
+    if ed is not None:
+        try:
+            ed.after_take(arm, action, start, end)
+        except Exception as exc:                        # noqa: BLE001 -- never fail a take
+            print(f"[Animatica] the Autoposer's locks over the take: {exc}")
+
+
+def reseat(scene) -> None:
+    """The bake walked the playhead with the frame handler muted: the controls are put back."""
+    ed = editing()
+    if ed is not None:
+        try:
+            ed.reseat(scene)
+        except Exception:                               # noqa: BLE001 -- never fail a bake
+            pass
+
+
+def onion_layout():
+    """How the Autoposer lays the onion skin out while editing (the frames within Reach, the
+    zoetrope), or None: the onion skin is then this add-on's own Before/After."""
+    ed = editing()
+    return ed.onion_layout() if ed is not None else None
+
+
+def path_overlay(action, spans, fps):
+    """The fitted root path with the artist's bent one laid over it, where there is one."""
+    ed = editing()
+    return ed.path_overlay(action, spans, fps) if ed is not None else spans
+
+
+def path_edited(action) -> bool:
+    ed = editing()
+    return bool(ed is not None and ed.path_edited(action))
+
+
+def path_discard_all() -> None:
+    ed = editing()
+    if ed is not None:
+        ed.path_discard_all()
+
+
+def draw_panel(kind: str, layout, context) -> bool:
+    """The Autoposer's rows in this add-on's panels; False without it."""
+    ed = editing()
+    if ed is None:
+        return False
+    try:
+        return bool(ed.draw_panel(kind, layout, context))
+    except Exception as exc:                            # noqa: BLE001 -- never break a panel
+        print(f"[Animatica] the Autoposer's panel rows: {exc}")
+        return False
 
 
 def draw_controls(layout, context) -> bool:

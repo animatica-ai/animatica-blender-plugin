@@ -12,13 +12,13 @@ armature. Not happy? **Reject** and try again.
 - **Full clips** — generate motion across a frame range from text prompts and key poses
 - **Prompt blocks on the timeline** — one prompt per stretch of the shot, each one regenerated on its own if you like
 - **Key poses** — pose the character, press **Set Keyframe**, and the motion passes through that pose
-- **Autoposer** (optional) — drag a hand, foot or the hips and the whole body follows
-- **See the plan** — ghosts of your key poses, and a motion trail you can drag to repose the body
+- **See the plan** — ghosts of your key poses, and an onion skin of the motion around the playhead
+- **Posing and editing by hand** (Animatica Autoposer Pro, sold separately) — drag a hand, foot or the hips and the whole body follows; drag the motion trail, spread the onion skin into a zoetrope, lock a foot in place
 - **Waypoints and pins** — where the character stands at a frame, and a hand or foot held in place
 - **Variations** — several versions of a take from one Generate; flip between them and keep one
 - **Several characters at once** — select them and generate them together, each with its own row in the review
 - **Loop** — a seamless walk, run or idle cycle, for games
-- **In place** — take out the travel and keep the body's sway and bounce; the root trajectory is editable
+- **In place** — take out the travel and keep the body's sway and bounce; with Autoposer Pro the root trajectory is editable
 - **Follow Selection** — select a character to animate it
 - **Example scenes** — open a finished set, ready to generate
 - **Single poses** — **Generate Pose at Frame** for one frame without replacing your whole action
@@ -30,10 +30,9 @@ so you don't need a local GPU and there is no generation model to download.
 Sign in once in the addon preferences and you're set. Power users can run a
 server on their own machine instead; see [configuration](docs/configuration.md).
 
-The **Autoposer** is the one part that runs on your machine. It is optional and
-opt-in: nothing is downloaded until you press **Download Autoposer** (about
-225 MB, once: the onnxruntime inference runtime, about 75 MB, and the model,
-about 150 MB). What the addon sends, and where, is listed under
+Nothing runs on your machine but the addon itself, and nothing is downloaded
+until you ask (an example scene, the ready-made character). What the addon
+sends, and where, is listed under
 [Privacy and network](docs/configuration.md#privacy-and-network).
 
 ## Install
@@ -74,7 +73,7 @@ Stuck or want to share feedback?
 |---|---|
 | [Tutorial videos](https://www.youtube.com/watch?v=Wc349qOwjfM&list=PLAJ2UfUYhFQKZpFS8eh1eGUWJ0PAys1n1) | YouTube walkthrough playlist |
 | [Install](docs/installation.md) | Download, enable, and keep the addon up to date |
-| [Sign in & setup](docs/configuration.md) | Animatica Cloud or self-hosted, the Autoposer, privacy |
+| [Sign in & setup](docs/configuration.md) | Animatica Cloud or self-hosted, privacy |
 | [Using Animatica](docs/usage.md) | Full workflow in Blender |
 | [Tips & limits](docs/limitations.md) | What to expect |
 | [All guides](docs/README.md) | Documentation index |

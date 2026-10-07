@@ -25,7 +25,6 @@ It must be on for:
 - Animatica Cloud: listing models, generating, signing in
 - update checks and updates
 - example scenes and the ready-made character (the first time; they are cached after that)
-- the Autoposer download
 
 With it off, the only thing that works is a self-hosted server on this
 machine (`localhost`). The panel says *Online access is disabled in

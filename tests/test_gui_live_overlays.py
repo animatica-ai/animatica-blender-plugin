@@ -1,10 +1,12 @@
-"""The ghosts (the onion skin) and the motion trail follow the keys, live, in a real Blender
-window: keys deleted in the Dope Sheet show on both within moments -- deleted while nothing else
-is going on, and deleted while the onion skin is still filling in after the last edit (the case
-that left them stale: an edit then was taken for the overlay's own re-evaluation and dropped).
+"""The ghosts (the onion skin) follow the keys, live, in a real Blender window: keys deleted in
+the Dope Sheet show on them within moments -- deleted while nothing else is going on, and deleted
+while the onion skin is still filling in after the last edit (the case that left them stale: an
+edit then was taken for the overlay's own re-evaluation and dropped). Without Autoposer Pro (the
+motion trail is its own, and tested there), so the onion skin's frames are its Before and After,
+Step apart.
 
-"Right" is measured, not assumed: after each edit the trail's frames and points, and every
-onion ghost's joints, are compared with the rig stepped to those frames now.
+"Right" is measured, not assumed: after each edit every onion ghost's joints are compared with
+the rig stepped to its frame now.
 
 Needs the Animatic character in Blender's data (read, never fetched). A window opens and closes
 itself::
@@ -74,11 +76,9 @@ def setup():
     ctx.scene.frame_set(25)
     s.key_pose_overlay = True
     s.key_pose_ghosts = True
-    s.key_pose_trail = True
     s.key_pose_auto_refresh = True
     s.onion_mode = 'FRAMES'
-    s.onion_wormhole = False
-    s.trail_radius = 12
+    s.onion_before, s.onion_after, s.onion_step = 3, 2, 4
     # the Timeline a Dope Sheet, its keys deletable as an artist deletes them
     _win, _v3d, dope = areas()
     dope.ui_type = 'DOPESHEET'
@@ -106,7 +106,7 @@ def delete_keys_at(arm, frame):
 
 
 def truth(arm, frames, bones):
-    """Where the traced joints are at each frame, the rig stepped there now (the overlay's
+    """Where the ghosts' joints are at each frame, the rig stepped there now (the overlay's
     change handler muted meanwhile, as its own bakes mute it)."""
     ctx = bpy.context
     sc = ctx.scene
@@ -117,7 +117,7 @@ def truth(arm, frames, bones):
         for f in frames:
             sc.frame_set(f)
             ctx.view_layer.update()
-            out[f] = key_poses._capture_trail(arm, bones, ctx.evaluated_depsgraph_get())
+            out[f] = key_poses.capture_joints(arm, bones, ctx.evaluated_depsgraph_get())
     finally:
         sc.frame_set(saved)
         ctx.view_layer.update()
@@ -130,21 +130,14 @@ def far(a, b):
 
 
 def compare(arm, label):
-    """The trail and the onion ghosts against the rig now."""
-    action = arm.animation_data.action
-    t = key_poses._trail
-    want_frames = key_poses._trail_frames(action, key_poses.plan(bpy.context.scene)["frames"])
-    check(f"{label}: the trail spans the motion", t["frames"] == want_frames,
-          f"trail {t['frames'][:1]}..{t['frames'][-1:]} ({len(t['frames'])}), motion "
-          f"{want_frames[:1]}..{want_frames[-1:]} ({len(want_frames)})")
-    bones = list(t["bones"])
-    real = truth(arm, sorted(set(t["frames"]) | set(key_poses._onion["cache"])), bones)
-    worst = 0.0
-    for name in bones:
-        for f, p in zip(t["frames"], t["points"].get(name, ())):
-            worst = max(worst, far(p, real[f][name]))
-    check(f"{label}: the trail is where the joints go", worst < TOL, f"off by {worst * 100:.2f} cm at worst")
-    shown = key_poses.onion_frames(bpy.context.scene, bpy.context.scene.animatica)
+    """The onion ghosts against the rig now."""
+    sc = bpy.context.scene
+    shown = key_poses.onion_frames(sc, sc.animatica)
+    c = sc.frame_current
+    want = [c - 12, c - 8, c - 4, c + 4, c + 8]             # 3 before, 2 after, 4 frames apart
+    check(f"{label}: the onion skin shows Before and After, Step apart", shown == want, f"{shown}")
+    bones = key_poses.end_bones(arm)
+    real = truth(arm, sorted(set(shown) | set(key_poses._onion["cache"])), bones)
     worst, missing = 0.0, []
     for f in shown:
         e = key_poses.onion_entry(f)
@@ -160,7 +153,7 @@ def compare(arm, label):
 
 def settled():
     return (key_poses._rebuild_requested_at is None and not key_poses._onion["pending"]
-            and not key_poses._trail["dirty"] and not key_poses._onion["dirty"])
+            and not key_poses._onion["dirty"])
 
 
 def wait_settled(timeout=8.0):
@@ -177,8 +170,8 @@ def wait_settled(timeout=8.0):
 def steps():
     arm = setup()
     yield from wait_settled()
-    check("the overlay bakes at the start", key_poses._trail["frames"] and key_poses._onion["cache"],
-          f"{len(key_poses._trail['frames'])} trail frames, {len(key_poses._onion['cache'])} ghosts")
+    check("the overlay bakes at the start", bool(key_poses._onion["cache"]),
+          f"{len(key_poses._onion['cache'])} ghosts")
     compare(arm, "start")
 
     # 1. a key deleted with nothing else going on
