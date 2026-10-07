@@ -1,6 +1,7 @@
 # Changelog
 
-All notable changes to the Animatica for Blender addon are documented here.
+All notable changes to the Animatica Choreographer add-on for Blender (formerly Animatica for
+Blender) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -11,7 +12,7 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Changed
 
-- **Posing and editing by hand are now Animatica Autoposer Pro, a separate
+- **Posing and editing by hand are now Animatica Marionette, a separate
   add-on.** This add-on makes the motion and shows it: prompts and blocks,
   key poses, waypoints and pins, Generate, Redo, versions, Loop, In Place,
   Copy/Paste Motion, the ghosts and the onion skin, and the root trajectory
@@ -27,6 +28,8 @@ Proscenium, and keep the identifiers those releases actually shipped.
   shows the poses Before and After the playhead, Step frames apart, as
   Grease Pencil's onion skin does. With Pro it still shows the frames an
   edit reaches (Reach), or the zoetrope.
+- **Renamed Animatica Choreographer.** The add-on is now listed as Animatica
+  Choreographer, beside Animatica Marionette.
 - **Settings that moved.** Reach, Intensity, the zoetrope's Step and Spacing,
   and the trail's switches are now Pro's. A file saved with them set opens
   with Pro's defaults. Locks keep working, and are stored on the rig as

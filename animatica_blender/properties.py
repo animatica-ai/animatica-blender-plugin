@@ -1087,7 +1087,7 @@ class AnimaticaSettings(PropertyGroup):
             "line, an arc, or either with easing. In place takes it out, so with "
             "In place on it shows what was removed. Coloured by speed from green "
             "(slow) to red (fast), and labelled with its shape and speed "
-            "(\"line · 1.05 m/s\"). Autoposer Pro edits it"
+            "(\"line · 1.05 m/s\"). Marionette edits it"
         ),
         default=False,
         update=_key_poses_toggle_update,

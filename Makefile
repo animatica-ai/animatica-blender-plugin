@@ -1,9 +1,9 @@
-# Animatica for Blender — package the addon as an installable .zip.
+# Animatica Choreographer — package the addon as an installable .zip.
 #
 # `make zip` produces dist/animatica-blender-<version>.zip with a single
 # top-level `animatica_blender/` directory inside, which is exactly what
 # Blender's `Install Addon…` UI expects. It is the motion product alone:
-# posing by hand is Animatica Autoposer Pro, a separate add-on (its own
+# posing by hand is Animatica Marionette, a separate add-on (its own
 # private repo, animatica-ai/animatica-autoposer).
 #
 # `make install` symlinks the source tree into your Blender 5+ addons

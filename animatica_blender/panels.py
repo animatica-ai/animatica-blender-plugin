@@ -689,7 +689,7 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
 
         # --- the Autoposer: named, and said what it does, so it can be found
         head = layout.row()
-        head.label(text="Autoposer", icon='OUTLINER_OB_ARMATURE')
+        head.label(text="Marionette", icon='OUTLINER_OB_ARMATURE')
         sub = layout.row()
         sub.active = False
         if posing.present():

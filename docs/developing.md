@@ -25,7 +25,7 @@ Override: `make install BLENDER_ADDONS_DIR=/path/to/scripts/addons`
 Python package: `animatica_blender/` — operators in `operators.py`, UI in
 `panels.py`, request assembly in `request_builder.py`, animation bake in
 `gltf_to_blender.py`, updates in `updater.py`, example scenes in `examples.py`.
-Posing and editing by hand are Animatica Autoposer Pro, a separate add-on;
+Posing and editing by hand are Animatica Marionette, a separate add-on;
 `posing.py` is the one place this add-on reaches it, and every call there is a
 no-op without it (`tests/test_without_pro.py`).
 

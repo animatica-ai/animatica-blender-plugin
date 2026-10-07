@@ -11,7 +11,7 @@ keyframe's existing type when you key over one, so a pose keyed on top of a
 bake stays typed as the model's own output and the request builder drops it.
 See :func:`constraints_ui.authored_pose_frames`.
 
-Editing a pose by hand is Animatica Autoposer Pro's (clicking a ghost to edit
+Editing a pose by hand is Animatica Marionette's (clicking a ghost to edit
 it, the handles, the trail): it keys through ``write_channels`` and the rest
 of the keying here, so its edits land in the take the same way.
 """

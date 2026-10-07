@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
-Animatica for Blender — AI Motion Generation Addon
+Animatica Choreographer — AI motion generation for Blender
 ====================================================
 
 Select an armature with a few keyframes, click Generate, and the server
@@ -8,18 +8,18 @@ fills in the motion using a backend MMCP-compatible motion model.
 
 Generation, retargeting and keyframe optimisation run on the backend
 server. This add-on makes the motion and shows it (key poses, takes, the
-ghosts); editing it by hand is a product of its own, Animatica Autoposer Pro:
+ghosts); editing it by hand is a product of its own, Animatica Marionette:
 installed alongside, its handles, motion trail, zoetrope and locks join this
 add-on's bar and panels and key into the take (posing.py is where the two meet).
 """
 
 bl_info = {
-    "name": "Animatica — AI Motion Generation",
+    "name": "Animatica Choreographer",
     "author": "Animatica",
     "version": (0, 7, 0),
     "blender": (5, 0, 0),
-    "location": "View3D > Sidebar > Animatica",
-    "description": "AI motion generation: select an armature, set keyframes and generate",
+    "location": "3D Viewport > the floating bar, and Sidebar > Animatica",
+    "description": "Generate a character's motion from prompts and key poses, on any rig",
     "category": "Animation",
 }
 

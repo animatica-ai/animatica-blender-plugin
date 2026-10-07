@@ -1,4 +1,4 @@
-# Animatica Blender Plugin
+# Animatica Choreographer for Blender
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 
@@ -13,12 +13,12 @@ armature. Not happy? **Reject** and try again.
 - **Prompt blocks on the timeline** — one prompt per stretch of the shot, each one regenerated on its own if you like
 - **Key poses** — pose the character, press **Set Keyframe**, and the motion passes through that pose
 - **See the plan** — ghosts of your key poses, and an onion skin of the motion around the playhead
-- **Posing and editing by hand** (Animatica Autoposer Pro, sold separately) — drag a hand, foot or the hips and the whole body follows; drag the motion trail, spread the onion skin into a zoetrope, lock a foot in place
+- **Posing and editing by hand** (Animatica Marionette, sold separately) — drag a hand, foot or the hips and the whole body follows; drag the motion trail, spread the onion skin into a zoetrope, lock a foot in place
 - **Waypoints and pins** — where the character stands at a frame, and a hand or foot held in place
 - **Variations** — several versions of a take from one Generate; flip between them and keep one
 - **Several characters at once** — select them and generate them together, each with its own row in the review
 - **Loop** — a seamless walk, run or idle cycle, for games
-- **In place** — take out the travel and keep the body's sway and bounce; with Autoposer Pro the root trajectory is editable
+- **In place** — take out the travel and keep the body's sway and bounce; with Marionette the root trajectory is editable
 - **Follow Selection** — select a character to animate it
 - **Example scenes** — open a finished set, ready to generate
 - **Single poses** — **Generate Pose at Frame** for one frame without replacing your whole action
@@ -40,7 +40,7 @@ sends, and where, is listed under
 1. Download the latest **animatica-blender-….zip** from
    [GitHub Releases](https://github.com/animatica-ai/animatica-blender-plugin/releases)
 2. In Blender: **Edit → Preferences → Add-ons → Install…** → choose the zip
-3. Enable **Animatica — AI Motion Generation**
+3. Enable **Animatica Choreographer**
 4. Make sure **Edit → Preferences → System → Allow Online Access** is on
 
 You need **Blender 5.0+** and a free [Animatica](https://animatica.ai) account.

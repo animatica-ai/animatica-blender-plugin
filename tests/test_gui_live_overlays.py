@@ -1,7 +1,7 @@
 """The ghosts (the onion skin) follow the keys, live, in a real Blender window: keys deleted in
 the Dope Sheet show on them within moments -- deleted while nothing else is going on, and deleted
 while the onion skin is still filling in after the last edit (the case that left them stale: an
-edit then was taken for the overlay's own re-evaluation and dropped). Without Autoposer Pro (the
+edit then was taken for the overlay's own re-evaluation and dropped). Without Marionette (the
 motion trail is its own, and tested there), so the onion skin's frames are its Before and After,
 Step apart.
 

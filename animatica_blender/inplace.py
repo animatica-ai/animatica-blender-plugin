@@ -35,7 +35,7 @@ place removes exactly that:
 Toggling In place off puts the original keys back: they are kept on the action
 until Accept, and then what was taken out is kept instead (ROOT_MOTION_KEY):
 it is the root motion a game export puts on a ground root bone
-(game_export.py). A path edited with Autoposer Pro re-paths the take instead.
+(game_export.py). A path edited with Marionette re-paths the take instead.
 Root keys the artist sets meanwhile (a crouch keyed in place) are kept: put
 back with the travel, and In place taken out of them again.
 Numpy only (Blender ships it; not scipy).
@@ -1057,7 +1057,7 @@ def apply(arm, action, scene, spans, fps: float | None = None, *, reuse: bool = 
           mode: str = "in_place") -> list:
     """Over each span ``(first, last, loop)`` (a prompt block each; a loop's
     cycle), take the travel out of *action* (``mode="in_place"``), or move the
-    take onto the artist's edited path (``"repath"``, Autoposer Pro's). The
+    take onto the artist's edited path (``"repath"``, Marionette's). The
     original keys are kept so :func:`restore` can put them back. Returns what
     was done, per span. ``reuse`` takes the take as last sampled (an edit to
     the path changes the path, not the take)."""
@@ -1161,7 +1161,7 @@ def _fit_spans(arm, action, scene, spans, fps, *, reuse: bool = False):
     """The trajectory of each span ``(first, last, loop)``: the server's path,
     laid onto the take, or one fitted here, and the heading the body faces
     along it; with the artist's edited path alongside, if there is one
-    (Autoposer Pro's). Samples the take (moves the playhead, and puts it back)
+    (Marionette's). Samples the take (moves the playhead, and puts it back)
     unless ``reuse`` finds it sampled already; writes nothing. Call on the take
     as generated (not in place): apply restores it first."""
     from . import posing

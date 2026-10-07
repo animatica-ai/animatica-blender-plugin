@@ -12,7 +12,7 @@
    [GitHub Releases](https://github.com/animatica-ai/animatica-blender-plugin/releases)
 2. Open Blender → **Edit → Preferences → Add-ons**
 3. Click **Install…** and choose the zip file
-4. Search for **Animatica** and enable **Animatica — AI Motion Generation**
+4. Search for **Animatica** and enable **Animatica Choreographer**
 
 The Animatica tab appears in the **N** panel of the 3D View once the addon is on.
 

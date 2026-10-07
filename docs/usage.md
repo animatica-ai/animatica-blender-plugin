@@ -11,7 +11,7 @@
 The tab has four panels, top to bottom:
 
 - **Animatica** — the shot: model, character, prompt, Generate, and the review
-- **Pose** — the character's pose: Set Keyframe, fingers (and Autoposer Pro's handles, when it is installed)
+- **Pose** — the character's pose: Set Keyframe, fingers (and Marionette's handles, when it is installed)
 - **Constraints** — waypoints (where to stand, when) and pins (a hand or foot held in place)
 - **Settings** — set once and left alone, with **Viewport**, **Posing** and **Advanced** inside
 
@@ -144,7 +144,7 @@ character that failed is listed with the reason and does not stop the rest.
 
 ### Posing by hand
 
-Posing with handles is **Animatica Autoposer Pro**, a separate add-on: drag a
+Posing with handles is **Animatica Marionette**, a separate add-on: drag a
 hand, foot or the hips and the body follows. Installed alongside, its handles,
 handle picker and settings appear in this panel and on the floating bar, and
 its edits key into the take. Without it, pose the rig with Blender's own tools,
@@ -155,7 +155,7 @@ or describe the pose in words (**Pose This Frame in Words** on the bar), then
 
 **Set Keyframe** keys the pose you are looking at and marks it as yours, so
 the next take is asked to hit it. The line under it says how many key poses
-the next take will hit. It works with or without Autoposer Pro, and with no
+the next take will hit. It works with or without Marionette, and with no
 server connected.
 
 > **Use Set Keyframe rather than `I` on top of a generated take.** Blender
@@ -203,7 +203,7 @@ and colours, in **Options** on the bar or in Blender's **Overlays** popover.
 character travels along, on the floor, coloured by speed. It is what In place
 takes out.
 
-**Editing the motion** is Autoposer Pro's: the motion trail through the
+**Editing the motion** is Marionette's: the motion trail through the
 ghosts (drag it to repose the body, **Smooth** a wobble), the **zoetrope**
 (the onion skin spread out in space, each slice posable), **Lock in Place**
 (a hand or foot held on one spot for a stretch of frames), the reach of an
@@ -239,14 +239,14 @@ converts it.
 | Setting | What it does |
 |---|---|
 | **Ghosts** | Draw the body at each pose you keyed |
-| **Root Trajectory** | Draw the travel path on the floor (Autoposer Pro adds **Edit Root Trajectory**, and the motion trail's switches) |
+| **Root Trajectory** | Draw the travel path on the floor (Marionette adds **Edit Root Trajectory**, and the motion trail's switches) |
 | **Frame Numbers** | Label each pose with its frame |
 | **X-Ray** | Draw poses through the character instead of behind it |
 | **Ghost Style** | *Auto* uses the skinned character if the rig has one, the skeleton otherwise; force *Mesh* or *Bones* |
 | **Auto Refresh** | Re-read the plan when you key a pose or move the rig. Turn off on a heavy character and use **Refresh Ghosts** |
 | **Rig In Front** / **Hide Skeleton** | How the rig itself is drawn |
 
-**Posing** (Autoposer Pro's settings, when it is installed): **Solid Floor**
+**Posing** (Marionette's settings, when it is installed): **Solid Floor**
 stops the handles putting any joint below the floor; **Rest Pose** clears the
 pose back to the rest pose and re-seats the handles.
 

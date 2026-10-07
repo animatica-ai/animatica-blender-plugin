@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Animatica Autoposer Pro, when it is installed alongside: the one place this add-on reaches it.
+"""Animatica Marionette, when it is installed alongside: the one place this add-on reaches it.
 
 The two are separate products: this one makes motion and shows it (prompts, key poses, takes,
 the ghosts), the Autoposer edits it by hand -- the Autopose handles, the motion trail, the
@@ -22,7 +22,7 @@ import bpy
 #: the Autoposer's package name, as a legacy add-on or an extension (``bl_ext.<repo>.<id>``)
 PRO_ID = "animatica_autoposer"
 #: where to get it, said where a posing feature would be
-PRO_NAME = "Animatica Autoposer Pro"
+PRO_NAME = "Animatica Marionette"
 #: the bridge with the Autoposer (posing.py here, host.py there): the two combine only when both
 #: say the same number, so an older or newer Autoposer leaves this add-on working on its own.
 #: 2: editing moved to the Autoposer, asked through its ``editing`` module.

@@ -81,7 +81,7 @@ def next_step(context) -> dict | None:
             why="Only the key poses inside the blocks steer the take. The ones outside them are "
                 "not sent. Stretch the block (click), or drag its edge in the Timeline",
             op="animatica.blocks_over_keys", props={}))
-    pro = posing.present()          # the handles are Animatica Autoposer Pro's (a separate add-on)
+    pro = posing.present()          # the handles are Animatica Marionette's (a separate add-on)
     if s.is_previewing:
         out.append(dict(
             id="review",
