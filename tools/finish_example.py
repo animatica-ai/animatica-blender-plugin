@@ -212,7 +212,7 @@ def touch_up(arm, kp):
     if ctx.view_layer.objects.active is not arm:
         ctx.view_layer.objects.active = arm
     if not poser.has_controls(arm):
-        result = bpy.ops.autoposer.build_rig()
+        result = bpy.ops.animatica_autoposer.build_rig()
         if "FINISHED" not in result:
             raise RuntimeError("could not build the Autoposer rig")
     poser._snap(arm, ctx)              # every control on the pose as it stands at this frame
@@ -220,20 +220,20 @@ def touch_up(arm, kp):
     inv = arm.matrix_world.inverted()
     for fix in fixes:
         pb = arm.pose.bones[fix["control"]]
-        if not pb.bone.ap_enabled:
-            pb.bone.ap_enabled = True
+        if not pb.bone.autoposer_enabled:
+            pb.bone.autoposer_enabled = True
         target = _on_thigh(arm, fix["on_thigh"], fix["t"], fix["lift"])
         m = pb.matrix.copy()
         m.translation = inv @ target
         pb.matrix = m
     ctx.view_layer.update()
     if not poser.solve(ctx):
-        raise RuntimeError(f"the Autoposer did not solve: {scene.ap_status}")
+        raise RuntimeError(f"the Autoposer did not solve: {scene.autoposer_status}")
     # Captured straight away: the solve lives in matrix_basis, and the next
     # evaluation of the action would put the old pose back over it.
     channels = pose_edit.pose_channels(arm)
     pose_edit.write_channels(pose_edit._editing_action(arm), kp["frame"], channels)
-    print(f"[finish] touch-up at frame {kp['frame']}: {scene.ap_status}")
+    print(f"[finish] touch-up at frame {kp['frame']}: {scene.autoposer_status}")
     _remove_rig(arm)
     scene.frame_set(kp["frame"])
     return [f["control"] for f in fixes]
@@ -246,7 +246,7 @@ def _remove_rig(arm):
     # Names first: removing a bone goes through Edit Mode, which reallocates
     # the armature's bones and leaves every Bone reference held across it dead.
     for name in [b.name for b in poser._controls(arm)]:
-        bpy.ops.autoposer.remove_control(name=name)
+        bpy.ops.animatica_autoposer.remove_control(name=name)
     poser._hide_deform_bones(arm, False)
     arm.show_in_front = False
     for name in (poser.CTRL_COLL, poser.DEFORM_COLL):

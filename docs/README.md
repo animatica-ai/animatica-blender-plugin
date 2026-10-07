@@ -5,7 +5,7 @@ Guides for using Animatica in Blender.
 | Guide | What it covers |
 |---|---|
 | [Installation](installation.md) | Download the addon, enable it, keep it up to date |
-| [Sign in & setup](configuration.md) | Animatica Cloud account, optional self-hosted server, the Autoposer |
+| [Sign in & setup](configuration.md) | Animatica Cloud account, optional self-hosted server |
 | [Privacy and network](configuration.md#privacy-and-network) | What the addon sends, where, and when |
 | [Using Animatica](usage.md) | Direct your shot, generate, accept or reject |
 | [Tips & limits](limitations.md) | Good to know before you generate |

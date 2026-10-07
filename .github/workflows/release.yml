@@ -49,9 +49,9 @@ jobs:
             1. Download `animatica-blender-${{ steps.version.outputs.version }}.zip` below
             2. Edit → Preferences → Add-ons → Install from Disk…
             3. Pick the downloaded zip
-            4. Enable **Animatica — AI Motion Generation**
+            4. Enable **Animatica Choreographer**
 
-            Sign in with your [Animatica](https://animatica.ai) account under **Preferences → Add-ons → Animatica**.
+            Sign in with your [Animatica](https://animatica.ai) account under **Preferences → Add-ons → Animatica Choreographer**.
 
             **New to Animatica?** Watch the [video tutorial playlist](https://www.youtube.com/watch?v=Wc349qOwjfM&list=PLAJ2UfUYhFQKZpFS8eh1eGUWJ0PAys1n1) on YouTube.
 

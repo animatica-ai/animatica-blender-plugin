@@ -39,9 +39,9 @@ from mathutils import Matrix
 
 #: engine presets: file format and the settings its importer wants
 ENGINES = [
-    ("UNREAL", "Unreal", "FBX; the armature object named 'Armature' so Unreal adds no extra root bone"),
-    ("UNITY", "Unity", "FBX with scale and axes applied (Generic or Humanoid, root motion from 'root')"),
-    ("GODOT", "Godot / glTF", "glTF binary (.glb); set the AnimationTree's root_motion_track to 'root'"),
+    ("UNREAL", "Unreal", "FBX with the armature object named 'Armature', so Unreal adds no extra root bone"),
+    ("UNITY", "Unity", "FBX with scale and axes applied. Use Generic or Humanoid, with root motion from 'root'"),
+    ("GODOT", "Godot / glTF", "glTF binary (.glb). In Godot, set the AnimationTree's root_motion_track to 'root'"),
 ]
 #: a loop within this of a straight, sideways or diagonal direction is turned onto it
 SNAP_WITHIN = math.radians(12.0)
@@ -245,36 +245,37 @@ def _export_action(arm):
 
 
 class ANIMATICA_OT_export_game_clip(Operator):
-    """Export the take as a game clip: root motion on a ground root bone"""
+    """Export the take as a game clip, with root motion on a root bone at ground level"""
     bl_idname = "animatica.export_game_clip"
     bl_label = "Export Game Clip"
     bl_description = (
-        "Export the take for a game engine: a ground 'root' bone carries its "
-        "travel (from the origin, facing forward), the hips the rest. One "
-        "clip plays with root motion or in place; a .json beside it has the "
-        "foot sync markers, distance and speed curves and the trajectory"
+        "Export the take for a game engine. A 'root' bone at ground level "
+        "carries the travel, starting at the origin and facing forward, and "
+        "the hips carry the rest. The clip plays with root motion or in place. "
+        "A .json file beside it holds the foot sync markers, the distance and "
+        "speed curves, and the trajectory"
     )
     bl_options = {'REGISTER'}
 
     engine: EnumProperty(name="Engine", items=ENGINES, default="UNREAL")
     variants: EnumProperty(
         name="Clips",
-        items=[("BOTH", "Root Motion + In Place", "Two files: the root travelling, and held at the origin"),
+        items=[("BOTH", "Root Motion + In Place", "Two files, one with the root travelling and one with it held at the origin"),
                ("ROOT_MOTION", "Root Motion", "The root carries the travel"),
-               ("IN_PLACE", "In Place", "The root stays at the origin (same hips as root motion)")],
+               ("IN_PLACE", "In Place", "The root stays at the origin. The hips move as in the root motion clip")],
         default="BOTH",
     )
     directory: StringProperty(name="Folder", subtype='DIR_PATH', default="//game_export/")
-    clip_name: StringProperty(name="Name", description="File name; the take's name if empty", default="")
+    clip_name: StringProperty(name="Name", description="File name. Leave empty to use the take's name", default="")
     align_phase: BoolProperty(name="Start Loops on Left Foot", default=True,
                               description="Cut a loop to start where the left foot comes down, "
                                           "so walk, jog and run cycles line up")
     snap_direction: BoolProperty(name="Snap Loop Direction", default=True,
-                                 description="Turn a loop running within 12° of straight, sideways or "
-                                             "diagonal onto exactly that direction")
+                                 description="If a loop runs within 12° of straight ahead, sideways or "
+                                             "diagonal, turn it to run exactly that way")
     root_z: BoolProperty(name="Root Height", default=False,
-                         description="The root also carries the height of the ground under the feet "
-                                     "(stairs, ledges); off, it stays on the floor")
+                         description="Make the root follow the height of the ground under the feet, "
+                                     "such as stairs or ledges. When off, it stays on the floor")
 
     @classmethod
     def poll(cls, context):

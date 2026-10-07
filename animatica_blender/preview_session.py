@@ -315,6 +315,8 @@ def finish(context, arm, *, accepted: bool) -> None:
     """Close the session. On Reject the pose and the frame range go back as
     they were; either way the user's action gets its own fake-user flag back
     and the splice copy goes."""
+    from .pose_edit import clear_kept
+    clear_kept(arm)                       # frames kept from this take: done with it
     data = get(arm)
     if data is None:
         return
@@ -335,6 +337,11 @@ def finish(context, arm, *, accepted: bool) -> None:
     if ad is not None and ad.action is not None and _BASELINE in ad.action:
         del ad.action[_BASELINE]
     _clear(arm)
+    # what the overlay shows -- the ghosts, Marionette's trail and onion skin -- is
+    # of the take; a Discard after a splice rewrites the action in place, which
+    # nothing else reports
+    from . import key_poses
+    key_poses.motion_replaced()
 
 
 def abort(context, arm) -> None:

@@ -1,8 +1,10 @@
-# Animatica for Blender — package the addon as an installable .zip.
+# Animatica Choreographer — package the addon as an installable .zip.
 #
 # `make zip` produces dist/animatica-blender-<version>.zip with a single
 # top-level `animatica_blender/` directory inside, which is exactly what
-# Blender's `Install Addon…` UI expects.
+# Blender's `Install Addon…` UI expects. It is the motion product alone:
+# posing by hand is Animatica Marionette, a separate add-on (its own
+# private repo, animatica-ai/animatica-autoposer).
 #
 # `make install` symlinks the source tree into your Blender 5+ addons
 # directory so editing files lands live in Blender on the next reload.
@@ -25,30 +27,17 @@ p.read_text(), count=1, flags=re.M))'
 # macOS default Blender 5.x addon path. Override on Linux/Windows.
 BLENDER_ADDONS_DIR ?= $(HOME)/Library/Application Support/Blender/5.0/scripts/addons
 
-.PHONY: zip clean install uninstall info
+.PHONY: zip clean install uninstall info icons
 
 zip: $(ZIP)
 
-# A build that carries the weights, for handing to someone who should not have
-# to set anything up: MODEL_DIR is a bundle directory (poser.onnx, ik.onnx,
-# meta.json). Staged in a temp tree rather than copied into the source, so
-# 140 MB never lands in the working copy — or in git.
-#
-#   make zip-with-model MODEL_DIR="~/Library/.../animatica_autoposer/current" VERSION_SUFFIX=-dev
-zip-with-model:
-	@test -n "$(MODEL_DIR)" || { echo "set MODEL_DIR=<bundle directory>"; exit 1; }
-	@test -f "$(MODEL_DIR)/meta.json" || { echo "no meta.json in $(MODEL_DIR)"; exit 1; }
-	@mkdir -p $(DIST)
-	@rm -rf $(DIST)/.stage && mkdir -p $(DIST)/.stage
-	@find $(ADDON) -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
-	@cp -R $(ADDON) $(DIST)/.stage/$(ADDON)
-	@$(STAMP_TAG) $(DIST)/.stage/$(ADDON)/__init__.py
-	@mkdir -p $(DIST)/.stage/$(ADDON)/autoposer/model
-	@cp "$(MODEL_DIR)"/poser.onnx "$(MODEL_DIR)"/ik.onnx "$(MODEL_DIR)"/meta.json 		$(DIST)/.stage/$(ADDON)/autoposer/model/
-	@rm -f $(ZIP)
-	@cd $(DIST)/.stage && zip -qr ../$(notdir $(ZIP)) $(ADDON) -x '*/__pycache__/*' -x '*.pyc'
-	@rm -rf $(DIST)/.stage
-	@echo "→ $(ZIP) (with model)"
+# The toolbar's icons: drawn as SVG in icons/src, shipped as 64 px PNGs (the
+# bar reads them itself, sized to the button). Needs rsvg-convert (librsvg).
+icons:
+	@for f in $(ADDON)/icons/src/*.svg; do \
+		rsvg-convert -w 64 -h 64 "$$f" -o "$(ADDON)/icons/$$(basename "$${f%.svg}").png" || exit 1; \
+	done
+	@echo "→ $(ADDON)/icons/*.png"
 
 # Staged rather than zipped in place, so the build can stamp its own release
 # tag into the copy without touching the working tree. The updater compares

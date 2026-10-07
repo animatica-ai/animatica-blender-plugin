@@ -390,8 +390,8 @@ class ANIMATICA_OT_add_root_path(Operator):
     bl_label = "Add Root Path"
     bl_description = (
         "Create a Bezier curve on the floor plane that the character will follow. "
-        "Sample density and 'follow direction' (heading) are editable on the curve "
-        "object's properties"
+        "You can change the sampling and Follow Direction later in the "
+        "curve object's properties"
     )
     # Note: no ``UNDO`` flag. With UNDO enabled on a slotted-action scene,
     # Blender's undo snapshot diff was observed to drop unreferenced fcurves
@@ -402,12 +402,12 @@ class ANIMATICA_OT_add_root_path(Operator):
 
     match_direction: bpy.props.BoolProperty(
         name="Follow Direction",
-        description="Derive heading_radians from the curve tangent so the character faces along the path",
+        description="Turn the character to face along the curve as it walks the path",
         default=True,
     )
     sample_density: bpy.props.IntProperty(
         name="Sample Every N Frames",
-        description="One root_path constraint frame per N timeline frames",
+        description="Send one point of the path for every N frames of the timeline",
         default=10, min=1, max=60,
     )
 
@@ -716,8 +716,8 @@ class ANIMATICA_OT_add_effector_target(Operator):
     bl_idname = "animatica.add_effector_target"
     bl_label = "Add Effector Pin"
     bl_description = (
-        "Pin a named joint to a moving Blender Empty. Each location keyframe "
-        "on the empty becomes one effector_target constraint frame"
+        "Pin a joint to a moving Blender Empty. The joint is asked to reach the "
+        "Empty at each of the Empty's location keyframes"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -727,8 +727,8 @@ class ANIMATICA_OT_add_effector_target(Operator):
             ('EFFECTOR', "End effector",
              "The hand or foot joints the solver is meant to pin"),
             ('BONE', "Any bone",
-             "Pick a bone yourself — for rigs whose naming the addon cannot "
-             "match, or to pin something other than a limb tip"),
+             "Pick a bone yourself. Use this when the addon cannot match your "
+             "rig's bone names, or to pin something other than a hand or foot"),
         ],
         default='EFFECTOR',
     )
@@ -740,7 +740,7 @@ class ANIMATICA_OT_add_effector_target(Operator):
 
     bone: bpy.props.StringProperty(
         name="Bone",
-        description="Bone this pin constrains. Must be one the request sends",
+        description="The bone to pin. It must be a bone the addon sends to the server",
     )
 
     def invoke(self, context, event):
@@ -758,8 +758,8 @@ class ANIMATICA_OT_add_effector_target(Operator):
             # Say up front which bones are legal, rather than letting the
             # user pick a control bone and meet a build error later.
             if self.bone and self.bone not in _request_joint_names(arm):
-                col.label(text="Not sent in the request — see below", icon='ERROR')
-                col.label(text="control bones are not part of the skeleton")
+                col.label(text="This bone is not sent to the server", icon='ERROR')
+                col.label(text="Control bones are not part of the skeleton")
         else:
             col.prop(self, "joint")
 
@@ -782,8 +782,8 @@ class ANIMATICA_OT_add_effector_target(Operator):
                     {'ERROR'},
                     f"{chosen!r} is not part of the skeleton this rig sends, so "
                     f"the server would never see the pin"
-                    + (f" — try {hint!r}" if hint else
-                       " (control and helper bones are excluded; pin a deform bone)"),
+                    + (f". Try {hint!r}" if hint else
+                       ". Control and helper bones are left out, so pin a deform bone"),
                 )
                 return {'CANCELLED'}
             joint_name = chosen
@@ -838,7 +838,7 @@ class ANIMATICA_OT_add_effector_target(Operator):
 class ANIMATICA_OT_remove_constraint_object(Operator):
     bl_idname = "animatica.remove_constraint_object"
     bl_label = "Remove Constraint Object"
-    bl_description = "Delete the named constraint object from the scene"
+    bl_description = "Delete this constraint object from the scene"
     bl_options = {'REGISTER', 'UNDO'}
 
     name: bpy.props.StringProperty()
@@ -856,7 +856,7 @@ class ANIMATICA_OT_remove_constraint_object(Operator):
 class ANIMATICA_OT_focus_constraint_object(Operator):
     bl_idname = "animatica.focus_constraint_object"
     bl_label = "Focus Constraint Object"
-    bl_description = "Select and view-frame the named constraint object"
+    bl_description = "Select the constraint object and frame it in the view"
     bl_options = {'REGISTER', 'UNDO'}
 
     name: bpy.props.StringProperty()
@@ -1144,6 +1144,36 @@ def authored_pose_frames(
             if frame_range is None or frame_range[0] <= f <= frame_range[1]:
                 frames.add(f)
     return sorted(frames), keyed_bones
+
+
+def mmcp_joint_rotation(pb: bpy.types.PoseBone, mw_rot: 'Matrix', mw_rot_t: 'Matrix') -> list[float]:
+    """``pb``'s evaluated pose as an MMCP local rotation, ``[x, y, z, w]``.
+
+    The per-bone rotation delta, converted to the MMCP world frame in three steps:
+
+      1. ``ML @ R_basis @ ML.T``   — bone-local-rest → armature-local
+      2. ``mw_rot @ _ @ mw_rot.T`` — armature-local → Blender world (no-op when the
+                                     armature is at identity; required for rigs like
+                                     Mixamo that carry a 90° + 0.01 ``matrix_world``)
+      3. ``S_inv @ _ @ S``         — Blender Z-up → MMCP Y-up
+
+    For a whole clip (retarget.py): every joint carries the object's full world turn,
+    which is what ``POST /retarget`` reads (the pose-keyframe samplers, through
+    ``_joint_rotation_to_mmcp``, put the yaw on the root alone, as ``/generate`` reads
+    it). ``mw_rot`` / ``mw_rot_t`` are the armature's world rotation and
+    its transpose, passed in so a caller sampling many bones computes them once. The
+    inverse of this chain lives in ``gltf_to_blender.bake_gltf_to_armature`` and must
+    stay in sync.
+    """
+    S = _MMCP_TO_BLENDER
+    R_basis = _evaluated_local_basis(pb).to_3x3()
+    ML = pb.bone.matrix_local.to_3x3()
+    R_blender_arm = ML @ R_basis @ ML.transposed()
+    R_blender_world = mw_rot @ R_blender_arm @ mw_rot_t
+    R_mmcp = S.transposed() @ R_blender_world @ S
+    w, x, y, z = R_mmcp.to_quaternion()
+    return [x, y, z, w]
+
 
 
 def sample_pose_keyframes(

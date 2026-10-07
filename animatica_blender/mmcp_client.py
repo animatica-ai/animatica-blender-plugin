@@ -237,9 +237,9 @@ def _opener():
     """
     global _OPENER
     if _OPENER is None:
-        from .autoposer.vendor.autoposer_runtime import bundle
-        bundle.GATE = may_connect
-        _OPENER = bundle.build_opener()
+        from . import http_gate
+        http_gate.GATE = may_connect
+        _OPENER = http_gate.build_opener()
     return _OPENER
 
 
@@ -253,7 +253,7 @@ _open = urlopen
 
 def refused(exc: BaseException) -> bool:
     """Was *exc* the gate refusing a request (online access is off)?"""
-    from .autoposer.vendor.autoposer_runtime.bundle import RequestRefused
+    from .http_gate import RequestRefused
     return isinstance(exc, RequestRefused)
 
 
@@ -393,6 +393,19 @@ def get_access_token() -> str:
 def get_refresh_token() -> str:
     p = _addon_prefs()
     return ((getattr(p, "refresh_token", "") or "").strip()) if p else ""
+
+
+def needs_sign_in() -> bool:
+    """True when generating will be refused for want of an account: pointed at
+    Animatica Cloud with no session. Self-hosted servers take no account."""
+    if not is_cloud_url(get_mmcp_url()):
+        return False
+    return not (get_access_token() or get_refresh_token())
+
+
+def offline() -> bool:
+    """True when Blender's online access is what keeps the add-on from the server."""
+    return cached_capabilities() is None and last_connection_error() == OFFLINE_MESSAGE
 
 
 def _auth_headers(url: str, extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -569,7 +582,9 @@ def cached_model_items() -> list[tuple[str, str, str]]:
     """
     if _MODEL_ITEMS:
         return _MODEL_ITEMS
-    return [("", "(connect to discover models)", "")]
+    # a real identifier: an empty one is not valid, and Blender said so on
+    # every redraw (thousands of console lines a minute, offline)
+    return [("NONE", "(connect to discover models)", "")]
 
 
 def cached_model(model_id: str) -> dict[str, Any] | None:
@@ -579,6 +594,31 @@ def cached_model(model_id: str) -> dict[str, Any] | None:
         if m.get("id") == model_id:
             return m
     return None
+
+
+def model_supports(model_id: str, kind: str) -> bool:
+    """Whether the connected model can take ``kind``: a segment type
+    (``"pose"``, ``"text"``) or a constraint type (``"root_path"``,
+    ``"effector_target"``). True while nothing is connected -- unknown is not
+    "no", and the tools stay usable before Connect."""
+    m = cached_model(model_id)
+    if m is None:
+        return True
+    return kind in (m.get("supported_segments") or []) or kind in (m.get("supported_constraints") or [])
+
+
+#: What each tool needs of the model, for the UI to grey out what it can't use.
+TOOL_NEEDS = {
+    "describe": "pose",
+    "prompt": "text",
+    "waypoint": "root_path",
+    "pin": "effector_target",
+}
+
+
+def tool_available(model_id: str, tool: str) -> bool:
+    need = TOOL_NEEDS.get(tool)
+    return need is None or model_supports(model_id, need)
 
 
 def store_capabilities(caps: dict[str, Any]) -> None:
@@ -693,6 +733,48 @@ def _apply_connection(caps, error: str, url: str):
 # Errors
 # ---------------------------------------------------------------------------
 
+#: the last generation that failed, in plain words, for the hint above the bar
+_FAILURE = {"text": ""}
+
+
+def plain_error(exc) -> str:
+    """What went wrong, in words an artist can act on. The raw error goes to
+    the console for whoever has to debug it."""
+    code = getattr(exc, "code", "")
+    status = getattr(exc, "status", None)
+    message = str(getattr(exc, "message", "") or exc)
+    if code == "offline":
+        return "Blender's online access is off. Turn it on in Preferences > System"
+    if code == "model_unavailable":
+        return "Can't reach Animatica. Check your internet connection and try again"
+    if code == "timeout":
+        return "The model took too long to answer. It may be starting up, so try again in a minute"
+    if status == 401 or code in ("unauthorized", "unauthenticated", "invalid_token", "auth_required"):
+        return "Your sign-in has expired. Sign in again"
+    if code == "unknown_model":
+        return "This model is not offered any more. Pick another one on the bar"
+    if code == "internal_error":
+        return "Something went wrong on the server. Try again"
+    if isinstance(exc, MmcpError):
+        return message[:1].upper() + message[1:]
+    return message or exc.__class__.__name__
+
+
+def note_failure(exc) -> str:
+    """Remember a failed generation for the hint, and give its plain words."""
+    print(f"[Animatica] generation failed: {exc!r}")
+    _FAILURE["text"] = plain_error(exc)
+    return _FAILURE["text"]
+
+
+def clear_failure() -> None:
+    _FAILURE["text"] = ""
+
+
+def last_failure() -> str:
+    return _FAILURE["text"]
+
+
 class MmcpError(Exception):
     """Wraps the MMCP error envelope.
 
@@ -783,8 +865,34 @@ class MmcpClient:
         cloud session token is set; on a 401 we attempt one silent token
         refresh + retry before raising.
         """
+        return self._post_for_gltf("/generate", request_body)
+
+    # --- Retargeting -------------------------------------------------------
+
+    def retarget(self, request_body: dict[str, Any]) -> dict[str, Any]:
+        """POST a retarget request (a clip on one rig, onto another). Returns the
+        parsed glTF JSON document, on the target rig's joints.
+
+        ``/retarget`` is an extension route, not part of MMCP 1.x: a server that
+        does not offer it answers 404 (Animatica Cloud, with no model behind it
+        that does, 501 ``retarget_unavailable``), surfaced here as
+        ``retargeting_unsupported`` so the caller can say so plainly rather than
+        show a bare HTTP error.
+        """
+        try:
+            return self._post_for_gltf("/retarget", request_body)
+        except MmcpError as exc:
+            if exc.status in (404, 405, 501) or exc.code == "retarget_unavailable":
+                raise MmcpError(
+                    code="retargeting_unsupported",
+                    message="this server does not offer motion retargeting (POST /retarget)",
+                    status=exc.status,
+                ) from exc
+            raise
+
+    def _post_for_gltf(self, path: str, request_body: dict[str, Any]) -> dict[str, Any]:
         body = json.dumps(request_body).encode("utf-8")
-        url = f"{self.base_url}/generate"
+        url = f"{self.base_url}{path}"
         _require_online(url)
         cloud = is_cloud_url(url)
 
@@ -795,8 +903,8 @@ class MmcpClient:
                 headers=_auth_headers(url, {
                     "Content-Type": "application/json; charset=utf-8",
                     "Accept":       "model/gltf+json",
-                    # This is the request that starts a generation — the one
-                    # place the API wants attributed.
+                    # This is the request that starts the work (a generation
+                    # or a retarget) — the one place the API wants attributed.
                     **client_headers(),
                 }),
             )
@@ -816,10 +924,10 @@ class MmcpClient:
                         resp = _post()
                     except HTTPError as retry_exc:
                         if retry_exc.code == 401:
-                            expire_session("your session expired — sign in again")
+                            expire_session("your session expired. Sign in again")
                         raise
                 else:
-                    expire_session("your session expired — sign in again")
+                    expire_session("your session expired. Sign in again")
                     raise
             with resp:
                 if resp.status == 200:
@@ -873,6 +981,7 @@ class MmcpClient:
         url = f"{self.base_url}{location}"
         cloud = is_cloud_url(url)
         deadline = time.time() + self.timeout
+        refreshed = False
         while time.time() < deadline:
             time.sleep(max(retry_after, 0.5))
             _require_online(url)
@@ -886,8 +995,16 @@ class MmcpClient:
                         continue
                     raise MmcpError.from_response(resp.status, resp.read())
             except HTTPError as exc:
-                if exc.code == 401 and cloud and not refresh_access_token():
-                    expire_session("your session expired — sign in again")
+                if exc.code == 401 and cloud:
+                    # The access token can run out while a job is waited on: a
+                    # fresh one, and the same job asked about again -- once.
+                    # Refreshing and then giving up anyway failed the take
+                    # while the session was fine.
+                    if not refreshed and refresh_access_token():
+                        refreshed = True
+                        retry_after = 0.0
+                        continue
+                    expire_session("your session expired. Sign in again")
                 raise MmcpError.from_response(exc.code, exc.read()) from exc
         raise MmcpError(code="timeout", message=f"async job at {url} did not complete in {self.timeout}s")
 
@@ -913,10 +1030,10 @@ class MmcpClient:
                         resp = _get()
                     except HTTPError as retry_exc:
                         if retry_exc.code == 401:
-                            expire_session("your session expired — sign in again")
+                            expire_session("your session expired. Sign in again")
                         raise
                 else:
-                    expire_session("your session expired — sign in again")
+                    expire_session("your session expired. Sign in again")
                     raise
             with resp:
                 if resp.status != 200:

@@ -1,13 +1,191 @@
 # Changelog
 
-All notable changes to the Animatica for Blender addon are documented here.
+All notable changes to the Animatica Choreographer add-on for Blender (formerly Animatica for
+Blender) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
-## [Unreleased]
+## [1.0.0] — preview
+
+The first 1.0 preview, as Animatica Choreographer. It includes everything in the 0.7.0
+previews below.
+
+### Changed
+
+- **Posing and editing by hand are now Animatica Marionette, a separate
+  add-on.** This add-on makes the motion and shows it: prompts and blocks,
+  key poses, waypoints and pins, Generate, Redo, versions, Loop, In Place,
+  Copy/Paste Motion, the ghosts of your key poses, and the root trajectory
+  as a view. Marionette has everything that edits it by hand: the Autopose
+  tool, the handle picker and Reset to T-Pose, the onion skin, the motion
+  trail (drawn, dragged, Smooth), the zoetrope, Lock in Place, the reach of
+  an edit (Reach and Intensity), clicking a ghost to edit its pose, and Edit
+  Root Trajectory. With Marionette installed these appear on the bar and in
+  the panels. Without it, the bar starts at the Key group and ends with
+  Ghosts, and you key poses the usual way: pose the rig in Blender, or use
+  Pose This Frame in Words.
+- **Every key pose is a ghost again.** The ghosts show the motion plan: each
+  pose you keyed, where it stands, tinted by its block and labelled with its
+  frame, as in 0.6. The bar's Ghosts button switches them. (In the 0.7
+  previews, the Frames onion skin replaced them.) The onion skin is now
+  Marionette's.
+- **Renamed Animatica Choreographer.** The add-on is now listed as Animatica
+  Choreographer, beside Animatica Marionette.
+- **Settings that moved.** Reach, Intensity, the onion skin's settings, the
+  zoetrope's Step and Spacing, and the trail's switches are now Marionette's. A file saved with them set opens
+  with Marionette's defaults. Locks keep working, and are stored on the rig as
+  before.
+
+### Added
+
+- **Copy Motion / Paste Motion.** Select keys of a character in the Timeline
+  and click Copy on the bar: one key copies a pose, several copy a stretch of
+  motion, and with none selected every key is copied. Copy lights up and the
+  line above the bar says what was copied.
+- **Pasting.** Select another character, put the playhead where the motion
+  should start, and click Paste. Animatica Cloud retargets the motion onto
+  that character's skeleton and keys it into the character's own animation:
+  a key on each copied key's frame, the first on the playhead. Keys already
+  in that stretch are replaced and the rest of the animation is kept.
+- **What it works on.** Mixamo characters, custom skeletons and Rigify rigs.
+  Bones animated in Euler stay in Euler.
+- **Cost and where to find it.** You need to be signed in, and it costs no
+  generations. It is on the floating bar, in the sidebar ("Copy & Paste
+  Motion") and in the viewport's right-click menu.
+- **Fingers.** Fingers are not transferred yet. The target's own finger
+  animation is kept.
+
+### Fixed
+
+- **Discard brings the ghosts back to your motion.** Throwing a take away
+  (or keeping one, or switching versions) bakes the ghosts again, and
+  Marionette's onion skin and trail, from the motion that is back.
+- **Ghosts keep up with your keys.** Keys deleted, moved or retimed now show
+  on the ghosts (and Marionette's onion skin and trail) within moments.
+  That includes edits made while the animation plays, and edits made while
+  the ghosts are still redrawing after the previous one. Before, either case
+  could leave them showing the old motion until you pressed Refresh.
+- **Rigify rigs read as one skeleton.** A Rigify rig's deform bones hang off
+  its ORG and MCH bones, and the add-on used to guess their hierarchy from
+  where the bones sit, which could root the skeleton at a thigh. The
+  hierarchy is now read from the ORG bones, so the server sees the rig's real
+  tree.
+
+## [0.7.0] — preview
+
+### Added
+
+- **A floating toolbar in the viewport, in the order of the work.** Set
+  keys, Generate, Accept, then fine-tune, left to right on one bar: the
+  Autopose tool and the handle picker; step between key poses, Set Key and
+  Auto Key; Waypoint and Pin; the prompt under the playhead, with a button
+  inside the field that switches it to this frame's pose in words (Generate
+  becomes Generate Pose); Loop and Generate, or Redo, Key This Frame, the
+  variations and Discard while a take is judged; the onion skin, the
+  zoetrope, the trail and the reach of an edit; Options; the model. Anything the
+  connected model can't do is greyed out, here and in the sidebar. A hint
+  above the bar names the next step and why.
+- **Lock in Place.** Pick a hand or foot (its trail point or its handle)
+  and the padlock on the bar holds it on one spot for a stretch of frames,
+  so a planted foot stops sliding. The span starts as the contact around
+  the playhead; move the mouse to set its end (Ctrl: its start), then click.
+  The leg bends to hold it, easing in and out, the hips untouched. Locks are
+  listed in the Pose panel; a new take over them is locked again, and a
+  drag inside one holds the locked joint.
+- **No Accept.** A take is yours when it arrives: while you judge it the
+  bar offers Redo, Key This Frame, the variations and Discard (and Generate
+  while blocks are left to make). Your first fine-tuning edit keeps it and
+  locks its blocks, without turning the edit into key poses.
+- **Loop on the bar.** Loop sits beside Generate. In a loop the zoetrope is
+  a ring, a drum seen from above standing behind the character with each
+  slice spun in place, and edits reach round the seam and keep the cycle
+  closed.
+- **The Autopose tool.** The Autoposer's handles on your character, no
+  control rig: drag one and the body follows, G and R with axis locks,
+  Blender's move gizmo on a picked handle, Ctrl-click to switch one on or
+  off, and Add Handle for elbows and knees.
+- **Onion skins and the zoetrope.** The motion around this frame as ghosts
+  (Frames, Keyframes or All Keys, with Grease Pencil's controls), drawn
+  during playback too. The zoetrope spreads them into a tunnel through time,
+  every frame an edit reaches, with the motion trail running through them;
+  each ghost can be posed where it is.
+- **Edits that carry through time.** Drag or turn a handle, on the
+  character, a ghost or a zoetrope slice, and the frames around follow with
+  a falloff. Reach and Intensity are a curve on the bar you drag, and the
+  ghosts and the trail re-pose live as you edit. On a take an edit reshapes
+  its motion where it is keyed and adds no keyframes; the preview shows
+  exactly what the curves will give.
+- **Lock a block to keep its motion.** Accept keeps the take as your own
+  action, keys you can edit, and locks the blocks it covered. Generate and
+  Redo then leave a locked block as it is, and the blocks next to it are
+  made to run into it, starting and ending on its pose. Work through a
+  sequence a block at a time; unlock one (right-click it, or the padlock in
+  the sidebar) to make it again. A take no longer goes onto the NLA as one
+  track per block.
+- **A handle picker for the Autoposer.** A card in the viewport with your
+  character in T-pose and the Autoposer's handles on it. Pick one or
+  several (Shift), switch them on or off (or double-click one), give them
+  their rotation, set how strictly the pose keeps to them, remove them, or
+  add one from the handles the rig can still have, shown where they go.
+- **Drops to lower ground.** A take follows the ground under the route, so
+  a character can jump from one roof down onto another. Waypoints sit on
+  the ground, and the Autoposer and Describe stand the pose on it (Describe
+  has **Stand on the ground**, on by default; off keeps a jump in the air).
+  Needs a server with MMCP 1.3, as the Animatica cloud has.
+
+### Changed
+
+- **The timeline lane, redrawn.** Blocks as tiles with their colour as a
+  swatch; the block under the playhead highlighted, as the toolbar's Prompt
+  and Redo act on it. Frame numbers show on the block you hover, select or
+  drag, with its length while you drag. A row of key poses above the
+  blocks: drag one to move the pose to another frame, click it to go there.
+  A row of waypoints below: drag one to retime it. The take under review is
+  marked under its blocks, and a take being made sweeps across them.
+- **A new block is 50 frames long** instead of filling the whole gap.
+
+### Fixed
+
+- **Clicking a block works when the scene has markers.** The marker row no
+  longer takes the clicks meant for the lane.
+- **A block can be shortened from the left** where it meets another one.
+- **The add-on no longer stays stuck "working"** after a generation stops
+  without finishing.
+- **Fewer freezes on macOS.** The bar, the ghosts and the trails no longer
+  build fresh GPU buffers on every redraw, and the ghost cache is capped.
+- **A drag that is interrupted cleans up.** Loading a file or an error in
+  the middle of a drag no longer leaves the add-on thinking a drag is on;
+  Esc puts back the handles a drag switched on.
+- **Handles can't be grabbed during playback**, when they are hidden.
+- **Editing a travelling loop on a later repeat** no longer makes the
+  character jump back to the first cycle while you drag.
+- **The first fine-tuning edit no longer clears the ghosts.**
+- **Dragging on a sparse take no longer lags** on a wide reach.
+- **G or R on handles with no place in the scene** no longer raises an error.
+- **A first take is quicker.** The hint asks for a prompt first, then says
+  Ready: Generate; key poses are offered as the way to steer it, so a first
+  session no longer starts with the 225 MB Autoposer download. A greyed
+  Generate says "Type a prompt first", and clicking it opens the field.
+- **Greyed buttons say why** when clicked or hovered (a tool the model can't
+  use, Use Selected Rig with nothing selected).
+- **Offline, the way in stays.** Use Selected Rig, Examples and a downloaded
+  character stay on the bar without a connection; an unreachable server
+  says so with Retry. Allow Online Access asks before it changes Blender's
+  setting.
+- **Failures in plain words**, kept on the hint with a retry, instead of
+  protocol codes in a status line that faded. Bar buttons that fail no longer
+  print a Python traceback.
+- **A key pose outside the blocks is no longer left out silently.** Setting
+  it warns, and the hint offers to stretch the block over it.
+- **Esc no longer throws a generation away by accident:** press it twice.
+- **The sidebar matches the bar** while a take is judged: Redo, Key This
+  Frame and Discard, and Generate makes the rest (no Accept, no Generate
+  Again).
+- **The first Autopose click no longer fails** on a fresh install (the
+  download prompt raised an error).
 
 ## [0.6.4] — 2026-09-30
 

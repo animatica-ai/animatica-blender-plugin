@@ -12,7 +12,7 @@
    [GitHub Releases](https://github.com/animatica-ai/animatica-blender-plugin/releases)
 2. Open Blender → **Edit → Preferences → Add-ons**
 3. Click **Install…** and choose the zip file
-4. Search for **Animatica** and enable **Animatica — AI Motion Generation**
+4. Search for **Animatica** and enable **Animatica Choreographer**
 
 The Animatica tab appears in the **N** panel of the 3D View once the addon is on.
 
@@ -25,7 +25,6 @@ It must be on for:
 - Animatica Cloud: listing models, generating, signing in
 - update checks and updates
 - example scenes and the ready-made character (the first time; they are cached after that)
-- the Autoposer download
 
 With it off, the only thing that works is a self-hosted server on this
 machine (`localhost`). The panel says *Online access is disabled in

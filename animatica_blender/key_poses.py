@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import math
 import time
+import zlib
 
 import blf
 import bpy
@@ -87,29 +88,9 @@ BONE_LINE_WIDTH  = 2.0
 # A pose inside the window but outside every prompt block: still sent, but it
 # belongs to no instruction, so it gets a neutral tint rather than a block's.
 UNBLOCKED_COLOR = (0.62, 0.68, 0.78)
-DROPPED_COLOR   = (0.50, 0.50, 0.52)
 
-# The motion trail: where the body actually goes, frame by frame, against the
-# key poses that asked it to. Sampled points per bone — a longer action is
-# stepped rather than refused, so the shape of the motion still reads.
-MAX_TRAIL_FRAMES = 600
-TRAIL_WIDTH = 2.5
-# Marker radii, in logical pixels — scaled by the display's pixel size at draw
-# time. GPU point size is ignored on the Metal backend, so the markers are
-# drawn as diamonds in the 2D pass instead of as points in the 3D one.
-TRAIL_DOT_RADIUS = 1.8            # one per frame: spacing is speed
-TRAIL_KEY_RADIUS = 4.5            # the frames you keyed, on the curve
-TRAIL_CURRENT_RADIUS = 3.5
-TRAIL_NEUTRAL_COLOR = (0.80, 0.82, 0.88)   # frames under no prompt block
-TRAIL_ALPHA = 0.80
-# Frames either side of the playhead the trail is drawn at full strength, and
-# how faint it goes beyond that. Six curves across a hundred frames at one
-# weight is a thicket you cannot read the near motion through; the far parts
-# are context, and context belongs in the background.
-TRAIL_NEAR_FRAMES = 12
-TRAIL_FAR_FACTOR = 0.18
-TRAIL_ALPHA_DROPPED = 0.28        # frames the next generation will not touch
-TRAIL_CURRENT_COLOR = (1.0, 1.0, 1.0, 0.95)
+# A pose the next take leaves out (outside every block's window).
+DROPPED_COLOR   = (0.50, 0.50, 0.52)
 
 # The root trajectory: the path the take travels along without the sway of its
 # steps (inplace.py), drawn on the floor. Amber: none of the prompt-block
@@ -120,6 +101,7 @@ ROOT_PATH_LIFT = 0.004            # m above the floor, so it does not z-fight it
 ROOT_PATH_TICK_EVERY = 6          # frames between the small ticks along it
 ROOT_PATH_TICK_RADIUS = 2.2
 ROOT_PATH_CURRENT_RADIUS = 5.0
+ROOT_PATH_CURRENT_COLOR = (1.0, 1.0, 1.0, 0.95)
 #: the root trajectory is coloured by its speed: slow, middling, fast (of the
 #: take's fastest, or of ROOT_PATH_SPEED_FLOOR m/s if it never goes that fast)
 ROOT_PATH_SPEED_RAMP = ((0.20, 0.82, 0.48), (1.00, 0.72, 0.18), (0.96, 0.22, 0.16))
@@ -173,25 +155,6 @@ _ghosts: dict = {
     "dirty": True,
 }
 
-# The motion trail, kept in its own cache with its own signature.
-#
-# Deliberately NOT stored alongside the ghosts: they are two independent
-# overlays that happen to be cheapest to sample in one pass over the playhead.
-# Sharing one cache meant a stale or switched-off trail blanked perfectly good
-# ghosts, and switching the trail off made the whole overlay disappear until
-# something rebaked it.
-#   bones      traced bone names, in draw order
-#   frames     the frames sampled, ascending (every authored frame included)
-#   points     bone -> world position per sampled frame, parallel to frames
-_trail: dict = {
-    "bones": [],
-    "frames": [],
-    "points": {},
-    "signature": None,
-    "dirty": True,
-    "arm": "",
-}
-
 # The root trajectory, fitted in the same bake pass (it samples the take too):
 #   spans      [{"frames": [a, b], "path": [(x, y, z), ...], "label": str}]
 #   colors     per point, by speed; "vmax" the speed the ramp tops out at
@@ -202,10 +165,6 @@ _root_path: dict = {
     "arm": "",
     "reuse": False,        # only the path changed (its curve edited): no need to sample the take
 }
-
-# Per-frame trail colours are a pure function of the plan, so they are
-# computed once per plan change instead of on every redraw.
-_trail_colors: dict = {"signature": None, "frames": None, "colors": []}
 
 # Set while a bake owns the playhead, so our own frame_set calls don't look
 # like user edits to the depsgraph handler.
@@ -300,21 +259,7 @@ def _ghost_signature(arm, action, settings):
     """
     if arm is None or action is None:
         return None
-    return (arm.name, action.name, settings.key_pose_display)
-
-
-def _trail_signature(arm, action):
-    """What the sampled trail depends on.
-
-    The traced bones are derived from the rig itself — end effectors, root and
-    head — so they are not part of this: resolving them walks the constraint
-    stack, which is too much work to repeat on every redraw, and the answer
-    only changes when the rig does. Switching armature changes the name here;
-    renaming bones on the same rig needs a Refresh.
-    """
-    if arm is None or action is None:
-        return None
-    return (arm.name, action.name)
+    return (arm.name, action.as_pointer(), settings.key_pose_display)  # not its name: keeping a take renames it
 
 
 def _root_path_signature(arm, action):
@@ -339,9 +284,14 @@ def _plan_signature(settings, arm, action, scene):
     from . import constraints_ui
 
     blocks = tuple(
-        (int(b.frame_start), int(b.frame_end), bool(b.enabled), bool((b.prompt or "").strip()))
+        (int(b.frame_start), int(b.frame_end), bool(b.enabled), bool((b.prompt or "").strip()),
+         bool(getattr(b, "locked", False)))
         for b in settings.prompt_blocks
     )
+    # With blocks locked, the next Generate makes the stretch under the
+    # playhead (request_builder.generation_blocks), so where it is counts.
+    if any(b[4] for b in blocks):
+        blocks += (("playhead", int(scene.frame_current)),)
     # How many keys there are: a pose keyed with Blender's own I, or by a path
     # that forgets to invalidate, changes it, where the action's name does not
     # -- a frame keyed that way got no ghost and no count until something else
@@ -426,6 +376,67 @@ def invalidate_plan() -> None:
     _plan["dirty"] = True
 
 
+def take_keys(scene) -> list:
+    """The key poses the next take will hit (inside the generation window)."""
+    p = plan(scene)
+    return [f for f in p["frames"] if p["entries"][f]["in_range"]]
+
+
+def keyed_here(scene) -> bool:
+    """Whether the frame under the playhead holds one of your key poses."""
+    return int(scene.frame_current) in plan(scene)["frames"]
+
+
+def move_key_pose(scene, src: int, dst: int) -> bool:
+    """Move the key pose on frame ``src`` to ``dst``: every key the artist set
+    on that frame (any channel; not the take's GENERATED samples), with its
+    handles and interpolation. A take's sample already on ``dst`` gives way.
+    Refused (False) onto a frame that holds a key pose of its own."""
+    from . import constraints_ui
+
+    settings = _settings(scene)
+    arm = _target(settings)
+    action = _action(arm)
+    src, dst = int(src), int(dst)
+    if action is None or src == dst:
+        return False
+    authored, _ = constraints_ui.authored_pose_frames(action)
+    if dst in authored or src not in authored:
+        return False
+    moved = 0
+    for fc in constraints_ui.iter_action_fcurves(action):
+        kps = fc.keyframe_points
+        mine = [i for i, k in enumerate(kps) if int(round(k.co.x)) == src and k.type != 'GENERATED']
+        if not mine:
+            continue
+        keep = []
+        for i in mine:
+            k = kps[i]
+            keep.append({
+                "value": k.co.y, "type": k.type, "interpolation": k.interpolation,
+                "easing": k.easing, "hl_type": k.handle_left_type, "hr_type": k.handle_right_type,
+                "hl": (k.handle_left.x - k.co.x, k.handle_left.y - k.co.y),
+                "hr": (k.handle_right.x - k.co.x, k.handle_right.y - k.co.y),
+            })
+        gone = mine + [i for i, k in enumerate(kps) if int(round(k.co.x)) == dst and k.type == 'GENERATED']
+        for i in sorted(set(gone), reverse=True):
+            kps.remove(kps[i], fast=True)
+        for kd in keep[:1]:                 # one key per channel per frame
+            k = kps.insert(dst, kd["value"], options={'FAST'}, keyframe_type=kd["type"])
+            k.interpolation, k.easing = kd["interpolation"], kd["easing"]
+            k.handle_left_type, k.handle_right_type = kd["hl_type"], kd["hr_type"]
+            k.handle_left = (dst + kd["hl"][0], kd["value"] + kd["hl"][1])
+            k.handle_right = (dst + kd["hr"][0], kd["value"] + kd["hr"][1])
+        fc.update()
+        moved += 1
+    if not moved:
+        return False
+    invalidate_plan()
+    clear()                                 # the ghosts re-bake where the pose now is
+    tag_redraw()
+    return True
+
+
 def dropped_frames(scene=None) -> list[int]:
     """Key poses the request will silently leave out."""
     p = plan(scene)
@@ -435,26 +446,24 @@ def dropped_frames(scene=None) -> list[int]:
 def overlay_on(settings) -> bool:
     """Is any part of the plan overlay switched on?
 
-    ``key_pose_overlay`` is the master — one click to clear the viewport —
-    and the two halves under it say what the overlay is made of. Asking both
-    questions here saves every caller from having to remember the master
-    exists.
+    ``key_pose_overlay`` is the master -- one click to clear the viewport --
+    and the parts under it say what the overlay is made of: the ghosts, the
+    root path, and whatever the Autoposer samples in the same pass (its motion
+    trail, when it is installed). Asking both questions here saves every caller
+    from having to remember the master exists.
     """
-    return bool(settings is not None and settings.key_pose_overlay
-                and (settings.key_pose_ghosts or settings.key_pose_trail
-                     or getattr(settings, "key_pose_root_path", False)))
+    if settings is None or not settings.key_pose_overlay:
+        return False
+    if settings.key_pose_ghosts or getattr(settings, "key_pose_root_path", False):
+        return True
+    from . import posing
+    return any(s.wanted(settings) for s in posing.samplers())
 
 
 def ghosts_on(settings) -> bool:
     """Should the keyed poses be drawn and baked?"""
     return bool(settings is not None and settings.key_pose_overlay
                 and settings.key_pose_ghosts)
-
-
-def trail_on(settings) -> bool:
-    """Should the motion trail be drawn and baked?"""
-    return bool(settings is not None and settings.key_pose_overlay
-                and settings.key_pose_trail)
 
 
 def root_path_on(settings) -> bool:
@@ -466,11 +475,12 @@ def root_path_on(settings) -> bool:
 def timeline_ticks(scene) -> tuple[list[tuple[int, bool]], tuple[int, int]]:
     """``([(frame, in_range), …], window)`` for the timeline lane overlay.
 
-    Returns nothing while the feature is switched off — the lane should not
-    grow marks the artist did not ask for.
+    Whatever the viewport shows: the ghost switch is about the viewport (the
+    poses, the trail, their numbers), and the timeline's marks are where the
+    key poses are -- what the next take is asked to hit, and the handles to
+    retime them by. Hidden with the ghosts, they went too.
     """
-    settings = _settings(scene)
-    if not overlay_on(settings):
+    if _settings(scene) is None:
         return [], (0, 0)
     p = plan(scene)
     return [(f, p["entries"][f]["in_range"]) for f in p["frames"]], p["range"]
@@ -499,56 +509,6 @@ def _pose_color(frame: int, entry: dict, settings) -> tuple[float, float, float]
     except (IndexError, TypeError):
         return UNBLOCKED_COLOR
     return tuple(timeline_overlay._strip_color(block, index)[:3])
-
-
-def _frame_color(frame: int, settings, p) -> tuple[float, float, float, float]:
-    """Colour of one frame of motion: its prompt block, or neutral, dimmed
-    when the next generation will not reach it."""
-    from . import timeline_overlay
-
-    index = _owning_block(frame, settings.prompt_blocks)
-    if index is None:
-        rgb = TRAIL_NEUTRAL_COLOR
-    else:
-        try:
-            block = settings.prompt_blocks[index]
-            rgb = tuple(timeline_overlay._strip_color(block, index)[:3])
-        except (IndexError, TypeError):
-            rgb = TRAIL_NEUTRAL_COLOR
-    window = p["range"]
-    inside = window[0] <= frame <= window[1]
-    return (*rgb, TRAIL_ALPHA if inside else TRAIL_ALPHA_DROPPED)
-
-
-def _trail_fade(frame: int, current: int) -> float:
-    """How strongly this frame of the trail is drawn, by distance from the
-    playhead. Near motion is what is being worked on; the rest is context."""
-    d = abs(frame - current)
-    if d <= TRAIL_NEAR_FRAMES:
-        return 1.0
-    t = min(1.0, (d - TRAIL_NEAR_FRAMES) / float(TRAIL_NEAR_FRAMES * 2))
-    return 1.0 + (TRAIL_FAR_FACTOR - 1.0) * t
-
-
-def _trail_color_list(settings, p, frames, current: int):
-    """One colour per sampled frame, cached against the plan and the playhead.
-
-    The colour is what makes the trail a *plan* view rather than a motion
-    path: the curve changes colour where the prompt blocks change, so you can
-    see which stretch of the motion belongs to which instruction. The alpha is
-    what makes it readable: it falls away from the playhead, so the passage
-    being worked on is the one that reads.
-    """
-    key = (p["signature"], len(frames), current)
-    if _trail_colors["signature"] == key:
-        return _trail_colors["colors"]
-    colors = []
-    for f in frames:
-        r, g, b, a = _frame_color(f, settings, p)
-        colors.append((r, g, b, a * _trail_fade(f, current)))
-    _trail_colors["signature"] = key
-    _trail_colors["colors"] = colors
-    return colors
 
 
 def _rank_from_playhead(frames, current: int) -> dict:
@@ -581,14 +541,10 @@ def _pose_alpha(frame: int, entry: dict, ranks: dict, editing: int = -1) -> floa
 
 
 def _editing_frame(settings) -> int:
-    """Frame of the open edit session, or -1. Never raises in a draw."""
-    from . import pose_edit
-
-    try:
-        session = pose_edit.active_session(settings, _target(settings))
-    except Exception:                       # noqa: BLE001 — never break a draw
-        return -1
-    return -1 if session is None else int(session)
+    """Frame of the ghost being edited (the Autoposer's ghost-click edit), or -1. Never raises
+    in a draw."""
+    from . import posing
+    return posing.editing_frame(settings.id_data) if settings is not None else -1
 
 
 def _skinned_meshes(arm, context) -> list[bpy.types.Object]:
@@ -629,69 +585,35 @@ def _ghost_bones(arm) -> list[str]:
     return [pb.name for pb in arm.pose.bones if not pb.bone.hide]
 
 
-# The joints the motion trail follows: the end effectors, the root and the
-# head. These are the joints the model is steered by — the hands and feet an
-# effector pin targets, the hips carrying the trajectory, the head carrying
-# the gaze — so their paths are the ones worth reading. Everything between
-# them is interpolation the artist does not direct directly.
-_TRAIL_JOINTS = ("Hips", "Head", "LeftHand", "RightHand", "LeftFoot", "RightFoot")
-#: ...and the Trail Joints setting each one is shown under.
-_TRAIL_GROUP = {"Hips": "HIPS", "Head": "HEAD", "LeftHand": "HANDS", "RightHand": "HANDS",
-                "LeftFoot": "FEET", "RightFoot": "FEET"}
-#: traced bone -> its Trail Joints group, filled in as the bones are resolved
-_trail_group_of: dict[str, str] = {}
+# The end effectors, the root and the head: the joints an editing tool takes a
+# body by (Marionette's, when it is installed).
+_END_JOINTS = ("Hips", "Head", "LeftHand", "RightHand", "LeftFoot", "RightFoot")
 
 
-def _trail_bones(arm) -> list[str]:
-    """The bones the motion trail follows, resolved onto this rig.
-
-    Canonical joint names go through the same resolver effector pins use, so a
-    namespaced rig (``animatica:LeftHand``), a Mixamo one
-    (``mixamorig:LeftHand``) and a differently-spelled one (``hand.L``) all
-    land on the right bone. On a control rig the deform bone is traced, since
-    that is the body — the control is a handle floating beside it, and it is
-    the deform skeleton the request carries.
-
-    Not called from a draw callback: resolution walks the rig's constraint
-    stack, so the answer is cached in the trail's signature instead.
-    """
+def end_bones(arm) -> list[str]:
+    """The bones that play the end joints on this rig, resolved the way effector
+    pins are (namespaced, Mixamo and differently-spelled rigs alike); on a
+    control rig the deform bone. Walks the constraint stack: never from a draw."""
     from . import constraints_ui, request_builder
 
     if arm is None or arm.type != 'ARMATURE':
         return []
-
     allowed = None
     try:
         if request_builder.is_control_rig(arm):
             allowed = request_builder.emitted_deform_bones(arm) or None
-    except Exception:                       # noqa: BLE001 — never break a bake
+    except Exception:                       # noqa: BLE001 -- never break a bake
         allowed = None
-
     names: list[str] = []
-    for joint in _TRAIL_JOINTS:
+    for joint in _END_JOINTS:
         pb = constraints_ui.resolve_effector_bone(arm, joint, allowed)
         if pb is not None and pb.name not in names:
             names.append(pb.name)
-            _trail_group_of[pb.name] = _TRAIL_GROUP[joint]
-
-    # A rig that names its root something else still gets its trajectory
-    # traced — that is the one line the plan is mostly about.
     if not any(n.rsplit(":", 1)[-1] == "Hips" for n in names):
         root = next((pb for pb in arm.pose.bones if pb.parent is None), None)
         if root is not None and root.name not in names:
             names.insert(0, root.name)
-            _trail_group_of[root.name] = "HIPS"
     return names
-
-
-def shown_trail_bones(settings) -> list[str]:
-    """The traced bones the Trail Joints setting shows. All are baked either
-    way, so changing it only redraws."""
-    if settings is None:
-        return list(_trail["bones"])
-    shown = {g for g in ("HIPS", "HEAD", "HANDS", "FEET")
-             if getattr(settings, f"key_pose_trail_{g.lower()}", True)}
-    return [n for n in _trail["bones"] if _trail_group_of.get(n, "HIPS") in shown]
 
 
 def _motion_extent(action) -> tuple[int, int] | None:
@@ -714,28 +636,8 @@ def _motion_extent(action) -> tuple[int, int] | None:
     return lo, hi
 
 
-def _trail_frames(action, key_frames: list[int]) -> list[int]:
-    """The frames to sample for the trail, ascending.
-
-    Long actions are stepped rather than refused — the shape of the motion
-    still reads at every other frame, and every authored frame is kept in the
-    sample whatever the step, so the key markers always sit exactly on the
-    curve.
-    """
-    extent = _motion_extent(action)
-    if extent is None:
-        return []
-    lo, hi = extent
-    span = hi - lo + 1
-    step = max(1, math.ceil(span / MAX_TRAIL_FRAMES))
-    frames = set(range(lo, hi + 1, step))
-    frames.add(hi)
-    frames.update(f for f in key_frames if lo <= f <= hi)
-    return sorted(frames)
-
-
-def _capture_trail(arm, bone_names, depsgraph) -> dict[str, tuple]:
-    """World position of each traced bone at the current frame."""
+def capture_joints(arm, bone_names, depsgraph) -> dict[str, tuple]:
+    """World position of each of ``bone_names`` at the current frame."""
     eval_arm = arm.evaluated_get(depsgraph)
     mw = eval_arm.matrix_world
     out: dict[str, tuple] = {}
@@ -823,11 +725,12 @@ def _anchors(arm, depsgraph, points):
 # ---------------------------------------------------------------------------
 
 def rebuild(context=None) -> int:
-    """Bake whichever halves of the overlay are out of date.
+    """Bake whichever parts of the overlay are out of date.
 
-    The ghosts and the trail are independent — either can be switched off, and
-    a change to one never invalidates the other — but both are sampled by
-    stepping the playhead, which is by far the most expensive part. So they
+    The ghosts and whatever the Autoposer samples (its motion trail, when it is
+    installed: ``posing.samplers()``) are independent -- either can be switched
+    off, and a change to one never invalidates the other -- but all are sampled
+    by stepping the playhead, which is by far the most expensive part. So they
     are baked in a single pass over the union of the frames they need.
 
     Moves the playhead, so never call it from a draw callback: use
@@ -855,7 +758,6 @@ def rebuild(context=None) -> int:
         return 0
 
     ghost_sig = _ghost_signature(arm, action, settings)
-    trail_sig = _trail_signature(arm, action)
     # Either half rebakes when its identity changed (different rig, action or
     # display mode) or when something reported a content change — a keyframe
     # edited, inserted, retimed, the rig moved. Identity alone would miss
@@ -863,16 +765,15 @@ def rebuild(context=None) -> int:
     need_ghosts = ghosts_on(settings) and (
         _ghosts["dirty"] or _ghosts["signature"] != ghost_sig
     )
-    need_trail = trail_on(settings) and (
-        _trail["dirty"] or _trail["signature"] != trail_sig
-    )
+    from . import posing
+    samplers = [s for s in posing.samplers() if s.wanted(settings) and s.stale(arm, action, settings)]
     root_sig = _root_path_signature(arm, action)
     need_root = root_path_on(settings) and (
         _root_path["dirty"] or _root_path["signature"] != root_sig
     )
     if need_root:
         _bake_root_path(arm, action, scene, root_sig)
-    if not need_ghosts and not need_trail:
+    if not need_ghosts and not samplers:
         if need_root:
             tag_redraw()
         return len(_ghosts["frames"])
@@ -893,24 +794,22 @@ def rebuild(context=None) -> int:
         if not meshes and not bone_names:
             key_frames = []
 
-    trail_bones = _trail_bones(arm) if need_trail else []
-    trail_frames = (
-        _trail_frames(action, plan(scene)["frames"]) if trail_bones else []
-    )
+    sampled = {s: set(s.frames(arm, action, plan(scene)["frames"])) for s in samplers}
 
     shader = _shader()
     line_shader = _line_uniform_shader()
     ghosts: dict[int, dict] = {}
     roots: dict[int, tuple] = {}
-    trail_points: dict[str, list] = {name: [] for name in trail_bones}
     key_set = set(key_frames)
-    trail_set = set(trail_frames)
+    every = set(key_set)
+    for frames in sampled.values():
+        every |= frames
     saved_frame = scene.frame_current
     saved_subframe = scene.frame_subframe
 
     _baking = True
     try:
-        for f in sorted(key_set | trail_set):
+        for f in sorted(every):
             scene.frame_set(f)
             # frame_set alone doesn't always push through driver / constraint
             # stacks; without this the evaluated matrices can hold the
@@ -918,12 +817,9 @@ def rebuild(context=None) -> int:
             context.view_layer.update()
             depsgraph = context.evaluated_depsgraph_get()
 
-            if f in trail_set:
-                sampled = _capture_trail(arm, trail_bones, depsgraph)
-                for name in trail_bones:
-                    point = sampled.get(name)
-                    if point is not None:
-                        trail_points[name].append(point)
+            for s, frames in sampled.items():
+                if f in frames:
+                    s.capture(arm, depsgraph, f)
 
             if f not in key_set:
                 continue
@@ -964,14 +860,14 @@ def rebuild(context=None) -> int:
             roots[f] = _anchors(arm, depsgraph, points)
     finally:
         scene.frame_set(saved_frame, subframe=saved_subframe)
+        try:
+            context.view_layer.update()     # its evaluation, while still marked as ours
+        except Exception:                   # noqa: BLE001
+            pass
         _baking = False
         # The walk above happened with the control-seating handler muted, so
         # the controls are describing whatever frame the bake stopped on.
-        try:
-            from . import autopose_sync
-            autopose_sync.reseat_controls(scene)
-        except Exception:                   # noqa: BLE001 — never fail a bake
-            pass
+        posing.reseat(scene)
 
     # Each half is written back only if it was baked, and its signature is
     # stamped even when it produced nothing — "baked and empty" has to be
@@ -985,21 +881,8 @@ def rebuild(context=None) -> int:
         _ghosts["signature"] = ghost_sig
         _ghosts["dirty"] = False
         _ghosts["arm"] = arm.name
-    if need_trail:
-        # A bone that never resolved leaves a short list; drop it rather than
-        # draw a trail that does not line up with the sampled frames.
-        trail_points = {
-            name: pts for name, pts in trail_points.items()
-            if len(pts) == len(trail_frames)
-        }
-        _trail["bones"] = [name for name in trail_bones if name in trail_points]
-        _trail["frames"] = trail_frames
-        _trail["points"] = trail_points
-        _trail["signature"] = trail_sig
-        _trail["dirty"] = False
-        _trail["arm"] = arm.name
-        _trail_colors["signature"] = None
-
+    for s in samplers:
+        s.commit(arm, action)
     tag_redraw()
     return len(_ghosts["frames"])
 
@@ -1061,13 +944,9 @@ def clear() -> None:
     _ghosts["clamped"] = False
     _ghosts["dirty"] = True
     _ghosts["arm"] = ""
-    _trail["bones"] = []
-    _trail["frames"] = []
-    _trail["points"] = {}
-    _trail["signature"] = None
-    _trail["dirty"] = True
-    _trail["arm"] = ""
-    _trail_colors["signature"] = None
+    from . import posing
+    for s in posing.samplers():
+        s.clear()
     tag_redraw()
 
 
@@ -1102,10 +981,30 @@ def request_rebuild(*, coalesce: bool = False) -> None:
     # A request means "what was baked may no longer be true". Only the caller
     # knows that; the caches cannot tell from the rig's name.
     _ghosts["dirty"] = True
-    _trail["dirty"] = True
+    from . import posing
+    for s in posing.samplers():
+        s.mark_dirty()
     _root_path["dirty"] = True
     _root_path["reuse"] = False
+    if not coalesce:
+        # an edit: the motion's poses changed -- Marionette's onion skin, when
+        # it is installed, is of them too. (A coalescing ask comes from a draw
+        # finding a cache stale: it says nothing about the motion.)
+        posing.motion_changed()
     _arm_rebuild_timer(coalesce)
+
+
+def motion_replaced() -> None:
+    """The rig's motion was swapped out from under the overlay -- a take thrown
+    away or kept, another version shown: what is drawn of it is of the motion
+    before. An action rewritten in place tells the change handler nothing
+    (Discard after a splice), so everything is let go and baked again."""
+    _forget_ghosts()
+    _seen["keys"] = _UNSEEN              # the keys looked at afresh
+    invalidate_plan()
+    from . import posing
+    posing.motion_changed(replaced=True)
+    request_rebuild()
 
 
 def request_root_refresh() -> None:
@@ -1154,6 +1053,8 @@ def _rebuild_timer():
     settings = _settings(getattr(bpy.context, "scene", None))
     if settings is not None and settings.is_generating:
         return REBUILD_DEBOUNCE
+    if posing():
+        return REBUILD_DEBOUNCE        # a drag's pose is unkeyed until it ends: no stepping under it
 
     _rebuild_requested_at = None
     _rebuild_first_at = None
@@ -1170,6 +1071,14 @@ def flash_keyed(frame: int) -> None:
     _flash["frame"] = int(frame)
     _flash["at"] = time.monotonic()
     tag_redraw()
+    if not bpy.app.timers.is_registered(_pulse):
+        bpy.app.timers.register(_pulse, first_interval=1 / 30)
+
+
+def _pulse():
+    """Redraw while the Timeline's ring opens out from a new key pose."""
+    tag_redraw()
+    return 1 / 30 if time.monotonic() - _flash["at"] < 1.3 else None
 
 
 def _flashing(frame: int) -> bool:
@@ -1212,21 +1121,116 @@ def on_redraw_setting(_settings=None) -> None:
 # Change detection
 # ---------------------------------------------------------------------------
 
+#: how often (s) the keys are looked at while the animation plays, and from a redraw
+KEYS_CHECK_PLAYING = 0.25
+KEYS_CHECK_DRAW = 0.3
+#: the keys never looked at yet (not the same as "looked at, and there is no action")
+_UNSEEN = object()
+
+
+def _keys_fingerprint(action) -> int:
+    """A number that changes with any edit to ``action``'s keys: one added, deleted or
+    moved, a handle or an interpolation changed, a curve added, removed or muted."""
+    from . import constraints_ui
+    crc = 0
+    for fc in constraints_ui.iter_action_fcurves(action):
+        kps = fc.keyframe_points
+        n = len(kps)
+        crc = zlib.crc32(f"{fc.data_path}[{fc.array_index}]{n}:{int(fc.mute)}:{len(fc.modifiers)}".encode(), crc)
+        if not n:
+            continue
+        co = np.empty(n * 6, dtype=np.float32)
+        kps.foreach_get("co", co[:2 * n])
+        kps.foreach_get("handle_left", co[2 * n:4 * n])
+        kps.foreach_get("handle_right", co[4 * n:])
+        interp = np.empty(n, dtype=np.int32)
+        kps.foreach_get("interpolation", interp)
+        crc = zlib.crc32(interp.tobytes(), zlib.crc32(co.tobytes(), crc))
+    return crc
+
+
+def _keys_edited(action) -> bool:
+    """Whether ``action``'s keys changed since they were last looked at; remembers them."""
+    _seen["keys_at"] = time.monotonic()
+    fp = None if action is None else (action.as_pointer(), _keys_fingerprint(action))
+    if fp == _seen["keys"]:
+        return False
+    first = _seen["keys"] is _UNSEEN
+    _seen["keys"] = fp
+    return not first
+
+
+def _placement(arm) -> tuple:
+    """Where the character's object stands (ghosts are baked in world space)."""
+    return tuple(round(v, 5) for row in arm.matrix_world for v in row)
+
+
+def _edited(settings) -> None:
+    """The motion changed: what the overlay shows of it is out of date."""
+    # The plan is cheap and the panel reports it even with the ghosts off,
+    # so it is always invalidated; only the geometry waits on the toggle.
+    invalidate_plan()
+    if overlay_on(settings) and settings.key_pose_auto_refresh:
+        request_rebuild()
+    else:
+        tag_redraw()
+
+
+def poll_edits(settings, gap: float = KEYS_CHECK_DRAW) -> None:
+    """Catch an edit no update reported (or one looked at too soon to tell): from a
+    redraw, and from the recheck a throttled look leaves behind. Cheap to call often --
+    the keys are looked at once every ``gap`` seconds at most."""
+    if _baking or posing() or settings is None or settings.is_generating:
+        return
+    if time.monotonic() - _seen["keys_at"] < gap:
+        return
+    arm = _target(settings)
+    if arm is None:
+        return
+    edited = _keys_edited(_action(arm))
+    if _seen["placement"] is None:
+        _seen["placement"] = _placement(arm)
+    if edited:
+        _edited(settings)
+
+
+def _recheck_keys():
+    poll_edits(_settings(getattr(bpy.context, "scene", None)), gap=0.0)
+    return None
+
+
+def _keys_due(gap: float) -> bool:
+    """Whether the keys may be looked at again; if not, a look is booked for when they may."""
+    wait = gap - (time.monotonic() - _seen["keys_at"])
+    if wait <= 0.0:
+        return True
+    if not bpy.app.timers.is_registered(_recheck_keys):
+        bpy.app.timers.register(_recheck_keys, first_interval=wait)
+    return False
+
+
 @persistent
 def _on_depsgraph(scene, depsgraph) -> None:
-    """React to the two edits that change the plan.
+    """React to the edits that change what the overlay shows: the keys of the
+    character's action (inserted, deleted, moved, retimed, their handles), and
+    the character's object moved (ghosts are baked in world space).
 
-    Only two kinds of update can: a change to the **action** (inserting,
-    deleting, retiming or auto-keying a pose — Blender tags the Action
-    datablock and nothing else), and a transform on the **armature object**
-    (ghosts are baked in world space, so sliding the rig leaves them behind).
+    Blender only says the action or the object was *updated*, and it says so for
+    evaluation as well as for edits: every frame of playback, every scrub, every
+    frame a bake steps through and back. Telling them apart by circumstance --
+    not while playing, not on a frame change, not just after a capture -- dropped
+    real edits: a key deleted while the animation played, or just after the
+    onion skin captured a frame (it fills in for seconds after every edit), left
+    the ghosts and the trail stale for good. So the keys themselves are compared,
+    by a fingerprint, with the ones last seen: an evaluation leaves it as it was,
+    an edit changes it whenever and however it came. A redraw looks too
+    (:func:`poll_edits`), so even an edit nothing reported shows within moments.
 
-    Everything else is ignored on purpose, above all the plain pose edit:
-    dragging a bone tags the object on every mouse-move, but until it is keyed
-    there is no plan change to show, and rebaking mid-drag would move the
-    playhead under the artist.
+    The pose being dragged is still left alone: until it is keyed there is no
+    change to show, and rebaking mid-drag would move the playhead under the
+    artist. A drag keys (and asks for a rebuild) when it ends.
     """
-    if _baking:
+    if _baking or posing():
         return
     settings = _settings(scene)
     if settings is None:
@@ -1234,31 +1238,34 @@ def _on_depsgraph(scene, depsgraph) -> None:
     arm = _target(settings)
     if arm is None:
         return
-    # Playback reports the action updated on every frame — animation
-    # evaluation touches it — and that is not an edit. Taking it for one meant
-    # a rebuild request sixty times a second, each pushing the wait out, so
-    # nothing ever refreshed while the animation ran. Playback cannot change a
-    # key; the paths that do (keying a pose, dragging a curve) ask for a
-    # rebuild themselves and do not come through here.
-    screen = getattr(bpy.context, "screen", None)
-    if screen is not None and getattr(screen, "is_animation_playing", False):
-        return
-
     action = _action(arm)
+    keys_touched = moved = False
     for update in depsgraph.updates:
         source = getattr(update.id, "original", update.id)
-        keys_changed = action is not None and source == action
-        moved = source == arm and update.is_updated_transform
-        if not (keys_changed or moved):
-            continue
-        # The plan is cheap and the panel reports it even with the ghosts off,
-        # so it is always invalidated; only the geometry waits on the toggle.
-        invalidate_plan()
-        if overlay_on(settings) and settings.key_pose_auto_refresh:
-            request_rebuild()
-        else:
-            tag_redraw()
+        if action is not None and source == action:
+            keys_touched = True
+        elif source == arm and update.is_updated_transform:
+            moved = True
+    if not (keys_touched or moved):
         return
+    frame = (int(scene.frame_current), round(float(scene.frame_subframe), 3))
+    stepped = frame != _seen["frame"]
+    _seen["frame"] = frame
+    edited = False
+    if keys_touched:
+        if playing():
+            # every frame of playback touches the action: a few looks a second
+            edited = _keys_due(KEYS_CHECK_PLAYING) and _keys_edited(action)
+        elif not stepped:
+            edited = _keys_edited(action)
+        # (a scrub -- the frame changed, nothing playing -- evaluates the keys, it can't edit them)
+    if moved:
+        place = _placement(arm)
+        if not stepped and place != _seen["placement"]:
+            edited = True
+        _seen["placement"] = place          # an animated object moves with the frame
+    if edited:
+        _edited(settings)
 
 
 @persistent
@@ -1285,7 +1292,23 @@ def _overlay_gate(context):
     settings = _settings(context.scene)
     if not overlay_on(settings):
         return None
+    if _target(settings) is None:
+        # no character (deleted, or none picked): nothing to draw ghosts of --
+        # and what was cached of the last one is let go
+        _forget_ghosts()
+        return None
     return settings, plan(context.scene)
+
+
+def _forget_ghosts() -> None:
+    """Drop every cached ghost (the GPU batches with them)."""
+    if _ghosts.get("frames"):
+        _ghosts["frames"] = []
+        _ghosts["ghosts"] = {}
+        _ghosts["dirty"] = True
+    from . import posing
+    for s in posing.samplers():
+        s.clear()
 
 
 def _stale_ok(cache, arm) -> bool:
@@ -1354,23 +1377,6 @@ def _root_path_ready(settings) -> bool:
     return bool(_root_path["spans"]) and _root_path["arm"] == arm.name
 
 
-def _trail_ready(settings) -> bool:
-    """Whether to draw the trail; asks for a rebake when it is stale."""
-    if not trail_on(settings):
-        return False
-    arm = _target(settings)
-    if arm is None:
-        return False
-    fresh = (
-        not _trail["dirty"]
-        and _trail["signature"] == _trail_signature(arm, _action(arm))
-    )
-    if fresh:
-        return True
-    request_rebuild(coalesce=True)
-    return _stale_ok(_trail, arm)
-
-
 def refresh_held_by() -> str:
     """Why a pending rebake has not run yet, in words, or an empty string.
 
@@ -1386,8 +1392,66 @@ def refresh_held_by() -> str:
     return ""
 
 
+#: what the change handler last saw: the frame (a change of it, nothing playing, is a
+#: scrub, not an edit), the keys' fingerprint and when it was taken, and where the
+#: character's object stood
+_seen: dict = {"frame": None, "keys": _UNSEEN, "keys_at": 0.0, "placement": None}
+
+
+def posing() -> bool:
+    """Whether a drag is posing the rig right now (the Autoposer's: a handle,
+    the trail, a zoetrope slice). Its pose lives on the rig until it is keyed,
+    and any capture that steps the playhead and back re-evaluates the action
+    over it: the dragged pose was lost."""
+    try:
+        from . import posing as _posing
+        return _posing.dragging()
+    except Exception:                       # noqa: BLE001
+        return False
+
+
+def playing() -> bool:
+    """Whether any window plays the animation. Asked of every window, not
+    bpy.context.screen: a timer has none, and the onion skin's capture,
+    blind to playback, moved the playhead under it -- the ghosts flickered."""
+    wm = getattr(bpy.context, "window_manager", None)
+    for w in getattr(wm, "windows", ()):
+        if w.screen is not None and w.screen.is_animation_playing:
+            return True
+    return False
+
+
+def loop_span(settings):
+    """``(start, cut)`` of the loop the rig plays -- its cycle is start..cut,
+    and cut is start again -- or None when it is not a loop."""
+    action = _action(_target(settings))
+    meta = action.get("animatica_loop") if action is not None else None
+    try:
+        lo, hi = int(round(float(meta["start"]))), int(round(float(meta["cut"])))
+    except (TypeError, KeyError, ValueError):
+        return None
+    return (lo, hi) if hi - lo >= 4 else None
+
+
+def loop_wrap(f, span) -> int:
+    """Frame ``f`` brought into the cycle."""
+    lo, hi = span
+    return lo + (int(f) - lo) % (hi - lo)
+
+
+def frames_from(f, c, span=None) -> int:
+    """Frames from ``c`` to ``f``, signed: in a loop the short way round."""
+    d = int(f) - int(c)
+    if span is None:
+        return d
+    p = span[1] - span[0]
+    d = (d + p // 2) % p - p // 2
+    return d
+
+
 def _visible_poses(scene, p) -> list[tuple[int, dict]]:
-    """The key poses to draw, with their plan entry.
+    """The key poses to draw, with their plan entry: every one -- the motion
+    plan, the poses the next take passes through.
 
     The pose under the playhead is suppressed: the rig itself is standing
     there, and a ghost inside it just muddies the silhouette.
@@ -1574,17 +1638,20 @@ def _depth_only(draw, *, xray: bool) -> None:
 
 
 def _draw_geometry():
-    """POST_VIEW callback: the key-pose ghosts and the motion trail."""
+    """POST_VIEW callback: the key-pose ghosts (the motion plan), the root
+    path, and what Marionette samples in the same pass (its motion trail)."""
     context = bpy.context
     gate = _overlay_gate(context)
     if gate is None:
         return
     settings, p = gate
+    poll_edits(settings)
 
-    trail_ready = _trail_ready(settings)
+    from . import posing
+    samplers = [s for s in posing.samplers() if s.ready(settings)]
     ghosts_ready = _ghosts_ready(settings)
     root_ready = _root_path_ready(settings)
-    if not trail_ready and not ghosts_ready and not root_ready:
+    if not samplers and not ghosts_ready and not root_ready:
         return
 
     visible = _visible_poses(context.scene, p) if ghosts_ready else []
@@ -1604,8 +1671,8 @@ def _draw_geometry():
     try:
         if root_ready:
             _draw_root_path()
-        if trail_ready:
-            _draw_trail(settings, p)
+        for s in samplers:
+            s.draw_view(context, settings, p)
 
         # Faintest first, so the poses nearest the playhead land on top.
         order = sorted(visible, key=lambda item: _pose_alpha(item[0], item[1], ranks, editing))
@@ -1650,107 +1717,8 @@ def _draw_geometry():
         gpu.state.face_culling_set('NONE')
 
 
-def _draw_trail(settings, p) -> None:
-    """The motion itself: where the body actually goes, frame by frame.
-
-    One line per traced bone, coloured per frame, so the path changes colour
-    where the prompt blocks change. The per-frame markers along it are drawn
-    in the 2D pass (see :func:`_draw_screen`) — together with the ghosts that
-    is the whole statement: the poses you asked for, and the motion that
-    answers them.
-    """
-    trail = _trail
-    frames = trail["frames"]
-    if not trail["bones"] or len(frames) < 2:
-        return
-
-    colors = _trail_color_list(settings, p, frames, int(bpy.context.scene.frame_current))
-    px = _px()
-    viewport = _viewport_size()
-    line = _line_shader()
-
-    for name in shown_trail_bones(settings):
-        points = trail["points"].get(name)
-        if not points or len(points) != len(colors):
-            continue
-
-        # The path itself, changing colour where the prompt blocks change.
-        line.bind()
-        line.uniform_float("viewportSize", viewport)
-        line.uniform_float("lineWidth", TRAIL_WIDTH * px)
-        batch_for_shader(
-            line, 'LINE_STRIP', {"pos": points, "color": colors},
-        ).draw(line)
-
-
-#: The picked point: Blender's selection orange, and a size that reads as
-#: "this one" next to the key-pose markers it sits among.
-TRAIL_SELECTED_COLOR = (1.0, 0.62, 0.16, 1.0)
-TRAIL_SELECTED_RADIUS = 8.5
-
-
 def _diamond(x: float, y: float, r: float):
     return ((x, y + r), (x + r, y), (x, y - r), (x - r, y))
-
-
-def _draw_trail_markers(settings, p, region, rv3d, current: int) -> None:
-    """Per-frame markers along the trail, in screen space.
-
-    Screen space because GPU point size is ignored on the Metal backend, and
-    because a marker is a piece of UI — it should stay the same size however
-    far the camera is from the character, the way Blender's own keyframe
-    markers do.
-
-    A small diamond per sampled frame (their spacing is the timing — bunched
-    means slow, spread means fast), a bigger one on every frame you keyed, and
-    a white one on the playhead.
-    """
-    trail = _trail
-    frames = trail["frames"]
-    if not trail["bones"] or len(frames) < 2:
-        return
-
-    from . import curve_edit
-
-    colors = _trail_color_list(settings, p, frames, current)
-    key_frames = set(p["frames"])
-    px = _px()
-    # The point a click has picked out, in Blender's own selection orange, so
-    # what the gizmo is about to move is never in doubt.
-    picked = curve_edit.selected()
-
-    verts: list[tuple[float, float]] = []
-    vert_colors: list[tuple[float, float, float, float]] = []
-    indices: list[tuple[int, int, int]] = []
-
-    for name in shown_trail_bones(settings):
-        points = trail["points"].get(name)
-        if not points or len(points) != len(colors):
-            continue
-        for i, frame in enumerate(frames):
-            co = view3d_utils.location_3d_to_region_2d(region, rv3d, points[i])
-            if co is None:
-                continue        # behind the viewer
-            if picked == (name, frame):
-                radius, color = TRAIL_SELECTED_RADIUS, TRAIL_SELECTED_COLOR
-            elif frame == current:
-                radius, color = TRAIL_CURRENT_RADIUS, TRAIL_CURRENT_COLOR
-            elif frame in key_frames:
-                radius, color = TRAIL_KEY_RADIUS, colors[i]
-            else:
-                radius, color = TRAIL_DOT_RADIUS, colors[i]
-            base = len(verts)
-            verts.extend(_diamond(co.x, co.y, radius * px))
-            vert_colors.extend([color] * 4)
-            indices.extend(((base, base + 1, base + 2), (base, base + 2, base + 3)))
-
-    if not verts:
-        return
-    shader = gpu.shader.from_builtin("SMOOTH_COLOR")
-    shader.bind()
-    batch_for_shader(
-        shader, 'TRIS', {"pos": verts, "color": vert_colors}, indices=indices,
-    ).draw(shader)
 
 
 def _draw_root_path() -> None:
@@ -1793,7 +1761,7 @@ def _draw_root_path_markers(region, rv3d, current: int) -> None:
             co = view3d_utils.location_3d_to_region_2d(region, rv3d, point)
             if co is not None:
                 if f == current:
-                    diamond(co, ROOT_PATH_CURRENT_RADIUS, TRAIL_CURRENT_COLOR)
+                    diamond(co, ROOT_PATH_CURRENT_RADIUS, ROOT_PATH_CURRENT_COLOR)
                 else:
                     diamond(co, ROOT_PATH_TICK_RADIUS, span["colors"][i])
         co = view3d_utils.location_3d_to_region_2d(region, rv3d, span["path"][0])
@@ -1809,10 +1777,11 @@ def _draw_root_path_markers(region, rv3d, current: int) -> None:
 
 
 def _draw_screen():
-    """POST_PIXEL callback: the trail's markers and the frame labels.
+    """POST_PIXEL callback: the root path's markers, the samplers' (the
+    Autoposer's trail markers) and the frame labels.
 
-    Labels are part of the ghosts — they answer "which frame is that pose" —
-    so they follow the ghost toggle, while the markers follow the trail's.
+    Labels are part of the ghosts -- they answer "which frame is that pose" --
+    so they follow the ghost toggle; a sampler's markers follow its own.
     Neither waits on the other.
     """
     context = bpy.context
@@ -1826,18 +1795,19 @@ def _draw_screen():
     if region is None or rv3d is None:
         return
 
-    trail_ready = _trail_ready(settings)
+    from . import posing
+    samplers = [s for s in posing.samplers() if s.ready(settings)]
     ghosts_ready = _ghosts_ready(settings)
     root_ready = _root_path_ready(settings)
-    if not trail_ready and not ghosts_ready and not root_ready:
+    if not samplers and not ghosts_ready and not root_ready:
         return
 
     gpu.state.blend_set('ALPHA')
     try:
         if root_ready:
             _draw_root_path_markers(region, rv3d, context.scene.frame_current)
-        if trail_ready:
-            _draw_trail_markers(settings, p, region, rv3d, context.scene.frame_current)
+        for s in samplers:
+            s.draw_pixel(context, settings, p, region, rv3d, context.scene.frame_current)
 
         if not ghosts_ready or not settings.key_pose_labels:
             return
@@ -1847,6 +1817,7 @@ def _draw_screen():
         font_id = 0
         px = _px()
         blf.size(font_id, int(LABEL_SIZE * px))
+        taken = []                        # labels already drawn: a new one never lands on one
         for frame, entry in _visible_poses(context.scene, p):
             anchor = roots.get(frame)
             if anchor is None:
@@ -1862,7 +1833,12 @@ def _draw_screen():
                 text = str(frame)
             else:
                 text = f"{frame} ✕"
-            width, _height = blf.dimensions(font_id, text)
+            width, height = blf.dimensions(font_id, text)
+            box = (co.x - width * 0.5 - 3 * px, co.y + LABEL_OFFSET_PX * px - 2 * px,
+                   co.x + width * 0.5 + 3 * px, co.y + LABEL_OFFSET_PX * px + height + 2 * px)
+            if any(box[0] < b[2] and b[0] < box[2] and box[1] < b[3] and b[1] < box[3] for b in taken):
+                continue
+            taken.append(box)
             blf.position(font_id, co.x - width * 0.5, co.y + LABEL_OFFSET_PX * px, 0)
             blf.color(font_id, *(
                 FLASH_COLOR if _flashing(frame)
@@ -1879,7 +1855,7 @@ def _draw_screen():
 class ANIMATICA_OT_key_poses_refresh(bpy.types.Operator):
     bl_idname = "animatica.key_poses_refresh"
     bl_label = "Refresh Key Poses"
-    bl_description = "Re-read the key poses from the armature and re-bake their ghosts"
+    bl_description = "Read the key poses from the armature again and redraw their ghosts"
     bl_options = {'REGISTER'}
 
     @classmethod
@@ -1895,7 +1871,7 @@ class ANIMATICA_OT_key_poses_refresh(bpy.types.Operator):
             settings.key_pose_ghosts = True
             return {'FINISHED'}
         if rebuild(context) == 0:
-            self.report({'INFO'}, "No key poses to show — pose the rig and insert a keyframe")
+            self.report({'INFO'}, "No key poses to show. Pose the rig and insert a keyframe")
         return {'FINISHED'}
 
 
@@ -1904,7 +1880,7 @@ class ANIMATICA_OT_step_key_pose(bpy.types.Operator):
     bl_label = "Jump to Key Pose"
     bl_description = (
         "Move the playhead to the next or previous pose you keyed. Blender's "
-        "own keyframe jump stops on every frame of a generated take; this "
+        "own keyframe jump stops on every frame of a generated take, and this "
         "stops only on your poses"
     )
     bl_options = {'REGISTER', 'UNDO'}
@@ -2011,8 +1987,9 @@ def unregister() -> None:
     _purge_stale_handlers(bpy.app.handlers.depsgraph_update_post, _DEPSGRAPH_HANDLER_NAME)
     for handlers in (bpy.app.handlers.undo_post, bpy.app.handlers.redo_post):
         _purge_stale_handlers(handlers, _UNDO_HANDLER_NAME)
-    if bpy.app.timers.is_registered(_rebuild_timer):
-        bpy.app.timers.unregister(_rebuild_timer)
+    for timer in (_rebuild_timer, _recheck_keys):
+        if bpy.app.timers.is_registered(timer):
+            bpy.app.timers.unregister(timer)
     clear()
     invalidate_plan()
     for cls in reversed(_classes):

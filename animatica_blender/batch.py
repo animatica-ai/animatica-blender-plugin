@@ -39,6 +39,7 @@ from bpy.props import BoolProperty, StringProperty
 from bpy.types import Operator
 
 from . import constraints_ui, mmcp_client, properties, request_builder, variations
+from .operators import ends_cleanly
 
 #: requests in flight at once; the rest queue behind them
 MAX_PARALLEL = 6
@@ -145,16 +146,17 @@ class ANIMATICA_OT_generate_batch(Operator):
     bl_label = "Generate Selected Characters"
     bl_description = (
         "Generate every selected character at once, one generation each. Each "
-        "their own direction, or the active character's shared by all with a "
-        "different seed each. The takes wait for Accept All / Reject All"
+        "character uses its own prompts, or all share the active character's "
+        "prompts with a different seed each. The takes wait for Accept All or "
+        "Reject All"
     )
 
     characters: StringProperty(
         default="",
         options={'SKIP_SAVE'},
-        description="Characters to generate, as a JSON list of names, in place of the "
-                    "selection. A take of theirs still waiting is thrown away first: "
-                    "Regenerate in the batch review",
+        description="Characters to generate, as a JSON list of names, used instead of "
+                    "the selection. Any take of theirs still waiting for review is "
+                    "thrown away first. Used by Regenerate in the batch review",
     )
 
     _timer = None
@@ -211,7 +213,7 @@ class ANIMATICA_OT_generate_batch(Operator):
         shared = settings.batch_direction == 'SHARED'
         active = properties._live_armature(settings.target_armature)
         if shared and active is None:
-            self.report({'ERROR'}, "Shared direction takes the active character's prompts: set one")
+            self.report({'ERROR'}, "Shared direction uses the active character's prompts. Set an active character first")
             return {'CANCELLED'}
         # The active character's blocks as they stand in the panel right now.
         if active is not None:
@@ -254,7 +256,7 @@ class ANIMATICA_OT_generate_batch(Operator):
             ))
 
         if not jobs:
-            self.report({'ERROR'}, "Nothing to generate — " + "; ".join(skipped))
+            self.report({'ERROR'}, "Nothing to generate: " + "; ".join(skipped))
             return {'CANCELLED'}
 
         self._pool = ThreadPoolExecutor(max_workers=min(MAX_PARALLEL, len(jobs)))
@@ -281,13 +283,17 @@ class ANIMATICA_OT_generate_batch(Operator):
         wm.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
+    def cancel(self, context):
+        self._finish(context, cancelled=True)
+
+    @ends_cleanly
     def modal(self, context, event):
         from . import operators
 
         settings = context.scene.animatica
-        if event.type == 'ESC' or settings.cancel_requested:
+        if operators.esc_cancels(self, event) or settings.cancel_requested:
             self._finish(context, cancelled=True)
-            self.report({'INFO'}, "Batch cancelled; takes already made wait for review")
+            self.report({'INFO'}, "Batch cancelled. Takes already made are waiting for review")
             return {'CANCELLED'}
         if event.type != 'TIMER':
             return {'PASS_THROUGH'}
@@ -413,7 +419,7 @@ def _refuse_in_tweak_mode(op, context, names: list | None = None) -> bool:
 class ANIMATICA_OT_accept_batch(Operator):
     bl_idname = "animatica.accept_batch"
     bl_label = "Accept All"
-    bl_description = "Keep every character's take: each moves to its own NLA track"
+    bl_description = "Keep every character's take. Each one moves to its own NLA track"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
