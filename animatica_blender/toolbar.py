@@ -1136,7 +1136,9 @@ def tip(context, it) -> str:
         n = len(key_poses.take_keys(context.scene))
         if kind == "ready":
             line = (f"Make the take. It passes through your {n} key pose{'s' if n != 1 else ''}"
-                    if n else "There are no key poses yet, so the model decides every pose. Press I with the Autopose tool to key one")
+                    if n else "There are no key poses yet, so the model decides every pose. "
+                    + ("Press I with the Autopose tool to key one" if posing.present()
+                       else "Pose the character and click Set Key Pose to key one"))
             hint = _waypoint_hint(context)
             if hint:
                 line += "\n" + hint

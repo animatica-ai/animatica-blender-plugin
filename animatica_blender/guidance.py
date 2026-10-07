@@ -83,15 +83,18 @@ def next_step(context) -> dict | None:
             why="Only the key poses inside the blocks steer the take. The ones outside them are "
                 "not sent. Stretch the block (click), or drag its edge in the Timeline",
             op="animatica.blocks_over_keys", props={}))
+    from . import posing
+    pro = posing.present()          # the handles are Animatica Autoposer Pro's (a separate add-on)
     if s.is_previewing:
         out.append(dict(
             id="review",
-            text="Fine-tune the take with the handles \u00b7 Redo tries again \u00b7 Discard throws it away",
+            text=("Fine-tune the take with the handles \u00b7 Redo tries again \u00b7 Discard throws it away" if pro
+                  else "Redo tries again \u00b7 Discard throws it away \u00b7 Key This Frame keeps a pose you like"),
             why="There is nothing to accept, because the take is already in your scene. Your first "
                 "edit on it keeps it and locks its blocks, so a later Generate leaves them alone. "
                 "Key This Frame turns a frame you like into a key pose, and a Redo then passes through it",
             op=None, props={}))
-    elif in_take:
+    elif in_take and pro:
         # an accepted take under the playhead: fine-tune it
         out.append(dict(
             id="finetune",
@@ -100,6 +103,15 @@ def next_step(context) -> dict | None:
                 "frames around it follow by Reach and Intensity (the curve on the bar). The onion "
                 "skins and the trail show them move as you drag",
             op="animatica.hint_finetune", props={}))
+    elif in_take:
+        # without the handles: Blender's own posing, a key pose, and Redo around it
+        out.append(dict(
+            id="finetune",
+            text="Change a pose in the take: pose the character, Set Key Pose, then Redo",
+            why=f"Poses are changed with Blender's own tools here ({posing.PRO_NAME} adds handles that "
+                "carry an edit through the frames around it). A key pose set on the take stays, and "
+                "Redo makes the motion around it again",
+            op=None, props={}))
     busy = s.is_previewing or in_take
     if not busy and (not blocks or unprompted or not text_all.strip()):
         out.append(dict(
@@ -132,7 +144,8 @@ def next_step(context) -> dict | None:
                 text = "Ready: Generate. Key a pose first if you want to steer it"
                 why = ("Every block has a prompt, so Generate makes the motion. Without key poses "
                        "the model decides every pose itself. To steer it, pose the character "
-                       "with Autopose (or describe a pose with the button in the field) and key "
+                       + ("with Autopose " if pro else "")
+                       + "(or describe a pose with the button in the field) and key "
                        "the moments that matter, like a foot contact or a landing")
             elif len(keys) == 1:
                 text = "Ready: Generate. A second key where the action changes steers it more"
