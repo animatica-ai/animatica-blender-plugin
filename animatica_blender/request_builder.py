@@ -944,6 +944,11 @@ def _build_deform_parent_map(
       1. **Parent walk** — for each DEF bone, walk up ``pb.parent`` looking
          for another DEF. Handles the common case where DEFs form a clean
          chain in the bone hierarchy (Mixamo, plain deform rigs).
+      1b. **Rigify's ORG twins** — a Rigify rig keeps the metarig's own tree on
+         its ``ORG-`` bones, one per ``DEF-`` bone, under the same name: walk up
+         the ``ORG-`` twin and take the first ancestor whose ``DEF-`` twin goes
+         out. Guessed spatially instead, a Rigify rig came out rooted at a thigh
+         with the spine under it, and the server took it for no biped at all.
       2. **Spatial fallback** — when the walk yields no DEF ancestor (which
          happens on Rigify because DEFs parent through ``ORG-*``/``MCH-*``
          intermediaries), use rest-pose tail-to-head proximity: each
@@ -972,6 +977,20 @@ def _build_deform_parent_map(
         anc = _closest_deform_ancestor(pb, deform)
         if anc is not None:
             parent_map[name] = anc.name
+
+    # Step 1b: Rigify's ORG twins carry the metarig's tree.
+    bones = armature_obj.data.bones
+    for name in deform:
+        if name in parent_map or not name.startswith("DEF-"):
+            continue
+        org = bones.get("ORG-" + name[4:])
+        a = org.parent if org is not None else None
+        while a is not None:
+            if a.name.startswith("ORG-") and ("DEF-" + a.name[4:]) in deform \
+                    and ("DEF-" + a.name[4:]) != name:
+                parent_map[name] = "DEF-" + a.name[4:]
+                break
+            a = a.parent
 
     # Step 2: spatial fallback for orphans, with cycle prevention.
     orphans = [n for n in deform if n not in parent_map]

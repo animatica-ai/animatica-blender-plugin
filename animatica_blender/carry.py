@@ -399,8 +399,11 @@ class Carry:
             loc, q, s = _split(orig[n])
             out[n] = _compose(loc + dl * w, ident.slerp(dq, w) @ q, s)
         # the ends that must be exactly somewhere: held ones where they were
-        # on this frame, the dragged one along its bent path
-        if self.held or self.dragged:
+        # on this frame, the dragged one along its bent path. Not on the edited frame itself:
+        # there the solve already put every held end where it belongs -- and reaching a
+        # planted foot back to its old ankle undid a heel the solve had lifted, sinking the
+        # ball of the foot into the floor
+        if (self.held or self.dragged) and g != self.f0:
             mats0 = self.rig.fk(orig)
             for b in self.held:
                 reach(self.rig, out, b, mats0[b].translation)
@@ -543,27 +546,12 @@ class Carry:
 
 def ENDS_OF(arm) -> dict:
     """``{bone name: canonical}`` of the rig's hands and feet."""
-    from .autoposer import poser
+    from . import posing
     out = {}
     for j in ENDS:
-        b = poser.joint_bone(arm, j)
+        b = posing.joint_bone(arm, j)
         if b is not None:
             out[b.name] = j
-    return out
-
-
-def held_ends(arm, hs, dragged_item=None) -> list:
-    """The hands and feet the handles hold (switched on, not the one dragged),
-    by bone name."""
-    from .autoposer import poser
-    out = []
-    for h in hs:
-        if not h.ap_enabled or h.ap_ety == 2 or (dragged_item is not None and h.name == dragged_item.name):
-            continue
-        if h.ap_joint in ENDS:
-            b = poser.joint_bone(arm, h.ap_joint)
-            if b is not None:
-                out.append(b.name)
     return out
 
 

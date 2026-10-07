@@ -44,6 +44,11 @@ def next_step(context) -> dict | None:
         return dict(id="lock_step", text=step, why="Lock in Place holds a hand or foot on one spot "
                     "for the frames you choose, so a planted foot stops sliding. Esc cancels",
                     op=None, props={})
+    from . import retarget
+    copied = retarget.hint(context)
+    if copied is not None and copied["id"] not in dismissed:
+        # just copied: what, and what next (the click itself showed nothing)
+        return copied
     scene = context.scene
     s = scene.animatica
     arm = properties._live_armature(s.target_armature)
@@ -193,12 +198,13 @@ class ANIMATICA_OT_hint_finetune(bpy.types.Operator):
         return self.execute(context)
 
     def execute(self, context):
-        from . import handles
+        from . import posing
         s = context.scene.animatica
         s.key_pose_overlay = True
         s.key_pose_ghosts = True
         s.onion_mode = 'FRAMES'
-        if not handles.tool_active(context):
+        handles = posing.handles()          # posing it is the Autoposer's (when installed)
+        if handles is not None and not handles.tool_active(context):
             why = handles.activate(context)
             if why:
                 self.report({'WARNING'}, why)

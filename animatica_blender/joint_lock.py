@@ -53,7 +53,7 @@ PX_PER_FRAME = 6.0
 def target(context):
     """``(bone_name, frame)``: the hand or foot to lock, or None. The trail
     point picked first, then a picked handle on a hand or foot at the playhead."""
-    from . import carry, curve_edit, handles, key_poses
+    from . import carry, curve_edit, key_poses
     arm = key_poses._target(key_poses._settings(context.scene))
     if arm is None:
         return None
@@ -61,10 +61,11 @@ def target(context):
     sel = curve_edit.selected()
     if sel is not None and sel[0] in ends:
         return sel[0], int(sel[1])
-    from .autoposer import poser
-    for h in handles.picked_items(context.scene, arm):
-        if h.ap_joint in carry.ENDS:
-            b = poser.joint_bone(arm, h.ap_joint)
+    from . import posing
+    handles = posing.handles()
+    for h in (handles.picked_items(context.scene, arm) if handles is not None else ()):
+        if h.autoposer_joint in carry.ENDS:
+            b = posing.joint_bone(arm, h.autoposer_joint)
             if b is not None:
                 return b.name, int(context.scene.frame_current)
     return None

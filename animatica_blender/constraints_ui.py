@@ -1146,6 +1146,36 @@ def authored_pose_frames(
     return sorted(frames), keyed_bones
 
 
+def mmcp_joint_rotation(pb: bpy.types.PoseBone, mw_rot: 'Matrix', mw_rot_t: 'Matrix') -> list[float]:
+    """``pb``'s evaluated pose as an MMCP local rotation, ``[x, y, z, w]``.
+
+    The per-bone rotation delta, converted to the MMCP world frame in three steps:
+
+      1. ``ML @ R_basis @ ML.T``   — bone-local-rest → armature-local
+      2. ``mw_rot @ _ @ mw_rot.T`` — armature-local → Blender world (no-op when the
+                                     armature is at identity; required for rigs like
+                                     Mixamo that carry a 90° + 0.01 ``matrix_world``)
+      3. ``S_inv @ _ @ S``         — Blender Z-up → MMCP Y-up
+
+    For a whole clip (retarget.py): every joint carries the object's full world turn,
+    which is what ``POST /retarget`` reads (the pose-keyframe samplers, through
+    ``_joint_rotation_to_mmcp``, put the yaw on the root alone, as ``/generate`` reads
+    it). ``mw_rot`` / ``mw_rot_t`` are the armature's world rotation and
+    its transpose, passed in so a caller sampling many bones computes them once. The
+    inverse of this chain lives in ``gltf_to_blender.bake_gltf_to_armature`` and must
+    stay in sync.
+    """
+    S = _MMCP_TO_BLENDER
+    R_basis = _evaluated_local_basis(pb).to_3x3()
+    ML = pb.bone.matrix_local.to_3x3()
+    R_blender_arm = ML @ R_basis @ ML.transposed()
+    R_blender_world = mw_rot @ R_blender_arm @ mw_rot_t
+    R_mmcp = S.transposed() @ R_blender_world @ S
+    w, x, y, z = R_mmcp.to_quaternion()
+    return [x, y, z, w]
+
+
+
 def sample_pose_keyframes(
     armature_obj: bpy.types.Object,
     *,

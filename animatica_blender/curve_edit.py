@@ -99,15 +99,30 @@ _NS_LABEL_KEY = "_animatica_curve_drag_label_handle"
 # Rig ↔ poser
 # ---------------------------------------------------------------------------
 
-def _poser():
-    from .autoposer import poser
+class NeedsPosing(RuntimeError):
+    """Dragging the trail re-poses the body, which is the Autoposer's: not installed here."""
 
+
+def _poser():
+    from . import posing
+
+    poser = posing.poser()
+    if poser is None:
+        raise NeedsPosing(f"Dragging the trail poses the body: it comes with {posing.PRO_NAME}")
     return poser
+
+
+def _not_ready():
+    """The exceptions a trail solve that cannot go raises: the Autoposer's NotReady, if it is here."""
+    from . import posing
+    eng = posing.engine()
+    return (NeedsPosing,) + ((eng.NotReady,) if eng is not None else ())
 
 
 def _canonical(arm, bone_name: str) -> str:
     """``animatica:LeftHand`` → ``LeftHand``; ``hand_l`` → ``LeftHand`` on an Unreal rig."""
-    return _poser().canonical_joint(arm, bone_name)
+    from . import posing
+    return posing.canonical_joint(arm, bone_name)
 
 
 def _to_poser(arm, world: Vector) -> list[float]:
@@ -136,9 +151,11 @@ def control_under_cursor(context, x: float, y: float) -> bool:
     drives it. Picking the curve there would mean a click on a handle
     sometimes grabbed the line behind it.
     """
-    from . import key_poses
-    from .autoposer import poser
+    from . import key_poses, posing
 
+    poser = posing.poser()
+    if poser is None:
+        return False                # no Autoposer, no controls
     region, rv3d = context.region, context.region_data
     settings = key_poses._settings(context.scene)
     if region is None or rv3d is None or settings is None:
@@ -314,15 +331,17 @@ def solve_drag(arm, frame_index: int, dragged_bone: str, target: Vector,
     for a whole-pose move. Never touches the rig, the playhead, or the current
     pose."""
     from . import key_poses
-    from .autoposer import engine
 
+    _poser()                        # the Autoposer, or the reason it is not here
+    from . import posing
+    engine = posing.engine()
     effectors = _effectors_at(arm, frame_index, dragged_bone, target,
                               whole_pose=whole_pose)
     if len(effectors) < 3:
         raise engine.NotReady(
             "the trail follows fewer than three joints — the poser needs 3+")
     eng = engine.get()
-    floor = bool(bpy.context.scene.ap_floor)
+    floor = bool(getattr(bpy.context.scene, "autoposer_floor", True))
     # the floor holds the pose up, it never pushes it: no higher than the frame's
     # lowest traced joint (a seat under a sitting character is not the floor)
     lows = [Vector(p[frame_index]) for p in key_poses._trail["points"].values() if len(p) > frame_index]
@@ -333,7 +352,7 @@ def solve_drag(arm, frame_index: int, dragged_bone: str, target: Vector,
     return _poser().pose_on_ground(
         eng, arm, effectors,
         bone_lengths=_poser()._bone_lengths(arm),
-        ik_refine=bool(bpy.context.scene.ap_use_ik),
+        ik_refine=bool(bpy.context.scene.autoposer_use_ik),
         floor=floor,
         floor_joints="feet",
         hard_floor=floor,
@@ -363,10 +382,10 @@ def _carry_for(context, arm, frame: int, radius: int, bone: str):
 
 def _preview_from(arm, out):
     """World-space joint positions and the parent table, for the ghost."""
-    from .autoposer import engine
+    from . import posing
 
     points = [_from_poser(arm, p) for p in out["joints"]]
-    parents = list(engine.skeleton().parents)
+    parents = list(posing.engine().skeleton().parents)
     return points, parents
 
 
@@ -590,13 +609,16 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
     )
 
     def invoke(self, context, event):
-        from . import key_poses
+        from . import key_poses, posing
 
         arm = key_poses._target(key_poses._settings(context.scene))
         if arm is None:
             return {'CANCELLED'}
         trail = key_poses._trail
         if self.frame not in trail["frames"]:
+            return {'CANCELLED'}
+        if not posing.present():
+            self.report({'INFO'}, f"Dragging the trail poses the body: it comes with {posing.PRO_NAME}")
             return {'CANCELLED'}
 
         self._arm = arm
@@ -676,7 +698,6 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
 
     def _solve(self, context, event):
         from . import key_poses
-        from .autoposer import engine
 
         self._whole = self._mode(event)
         _drag["whole_pose"] = self._whole
@@ -684,7 +705,7 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         try:
             out = solve_drag(self._arm, self._index, self.bone, _drag["target"],
                              whole_pose=self._whole)
-        except engine.NotReady as exc:
+        except _not_ready() as exc:
             _drag["error"] = str(exc)
             _drag["solve"] = None
             return False
@@ -712,7 +733,8 @@ class ANIMATICA_OT_drag_motion_curve(bpy.types.Operator):
         mats = self._carry.rig.fk(self._carry.pose_at(self._carry.f0))
         mw = self._arm.matrix_world
         for i, name in enumerate(out["names"]):
-            b = _poser().joint_bone(self._arm, name)
+            from . import posing
+            b = posing.joint_bone(self._arm, name)
             if b is not None and b.name in mats:
                 points[i] = mw @ mats[b.name].translation
         return points, parents
@@ -791,7 +813,10 @@ _AXIS_ORDER = ("X", "Y", "Z")
 _PLANES = {"X": "YZ", "Y": "ZX", "Z": "XY"}
 
 ARROW_LENGTH = 1.0
-PLANE_OFFSET = 0.42          # along each of the plane's own two axes
+#: how far out (gizmo units, as the arrows' own) a plane square sits, between its two arrows.
+#: It was a world offset (0.42 m) on a gizmo drawn at screen size: close up the squares floated
+#: 440 px off the point, far away they sat on it
+PLANE_AT = 0.62
 PLANE_SCALE = 0.16
 RING_SCALE = 0.22
 
@@ -841,7 +866,10 @@ class ANIMATICA_GGT_curve_point(bpy.types.GizmoGroup):
 
     @classmethod
     def poll(cls, context):
-        return selected_world(context) is not None
+        from . import posing
+        # moving the point re-poses the body: the Autoposer's (without it, the point is only
+        # picked, for Lock in Place and Smooth)
+        return selected_world(context) is not None and posing.present()
 
     def setup(self, context):
         colours = _theme_axis_colours()
@@ -853,6 +881,7 @@ class ANIMATICA_GGT_curve_point(bpy.types.GizmoGroup):
             arrow.draw_style = 'NORMAL'
             arrow.length = ARROW_LENGTH
             arrow.line_width = 2.0
+            arrow.use_draw_offset_scale = True     # its offset at screen size too, as its length is
             # out from the point, as Blender's own: a press on the point itself
             # is the view-plane ring's (a free move), not the Z arrow's
             arrow.matrix_offset = Matrix.Translation((0.0, 0.0, 0.3))
@@ -861,6 +890,7 @@ class ANIMATICA_GGT_curve_point(bpy.types.GizmoGroup):
 
             plane = self.gizmos.new("GIZMO_GT_primitive_3d")
             plane.draw_style = 'PLANE'
+            plane.use_draw_offset_scale = True
             plane.scale_basis = PLANE_SCALE
             self._paint(plane, colour, 0.6)
             self._handles.append((_PLANES[axis], plane))
@@ -886,8 +916,16 @@ class ANIMATICA_GGT_curve_point(bpy.types.GizmoGroup):
         if pick is None or origin is None:
             return
         bone, frame = pick
+        rv3d = getattr(context, "region_data", None)
+        toward = (rv3d.view_rotation @ Vector((0.0, 0.0, 1.0))) if rv3d is not None else None
         for constraint, gz in self._handles:
             gz.matrix_basis = self._place(constraint, origin)
+            if len(constraint) == 2 and toward is not None:
+                a, b = (_AXES[c] for c in constraint)
+                if a.cross(b).dot(toward) < 0.0:
+                    gz.matrix_basis = _orient(-a.cross(b), origin)     # facing the viewer: hit from behind, no
+            if len(constraint) == 2:
+                gz.matrix_offset = self._plane_offset(constraint, gz.matrix_basis, PLANE_AT, PLANE_SCALE)
             props = gz.target_set_operator("animatica.drag_motion_curve")
             props.bone, props.frame, props.axis = bone, frame, constraint
 
@@ -895,11 +933,20 @@ class ANIMATICA_GGT_curve_point(bpy.types.GizmoGroup):
     def _place(constraint: str, origin: Vector) -> Matrix:
         if len(constraint) == 1:                       # an axis arrow
             return _orient(_AXES[constraint], origin)
-        if len(constraint) == 2:                       # a plane handle, offset into its corner
+        if len(constraint) == 2:                       # a plane handle (into its corner: `_plane_offset`)
             a, b = (_AXES[c] for c in constraint)
-            corner = origin + (a + b) * PLANE_OFFSET
-            return _orient(a.cross(b), corner)
+            return _orient(a.cross(b), origin)
         return Matrix.Translation(origin)              # the view-plane ring
+
+    @staticmethod
+    def _plane_offset(constraint: str, basis: Matrix, at: float, scale_basis: float,
+                      d: Vector | None = None) -> Matrix:
+        """A plane square's offset into the corner between its two arrows (``d``: which corner,
+        +a+b by default), in the gizmo's own units -- so it keeps its place beside them at every
+        zoom. The offset is scaled by the square's own ``scale_basis``, so it is divided back out."""
+        a, b = (_AXES[c] for c in constraint)
+        d = ((a + b) if d is None else d).normalized() * (at / max(scale_basis, 1e-6))
+        return Matrix.Translation(basis.to_3x3().transposed() @ d)
 
 
 class ANIMATICA_OT_smooth_trail(bpy.types.Operator):

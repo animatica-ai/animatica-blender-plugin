@@ -18,8 +18,6 @@ from bpy.props import (
 )
 from bpy.types import AddonPreferences, PropertyGroup
 
-from . import autoposer
-from .autoposer import prefs as autoposer_prefs
 from .hand_pose import STYLES as _hand_pose_items
 
 # Whether this build is a preview (the zip stamps VERSION_TAG, e.g. v0.6.0-preview7).
@@ -271,16 +269,16 @@ def reset_target_armature_state(settings) -> None:
 def mirror_autoposer_rig(settings) -> None:
     """Point the Autoposer at the armature Animatica generates for.
 
-    One character, chosen once. The Autoposer's own ``ap_armature`` stays as
+    One character, chosen once. The Autoposer's own ``autoposer_armature`` stays as
     the mirror the ported module reads, rather than being torn out of it.
     """
     scene = getattr(settings, "id_data", None)
-    if scene is None or not hasattr(scene, "ap_armature"):
+    if scene is None or not hasattr(scene, "autoposer_armature"):
         return
     arm = _live_armature(settings.target_armature)
     name = arm.name if arm is not None else ""
-    if scene.ap_armature != name:
-        scene.ap_armature = name
+    if scene.autoposer_armature != name:
+        scene.autoposer_armature = name
 
 
 def _target_armature_update(self, context):
@@ -414,26 +412,6 @@ def _key_poses_rebake_update(self, context):
     from . import key_poses  # noqa: PLC0415 — lazy to avoid circular import
 
     key_poses.on_rebake_setting(self)
-
-
-def _tightness_update(self, context):
-    """Push one number onto every control's own tolerance.
-
-    The poser reads a tolerance per control — metres of slack, and the IK
-    weight. Seven identical fields reading 0.005 is not seven decisions; it is
-    one, asked seven times. This is that one, and the per-control values stay
-    underneath for anyone who wants them from the bone properties.
-    """
-    from . import properties  # noqa: PLC0415 — self, for _live_armature
-    from .autoposer import poser  # noqa: PLC0415 — lazy to avoid circular import
-
-    arm = properties._live_armature(self.target_armature)
-    if arm is None:
-        return
-    from . import handles  # noqa: PLC0415
-    for b in list(poser._controls(arm)) + handles.items(context.scene, arm):
-        b.ap_tol_m = float(self.pose_tightness)
-        b.ap_rot_tol_m = float(self.pose_tightness)
 
 
 def _key_poses_redraw_update(self, context):
@@ -705,23 +683,14 @@ class AnimaticaAddonPreferences(AddonPreferences):
             if body is not None:
                 _draw_model_details(body, caps)
 
-        # --- The poser --------------------------------------------------------
+        # --- Posing: a product of its own --------------------------------------
+        from . import posing
         layout.separator()
-        layout.label(text="Poser", icon='ARMATURE_DATA')
-        clash = autoposer.superseded_addons()
-        if clash:
-            warn = layout.row()
-            warn.alert = True
-            warn.label(text=f"Disable the standalone {', '.join(clash)} addon",
-                       icon='ERROR')
-        autoposer_prefs.draw(layout, self, context)
-
-
-# Merged after the class body: annotations are read at registration, so adding
-# them here gives the Autoposer's fields to Animatica's preferences without
-# restating them in two places.
-for _name, _prop in autoposer_prefs.PROPERTIES.items():
-    AnimaticaAddonPreferences.__annotations__[_name] = _prop
+        row = layout.row()
+        row.active = False
+        row.label(text=(f"Posing: {posing.PRO_NAME} is installed (its settings are its own)"
+                        if posing.present() else f"Posing with handles comes with {posing.PRO_NAME}"),
+                  icon='ARMATURE_DATA')
 
 
 def _model_id_items(self, context):
@@ -1116,18 +1085,6 @@ class AnimaticaSettings(PropertyGroup):
                      "off to keep the height the model gave it, for a pose in the air like a jump"),
         default=True,
     )
-    show_picker: BoolProperty(  # opened from the bar, not by itself
-        name="Handle Picker",
-        description=(
-            "Show a card in the viewport with the character in T-pose and the "
-            "Autoposer's handles on it. Pick one or more handles, switch them on "
-            "or off, and set how closely the pose keeps to them"
-        ),
-        default=False,
-        update=lambda self, context: _redraw_3d_views(),
-    )
-    picker_collapsed: BoolProperty(name="Picker Collapsed", default=False,
-                                   update=lambda self, context: _redraw_3d_views())
     show_toolbar: BoolProperty(
         name="Toolbar",
         description=(
@@ -1228,16 +1185,6 @@ class AnimaticaSettings(PropertyGroup):
         default=-1,
         options={"SKIP_SAVE"},
     )
-    pose_tightness: FloatProperty(
-        name="Slack",
-        description=(
-            "How far a joint may stray from its handle, in metres. Low puts "
-            "the joint where you put the handle. High makes the handle a hint "
-            "the poser may overrule to keep the body natural"
-        ),
-        default=0.005, min=0.001, max=0.2, precision=3, step=1,
-        update=_tightness_update,
-    )
     auto_key_pose: BoolProperty(
         name="Auto Key",
         description=(
@@ -1253,14 +1200,6 @@ class AnimaticaSettings(PropertyGroup):
             "waypoint. Off by default, because fixing the facing at every "
             "waypoint restricts turns too much, and the model already faces the "
             "way it walks"
-        ),
-        default=False,
-    )
-    pose_details: BoolProperty(
-        name="Per-Handle Settings",
-        description=(
-            "Show each handle's own tightness and whether it sends its "
-            "rotation, instead of the compact row of on/off toggles"
         ),
         default=False,
     )

@@ -11,7 +11,7 @@ constraint the next generation is asked to hit.
 
 Why a commit step exists at all
 -------------------------------
-The Autoposer has to *detach* the action to work (``autoposer.take_over``):
+The Autoposer has to *detach* the action to work (``animatica_autoposer.take_over``):
 its solve and the action both write the same bones, and whichever runs last
 wins, so the action is stashed while the artist poses. That means the edited
 pose lives only in the pose bones, and re-attaching the action would wipe it.
@@ -46,11 +46,12 @@ from bpy.types import Operator
 # actually being there.
 # ---------------------------------------------------------------------------
 
-_AP_STASHED_ACTION = "ap_stashed_action"
+_AP_STASHED_ACTION = "autoposer_stashed_action"
 
 
 def autoposer_available() -> bool:
-    return hasattr(bpy.ops, "autoposer") and hasattr(bpy.ops.autoposer, "take_over")
+    from . import posing
+    return posing.present() and hasattr(bpy.ops.animatica_autoposer, "take_over")
 
 
 def autoposer_drives(arm) -> bool:
@@ -62,9 +63,9 @@ def autoposer_drives(arm) -> bool:
     """
     if arm is None or not autoposer_available():
         return False
-    from .autoposer import poser
-
-    return poser._armature(bpy.context) is arm
+    from . import posing
+    poser = posing.poser()
+    return poser is not None and poser._armature(bpy.context) is arm
 
 
 def ensure_control_rig(arm, report=None) -> bool:
@@ -74,19 +75,20 @@ def ensure_control_rig(arm, report=None) -> bool:
     are how a pose is edited, so they are made the first time a pose is
     opened. It is one undo step and it is skipped entirely once they exist.
     """
-    from .autoposer import poser
+    from . import posing
 
-    if arm is None or not autoposer_available():
+    poser = posing.poser()
+    if arm is None or poser is None or not autoposer_available():
         return False
     # Live is the behaviour, not a mode: a control that moves nothing until
     # some other command is run is a control that looks broken. The panel no
     # longer offers the switch, so this is where it is held on.
-    bpy.context.scene.ap_live = True
+    bpy.context.scene.autoposer_live = True
     poser.ensure_timer(bpy.context.scene)
     if poser.has_controls(arm):
         return True
     try:
-        result = bpy.ops.autoposer.build_rig()
+        result = bpy.ops.animatica_autoposer.build_rig()
     except RuntimeError as exc:
         if report:
             report({'WARNING'}, f"could not build the control rig: {exc}")
@@ -334,9 +336,9 @@ def hips_bone(arm) -> str:
     ``pelvis`` under ``root``. Keying only a parentless bone's location leaves such a rig's
     body wherever the last key put it."""
     try:
-        from .autoposer import poser
+        from . import posing
 
-        b = poser.joint_bone(arm, "Hips")
+        b = posing.joint_bone(arm, "Hips")
     except Exception:                       # noqa: BLE001 — never break a key
         return ""
     return b.name if b is not None else ""
@@ -460,8 +462,9 @@ class ANIMATICA_OT_edit_key_pose(Operator):
             return {'CANCELLED'}
 
         posed = False
-        from . import handles
-        if handles.tool_active(context):
+        from . import posing
+        handles = posing.handles()
+        if handles is not None and handles.tool_active(context):
             # The Autopose tool's handles sit on the pose as it is at this
             # frame: nothing to build, nothing added to the rig.
             handles.ensure(context.scene, arm)
@@ -614,9 +617,9 @@ class ANIMATICA_OT_give_back_rig(Operator):
             kept = arm.animation_data.action.name
             # Only the tracks the take-over muted: a stashed action's track
             # is muted to play nothing, and a track the artist muted is theirs.
-            muted = set(arm.get("ap_muted_nla", []))
-            for key in ("ap_stashed_action", "ap_stashed_slot",
-                        "ap_stashed_slot_id", "ap_muted_nla"):
+            muted = set(arm.get("autoposer_muted_nla", []))
+            for key in ("autoposer_stashed_action", "autoposer_stashed_slot",
+                        "autoposer_stashed_slot_id", "autoposer_muted_nla"):
                 if key in arm:
                     del arm[key]
             for track in arm.animation_data.nla_tracks:
@@ -625,7 +628,7 @@ class ANIMATICA_OT_give_back_rig(Operator):
             self.report({'INFO'}, f"Autoposer let go of the rig. Kept {kept}")
         else:
             try:
-                bpy.ops.autoposer.release()
+                bpy.ops.animatica_autoposer.release()
             except RuntimeError as exc:
                 self.report({'WARNING'}, f"Autoposer did not release: {exc}")
                 return {'CANCELLED'}

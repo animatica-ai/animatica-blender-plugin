@@ -237,9 +237,9 @@ def _opener():
     """
     global _OPENER
     if _OPENER is None:
-        from .autoposer.vendor.autoposer_runtime import bundle
-        bundle.GATE = may_connect
-        _OPENER = bundle.build_opener()
+        from . import http_gate
+        http_gate.GATE = may_connect
+        _OPENER = http_gate.build_opener()
     return _OPENER
 
 
@@ -253,7 +253,7 @@ _open = urlopen
 
 def refused(exc: BaseException) -> bool:
     """Was *exc* the gate refusing a request (online access is off)?"""
-    from .autoposer.vendor.autoposer_runtime.bundle import RequestRefused
+    from .http_gate import RequestRefused
     return isinstance(exc, RequestRefused)
 
 
@@ -865,8 +865,34 @@ class MmcpClient:
         cloud session token is set; on a 401 we attempt one silent token
         refresh + retry before raising.
         """
+        return self._post_for_gltf("/generate", request_body)
+
+    # --- Retargeting -------------------------------------------------------
+
+    def retarget(self, request_body: dict[str, Any]) -> dict[str, Any]:
+        """POST a retarget request (a clip on one rig, onto another). Returns the
+        parsed glTF JSON document, on the target rig's joints.
+
+        ``/retarget`` is an extension route, not part of MMCP 1.x: a server that
+        does not offer it answers 404 (Animatica Cloud, with no model behind it
+        that does, 501 ``retarget_unavailable``), surfaced here as
+        ``retargeting_unsupported`` so the caller can say so plainly rather than
+        show a bare HTTP error.
+        """
+        try:
+            return self._post_for_gltf("/retarget", request_body)
+        except MmcpError as exc:
+            if exc.status in (404, 405, 501) or exc.code == "retarget_unavailable":
+                raise MmcpError(
+                    code="retargeting_unsupported",
+                    message="this server does not offer motion retargeting (POST /retarget)",
+                    status=exc.status,
+                ) from exc
+            raise
+
+    def _post_for_gltf(self, path: str, request_body: dict[str, Any]) -> dict[str, Any]:
         body = json.dumps(request_body).encode("utf-8")
-        url = f"{self.base_url}/generate"
+        url = f"{self.base_url}{path}"
         _require_online(url)
         cloud = is_cloud_url(url)
 
@@ -877,8 +903,8 @@ class MmcpClient:
                 headers=_auth_headers(url, {
                     "Content-Type": "application/json; charset=utf-8",
                     "Accept":       "model/gltf+json",
-                    # This is the request that starts a generation — the one
-                    # place the API wants attributed.
+                    # This is the request that starts the work (a generation
+                    # or a retarget) — the one place the API wants attributed.
                     **client_headers(),
                 }),
             )

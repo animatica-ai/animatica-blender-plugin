@@ -9,6 +9,47 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ## [Unreleased]
 
+### Changed
+
+- **Posing is now Animatica Autoposer Pro, a separate add-on.** The Autopose
+  tool, the handle picker and Reset to T-Pose are no longer part of this
+  add-on. With Pro installed they appear on the bar as before. Without it,
+  the bar starts at the Key group, and you key poses the usual way: pose the
+  rig in Blender, or use Pose This Frame in Words.
+
+### Added
+
+- **Copy Motion / Paste Motion.** Select keys of a character in the Timeline
+  and click Copy on the bar: one key copies a pose, several copy a stretch of
+  motion, and with none selected every key is copied. Copy lights up and the
+  line above the bar says what was copied.
+- **Pasting.** Select another character, put the playhead where the motion
+  should start, and click Paste. Animatica Cloud retargets the motion onto
+  that character's skeleton and keys it into the character's own animation:
+  a key on each copied key's frame, the first on the playhead. Keys already
+  in that stretch are replaced and the rest of the animation is kept.
+- **What it works on.** Mixamo characters, custom skeletons and Rigify rigs.
+  Bones animated in Euler stay in Euler.
+- **Cost and where to find it.** You need to be signed in, and it costs no
+  generations. It is on the floating bar, in the sidebar ("Copy & Paste
+  Motion") and in the viewport's right-click menu.
+- **Fingers.** Fingers are not transferred yet. The target's own finger
+  animation is kept.
+
+### Fixed
+
+- **Ghosts and the motion trail keep up with your keys.** Keys deleted,
+  moved or retimed now show on the onion skin and the trail within moments.
+  That includes edits made while the animation plays, and edits made while
+  the ghosts are still redrawing after the previous one. Before, either case
+  could leave the ghosts and the trail showing the old motion until you
+  pressed Refresh.
+- **Rigify rigs read as one skeleton.** A Rigify rig's deform bones hang off
+  its ORG and MCH bones, and the add-on used to guess their hierarchy from
+  where the bones sit, which could root the skeleton at a thigh. The
+  hierarchy is now read from the ORG bones, so the server sees the rig's real
+  tree.
+
 ## [0.7.0] — preview
 
 ### Added

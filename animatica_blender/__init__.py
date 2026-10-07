@@ -7,8 +7,9 @@ Select an armature with a few keyframes, click Generate, and the server
 fills in the motion using a backend MMCP-compatible motion model.
 
 Generation, retargeting and keyframe optimisation run on the backend
-server. The one model that runs in Blender is the Autoposer (autoposer/),
-which poses the body from dragged hands, feet or hips.
+server. Posing with handles is a product of its own, Animatica Autoposer Pro:
+installed alongside, its tool joins this add-on's bar and its edits carry
+through the take (posing.py is where the two meet).
 """
 
 bl_info = {
@@ -37,7 +38,6 @@ from . import operators
 from . import canonical_skeleton
 from . import constraints_ui
 from . import panels
-from . import autoposer
 from . import autopose_sync
 from . import curve_edit
 from . import key_poses
@@ -53,10 +53,9 @@ from . import waypoints
 from . import batch
 from . import variations
 from . import toolbar
-from . import picker
-from . import handles
 from . import wormhole
 from . import reach_widget
+from . import retarget
 from . import joint_lock
 from . import guidance
 
@@ -106,9 +105,11 @@ def _animatica_load_post(dummy):
     # last sampled (editing the new file's path re-used the old file's
     # motion), the Autoposer's last control positions, a bake still pending.
     from . import inplace, root_edit
-    from .autoposer import poser
+    from . import posing
     inplace.clear_cache()
-    poser._LAST_KEY = None
+    poser = posing.poser()
+    if poser is not None:
+        poser._LAST_KEY = None
     key_poses._rebuild_requested_at = None
     key_poses._rebuild_first_at = None
     root_edit._pending["at"] = None
@@ -143,8 +144,10 @@ def _animatica_load_post(dummy):
 
 def _reset_drags() -> None:
     try:
-        from . import handles
-        handles.abort_drags()
+        from . import posing
+        handles = posing.handles()
+        if handles is not None:
+            handles.abort_drags()
     except Exception:                                   # noqa: BLE001
         pass
 
@@ -198,7 +201,6 @@ def register():
     constraints_ui.register()
     panels.register()
     path_follow.register()
-    autoposer.register()
     autopose_sync.register()
     key_poses.register()
     root_edit.register()
@@ -206,19 +208,18 @@ def register():
     pose_edit.register()
     curve_edit.register()
     timeline_operators.register()
+    retarget.register()
     timeline_overlay.register_draw_handler()
     updater.register()
     examples.register()
     waypoints.register()
     batch.register()
     variations.register()
-    handles.register()
     wormhole.register()
     reach_widget.register()
     joint_lock.register()
     guidance.register()
     toolbar.register()
-    picker.register()
 
     _reset_runtime_flags()
 
@@ -247,19 +248,18 @@ def unregister():
     _purge_stale_handlers(bpy.app.handlers.save_pre, "_animatica_save_pre")
     _purge_stale_handlers(bpy.app.handlers.load_post, "_animatica_load_post")
 
-    picker.unregister()
     toolbar.unregister()
     guidance.unregister()
     joint_lock.unregister()
     reach_widget.unregister()
     wormhole.unregister()
-    handles.unregister()
     variations.unregister()
     batch.unregister()
     waypoints.unregister()
     examples.unregister()
     updater.unregister()
     timeline_overlay.unregister_draw_handler()
+    retarget.unregister()
     timeline_operators.unregister()
     curve_edit.unregister()
     pose_edit.unregister()
@@ -267,7 +267,6 @@ def unregister():
     root_edit.unregister()
     key_poses.unregister()
     autopose_sync.unregister()
-    autoposer.unregister()
     path_follow.unregister()
     panels.unregister()
     constraints_ui.unregister()

@@ -163,8 +163,13 @@ def test_waypoints(arm):
 
 
 def test_autoposer_shift():
-    """pose_on_ground: the targets go down by the floor, the solve comes back up."""
-    from animatica_blender.autoposer import poser
+    """pose_on_ground: the targets go down by the floor, the solve comes back up. Animatica
+    Autoposer Pro's, a separate add-on (its own repo): checked only when it is installed."""
+    try:
+        from animatica_autoposer.autoposer import poser
+    except ImportError:
+        print("SKIP the Autoposer's ground shift: Animatica Autoposer Pro is not installed")
+        return
     import numpy as np
 
     seen = {}
@@ -193,6 +198,7 @@ def main():
     try:
         import addon_utils
         addon_utils.enable("animatica_blender", default_set=False)
+        addon_utils.enable("animatica_autoposer", default_set=False)   # when installed: Pro is its own add-on
         arm = build()
         test_rays(arm)
         test_route(arm)

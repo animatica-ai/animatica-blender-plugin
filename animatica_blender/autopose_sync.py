@@ -134,7 +134,8 @@ def write_captured(context) -> int:
         # control drag committed in silence and the only way to know was to
         # scrub off and back.
         key_poses.flash_keyed(frame)
-        scene.ap_status = f"keyed at frame {frame}"
+        if hasattr(scene, "autoposer_status"):        # the Autoposer's status line
+            scene.autoposer_status = f"keyed at frame {frame}"
         key_poses.invalidate_plan()
         key_poses.request_rebuild()
     return written
@@ -158,8 +159,10 @@ def _on_frame_change(scene, _depsgraph=None) -> None:
     Seating them on every frame change costs about 2 ms and means the
     Autoposer is simply available wherever the playhead is.
     """
-    from . import key_poses
-    from .autoposer import poser
+    from . import key_poses, posing
+    poser = posing.poser()
+    if poser is None:
+        return                      # posing is the Autoposer's: nothing to seat without it
 
     # Not while something else is stepping the playhead: the ghost bake walks
     # a hundred frames, and a generation samples frame by frame. Both would
@@ -200,18 +203,27 @@ def _purge(handlers) -> None:
             handlers.remove(h)
 
 
-def register() -> None:
-    from .autoposer import poser
+def _hook() -> None:
+    """Hang `on_solved` on the Autoposer's solve, if it is installed. Asked again a moment after
+    start-up: an add-on registered after this one is not there yet when this one registers."""
+    from . import posing
+    poser = posing.poser()
+    if poser is not None and poser.AFTER_SOLVE is not on_solved:
+        poser.AFTER_SOLVE = on_solved
 
-    poser.AFTER_SOLVE = on_solved
+
+def register() -> None:
+    _hook()
+    bpy.app.timers.register(lambda: (_hook(), None)[1], first_interval=2.0)
     _purge(bpy.app.handlers.frame_change_post)
     bpy.app.handlers.frame_change_post.append(_on_frame_change)
 
 
 def unregister() -> None:
-    from .autoposer import poser
-
-    poser.AFTER_SOLVE = None
+    from . import posing
+    poser = posing.poser()
+    if poser is not None and poser.AFTER_SOLVE is on_solved:
+        poser.AFTER_SOLVE = None
     _purge(bpy.app.handlers.frame_change_post)
     if bpy.app.timers.is_registered(_write_timer):
         bpy.app.timers.unregister(_write_timer)

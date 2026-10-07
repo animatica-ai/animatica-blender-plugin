@@ -45,10 +45,9 @@ RING_BACK = 0.35           # of the radius: the ring stands this far behind the 
 def _label(context, bone) -> str:
     """A handle's name as the viewport's handles say it: \u201cL hand\u201d."""
     try:
-        from . import curve_edit, key_poses
-        from .autoposer import poser
+        from . import curve_edit, key_poses, posing
         arm = key_poses._target(_settings(context))
-        return poser.control_label(curve_edit._canonical(arm, bone))
+        return posing.control_label(curve_edit._canonical(arm, bone))
     except Exception:                                   # noqa: BLE001
         return bone.rsplit(":", 1)[-1]
 
@@ -179,10 +178,9 @@ def _view_key(rv3d, c, s, span, here):
 
 def _hips_now(context, s):
     """The live character's hips (world), or None."""
-    from . import key_poses
-    from .autoposer import poser
+    from . import key_poses, posing
     arm = key_poses._target(s)
-    pb = poser.joint_pose_bone(arm, "Hips") if arm is not None else None
+    pb = posing.joint_pose_bone(arm, "Hips") if arm is not None else None
     return (arm.matrix_world @ pb.head) if pb is not None else None
 
 
@@ -253,8 +251,9 @@ def _slice_under(context, slices):
 def _live_handle_within(context, m, dist) -> bool:
     """Whether one of the character's own handles is nearer ``m`` than ``dist``."""
     try:
-        from . import handles
-        if not handles.tool_active(context):
+        from . import posing
+        handles = posing.handles()
+        if handles is None or not handles.tool_active(context):
             return False
         arm = handles._arm(context)
         if arm is None:
@@ -268,10 +267,11 @@ def _live_handle_within(context, m, dist) -> bool:
 def _parts(context):
     """The handles that can be grabbed: those of the slice under the mouse
     (or being dragged) -- every slice's at once was a tangle of dots.
-    ``[(frame, bone, (x, y), offset)]``."""
+    ``[(frame, bone, (x, y), offset)]``. None without the Autoposer: a slice is posed by it."""
+    from . import posing
     region, rv3d = context.region, _rv3d(context)
     out = []
-    if region is None or rv3d is None:
+    if region is None or rv3d is None or not posing.present():
         return out
     slices = _slices(context)
     live = _drag["frame"] if _drag["active"] else _slice_under(context, slices)
@@ -451,9 +451,11 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
         return cls.__doc__
 
     def invoke(self, context, event):
-        from . import carry, handles, key_poses
-        from .autoposer import poser
+        from . import carry, key_poses, posing
+        handles = posing.handles()
         parts = _parts(context)
+        if handles is None:
+            return {'CANCELLED'}
         if not (0 <= self.index < len(parts)):
             return {'CANCELLED'}
         f, bone, _xy, off = parts[self.index]
@@ -466,13 +468,13 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
             self.report({'WARNING'}, why)
             return {'CANCELLED'}
         hs = handles.ensure(context.scene, arm)
-        canon = poser.canonical_joint(arm, bone)
-        h = next((x for x in hs if x.ap_joint == canon and x.ap_ety != 2 and x.ap_kind != "root"), None)
+        canon = posing.canonical_joint(arm, bone)
+        h = next((x for x in hs if x.autoposer_joint == canon and not handles.is_aim(x) and x.autoposer_kind != "root"), None)
         if h is None:
             self.report({'WARNING'}, f"No handle drives {_label(context, bone)}. Add one (Shift A) to pose it")
             return {'CANCELLED'}
         self._arm, self._frame, self._bone, self._off, self._name = arm, f, bone, off.copy(), h.name
-        self._was_on = bool(h.ap_enabled)     # Esc puts it back as it was
+        self._was_on = bool(h.autoposer_enabled)     # Esc puts it back as it was
         self._start = Vector(entry["joints"][bone]) + off          # where it is drawn
         self._moved = False
         self._error = ""
@@ -481,13 +483,15 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
         # back after every solve -- the character stays on the frame you are on
         self._keep = {pb.name: pb.matrix_basis.copy() for pb in arm.pose.bones}
         self._carry = carry.Carry(context, arm, f, self._radius, None, dragged=bone,
-                                  held=carry.held_ends(arm, hs, h))
+                                  held=handles.held_ends(arm, hs, h))
         try:
             self._pose(self._carry.before)
             self._snap = handles.snapshot(arm, hs, f)
             self._floor = handles.floor_cap(arm, self._snap)
+            self._tstate = handles._drag_state()
             # the solve of that frame as it is: the edit is measured from it
-            if not handles.solve(context, arm, handles.effectors(arm, hs, self._snap), self._floor):
+            if not handles.solve(context, arm, handles.effectors(arm, hs, self._snap), self._floor,
+                                 snap=self._snap):
                 self._carry.set_base({pb.name: pb.matrix_basis.copy() for pb in arm.pose.bones})
         finally:
             self._pose(self._keep)
@@ -513,7 +517,8 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
         """The Autoposer at that frame, the dragged joint where the mouse puts
         it (out of the tunnel, into the world); the frames around follow."""
         from mathutils.geometry import intersect_line_plane
-        from . import handles
+        from .posing import handles as pro_handles
+        handles = pro_handles()
         region, rv3d = context.region, _rv3d(context)
         co = (event.mouse_region_x, event.mouse_region_y)
         o = view3d_utils.region_2d_to_origin_3d(region, rv3d, co)
@@ -525,13 +530,17 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
         h = next((x for x in hs if x.name == self._name), None)
         if h is None:
             return
-        if not h.ap_enabled:
-            h.ap_enabled = True
+        if not h.autoposer_enabled:
+            h.autoposer_enabled = True
         try:
             self._pose(self._carry.before)
+            j0 = self._snap["joints"].get(h.autoposer_joint)
             self._error = handles.solve(context, self._arm,
                                         handles.effectors(self._arm, hs, self._snap, h, target, whole=event.shift),
-                                        self._floor)
+                                        self._floor, snap=self._snap,
+                                        settle=handles.settle_for(self._arm, j0[0] if j0 else None, target),
+                                        follow=0.0 if event.alt else None,
+                                        state=self._tstate)
             after = {pb.name: pb.matrix_basis.copy() for pb in self._arm.pose.bones}
         finally:
             self._pose(self._keep)
@@ -559,8 +568,10 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
         try:
             self._finish(context, cancel=True)
         except Exception:                               # noqa: BLE001
-            from . import handles as _h, wormhole as _w
-            _h.abort_drags(context)
+            from .posing import handles as pro_handles
+            h = pro_handles()
+            if h is not None:
+                h.abort_drags(context)
 
     def _modal(self, context, event):
         if event.type == 'INBETWEEN_MOUSEMOVE':
@@ -593,10 +604,10 @@ class ANIMATICA_OT_wormhole_drag(bpy.types.Operator):
         if cancel or not self._carry.changed():
             end_through(context, None)
             context.scene.animatica.trail_radius = self._radius0
-            from . import handles
-            for h in handles.items(context.scene, self._arm):
+            from .posing import handles as pro_handles
+            for h in (pro_handles().items(context.scene, self._arm) if pro_handles() else ()):
                 if h.name == self._name:
-                    h.ap_enabled = getattr(self, "_was_on", h.ap_enabled)
+                    h.autoposer_enabled = getattr(self, "_was_on", h.autoposer_enabled)
             return {'CANCELLED'}
         spread = end_through(context, self._carry)
         cur = context.scene.frame_current

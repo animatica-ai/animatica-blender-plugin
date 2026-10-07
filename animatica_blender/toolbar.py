@@ -231,23 +231,31 @@ def _bar_items(context, arm) -> list:
     """Set keyframes, Generate, Accept, then fine-tune: the groups in that
     order. The take's own buttons (Generate, or Accept and Reject while one
     waits) sit after the field that says what it is."""
-    from . import curve_edit, handles, key_poses, mmcp_client, wormhole
+    from . import curve_edit, key_poses, mmcp_client
+    from .posing import handles as pro_handles
     s = context.scene.animatica
     here = block_at(s, context.scene.frame_current)
     keyed = key_poses.keyed_here(context.scene)
     n_keys = len(key_poses.take_keys(context.scene))
     autokey = bool(context.scene.tool_settings.use_keyframe_insert_auto)
-    active = handles.tool_active(context)
+    h = pro_handles()
+    active = bool(h is not None and h.tool_active(context))
 
     def can(tool):
         # greyed out when the connected model can't use it
         return mmcp_client.tool_available(s.model_id, tool)
 
-    # 1 pose it
-    out = [Item("autopose", "autopose", "animatica.toolbar_autoposer", on=active, group=1)]
-    if active or handles.has(context.scene, arm):
-        out.append(Item("picker", "picker", "animatica.toolbar_toggle", {"name": "show_picker"},
-                        on=bool(s.show_picker), group=1))
+    # 1 pose it: the Autoposer's, when it is installed alongside (a product of its own)
+    out = []
+    if h is not None:
+        out.append(Item("autopose", "autopose", "animatica_autoposer.autopose_toggle", on=active, group=1))
+        own = getattr(context.scene, "animatica_autoposer", None)
+        if own is not None and (active or h.has(context.scene, arm)):
+            out.append(Item("picker", "picker", "animatica_autoposer.picker_toggle",
+                            on=bool(own.show_picker), group=1))
+        if active:
+            # the T-pose, every control as it starts
+            out.append(Item("reset_controls", "redo", "animatica_autoposer.handles_reset", group=1))
     # 2 key it
     prev, nxt = _key_steps(2)
     out.append(prev)
@@ -316,7 +324,7 @@ def _bar_items(context, arm) -> list:
         Item("trail", "trail", "animatica.toolbar_overlay", {"part": "TRAIL"},
              on=key_poses.trail_on(s), group=8),
     ]
-    if active and (autokey or wormhole.editable(context)):
+    if active and autokey:                 # the reach carries an edit through keyed frames
         out.append(Item("reach", "", "animatica.reach_drag", {"part": "bar"}, group=8, width="reach"))
     # a point on the trail picked: even out the motion around it
     if curve_edit.selected() is not None and key_poses.trail_on(s):
@@ -326,9 +334,56 @@ def _bar_items(context, arm) -> list:
     from . import pose_edit
     if pose_edit._editing_action(arm) is not None:
         out.append(Item("lock", "lock", "animatica.lock_joint", group=8))
+    # the whole motion onto another character: copy it off this one, paste it there
+    out += _clipboard_items(context, group=8.5)
     out.append(Item("options", "options", "animatica.toolbar_menu", {"menu": "ANIMATICA_PT_options"},
                     group=9))
     return out
+
+
+#: a word for the status bar from an operator the bar ran: its own report would not
+#: show (an operator called from Python reports to the console only)
+_note: dict = {"kind": None, "text": ""}
+
+
+#: seconds the Copy button stays lit after a copy
+COPY_FLASH = 0.9
+
+
+def flash_off_later() -> None:
+    """Redraw the bar when a flash is over, so the button goes back by itself."""
+    def _redraw():
+        wm = getattr(bpy.context, "window_manager", None)      # a timer has no screen of its own
+        for w in getattr(wm, "windows", ()):
+            for a in w.screen.areas:
+                if a.type == 'VIEW_3D':
+                    a.tag_redraw()
+        return None
+    bpy.app.timers.register(_redraw, first_interval=COPY_FLASH + 0.05)
+
+
+def note(text: str, kind: str = 'INFO') -> None:
+    """Say ``text`` in the status bar when the operator saying it was run from the bar."""
+    _note.update(kind=kind, text=text)
+
+
+def _clipboard_items(context, group) -> list:
+    """Copy Motion and Paste Motion, for the selected character (else Animatica's).
+    Paste carries a dot once there is motion copied off another character."""
+    from . import retarget
+    ob = retarget._active_armature(context)
+    if ob is None:
+        return []
+    busy = retarget._busy(context)
+    has = ob.animation_data is not None and ob.animation_data.action is not None
+    c = retarget.clipboard()
+    elsewhere = c is not None and c["source"] != ob.name
+    # lit for a moment after the click: it did something (the hint line and the status bar say what)
+    flash = c is not None and c["source"] == ob.name and time.monotonic() - c["stamp"] < COPY_FLASH
+    return [Item("copy_motion", "copy_motion", "animatica.copy_motion", on=flash, enabled=has and not busy,
+                 group=group),
+            Item("paste_motion", "paste_motion", "animatica.paste_motion", enabled=elsewhere and not busy,
+                 badge=elsewhere and not busy, group=group)]
 
 
 def _review_items(context, arm, keyed) -> list:
@@ -408,6 +463,8 @@ def _setup_items(context) -> list:
                         enabled=_selected_rig(context) is not None, group=1))
     out.append(Item("examples", "examples", "animatica.toolbar_menu", {"menu": "ANIMATICA_MT_examples"},
                     label="Examples", group=2))
+    # a rig of your own selected, with motion on it or to paste onto it
+    out += _clipboard_items(context, group=3)
     if mmcp_client.cached_model(s.model_id) is not None:
         out.append(Item("model", "model", "animatica.toolbar_model", label=_short(s.model_id), group=10))
     return out
@@ -539,10 +596,10 @@ def _shelf_lift(area, region) -> float:
 
 #: what goes first when even the compact bar does not fit, and where it is then:
 #: the Options popover beside Generate shows whatever was folded into it
-FOLD = ("smooth", "pin", "waypoint", "picker", "reach", "wormhole", "onion", "trail", "model", "auto_key",
+FOLD = ("copy_paste", "smooth", "pin", "waypoint", "picker", "reach", "wormhole", "onion", "trail", "model", "auto_key",
         "key_steps", "autopose", "set_key")
 #: folded together: one without the other would be half a control
-_FOLD_TOGETHER = {"key_steps": ("key_prev", "key_next")}
+_FOLD_TOGETHER = {"key_steps": ("key_prev", "key_next"), "copy_paste": ("copy_motion", "paste_motion")}
 #: ids folded off the bar at its last layout, by area
 _folded: dict = {}
 
@@ -999,6 +1056,7 @@ class ANIMATICA_GGT_toolbar(bpy.types.GizmoGroup):
 #: what each button does: a title, then a line on it (the tooltip)
 TIPS = {
     "autopose": ("Autopose", "Drag a hand, a foot, the hips or the head to pose the whole body. Nothing is added to your rig, and you don't have to pose bone by bone"),
+    "reset_controls": ("Reset to T-Pose", "Put the character back in its T-pose and every control back as it starts: the hips, hands, feet and Look-at on and the rest off, only the feet pinned, no turn held. With Auto Keying on, the T-pose is keyed. Ctrl+Z undoes it"),
     "picker": ("Handle Picker", "Your character with its handles. Pick a handle, switch it on or off, or set its slack. A handle that is on holds its joint in place while you pose the rest"),
     "key_prev": ("Previous Key Pose", "Jump to your previous key pose before the playhead. Keys inside the take are skipped (Down Arrow stops on every key)"),
     "set_key": ("Set Key Pose  (I)", "Key the whole pose at this frame. Generate passes through every key pose, so key the moments that matter, like a foot contact, a peak or a landing, and the model fills in between"),
@@ -1027,20 +1085,20 @@ TIPS = {
     "pose_text": ("Pose This Frame in Words", "When on, describe this frame's pose in the field and Generate Pose makes it, keyed at the playhead. When off, the field goes back to the take's prompt and Generate. A pose you can describe is often quicker to type than to pose"),
     "pose_prompt": ("Describe a Pose", "Describe a pose in words to key it at the playhead. Click and type, then press Enter. It gives you a starting pose to refine with the handles"),
     "generate_pose": ("Generate Pose", "Make the pose you described and key it at the playhead. You can then refine it with the handles"),
+    "copy_motion": ("Copy Motion", "Copy the selected keys of the selected character (one key for a pose, many for a stretch of motion), to paste onto another character. The rigs don't need to match: the motion is retargeted when it is pasted"),
+    "paste_motion": ("Paste Motion", "Paste the copied keys onto the selected character, retargeted to its skeleton, the first one on the playhead. Its keys in that stretch are replaced, the rest of its animation is kept"),
     "keep": ("Key This Frame", "Keep the take's pose at this frame as a key pose. The next Redo passes through it, so the moment stays when you retry"),
 }
 
 
 def tip(context, it) -> str:
     """The tooltip for a button: its title, then what it does here and now."""
-    from . import mmcp_client
-    from .autoposer import poser
+    from . import mmcp_client, posing
     s = context.scene.animatica
     title, line = TIPS.get(it.id, (it.label or it.id.replace("_", " ").title(), ""))
     if it.id == "autopose":
         arm = properties_live(s)
-        from . import handles
-        if arm is not None and handles.tool_active(context):
+        if arm is not None and posing.tool_active(context):
             title, line = "Autopose (on)", "Go back to Blender's Select tool. The pose and keys stay"
     elif it.id == "loop" and not it.enabled:
         line = "A loop is a single block, because the model makes one block as a cycle. Remove or merge the other blocks first"
@@ -1062,7 +1120,8 @@ def tip(context, it) -> str:
     elif it.id in ("auto_key", "onion", "trail", "wormhole"):
         title += " (on)" if it.on else " (off)"
     elif it.id == "picker":
-        title += " (open)" if s.show_picker else ""
+        own = getattr(context.scene, "animatica_autoposer", None)
+        title += " (open)" if own is not None and own.show_picker else ""
     elif it.id == "prompt":
         text = it.label
         line = (f"\u201c{text}\u201d. Click to change it. One action per block is followed more closely "
@@ -1120,6 +1179,8 @@ def tip(context, it) -> str:
     elif it.id == "model":
         title = "Model"
         line = f"{s.model_id} on {mmcp_client.get_mmcp_url()}. Click to pick another model or change the server"
+    elif it.id in ("copy_motion", "paste_motion"):
+        line = _clipboard_tip(context, it) or line
     elif it.id == "fetching":
         title, line = "Fetching the Character", "Downloading the character. This happens once, and it is kept for next time"
     if not it.enabled and it.id in ("waypoint", "pin", "prompt", "pose_text", "pose_prompt") \
@@ -1128,6 +1189,43 @@ def tip(context, it) -> str:
     elif not it.enabled and it.id == "use_rig":
         line = "Select an armature (or a mesh bound to one) in the viewport first"
     return f"{title}\n{line}" if line else title
+
+
+def _clipboard_tip(context, it) -> str:
+    """What Copy or Paste Motion would do here and now, or why it can't."""
+    from . import mmcp_client, retarget
+    ob = retarget._active_armature(context)
+    if ob is None:
+        return ""
+    s = context.scene.animatica
+    if s.is_generating:
+        return "Wait for the motion being made to finish"
+    if getattr(s, "is_previewing", False):
+        return "Keep the take (start fine-tuning it) or Discard it first"
+    c = retarget.clipboard()
+    if it.id == "copy_motion":
+        what = retarget.selection_label(ob)
+        if not what:
+            return f"{ob.name} has no animation to copy. Select a character that has one"
+        line = (f"Copy {what}, to paste onto another character. Select one key for a pose, or many for "
+                "a stretch of motion. The rigs don't need to match")
+        if c is not None and c["source"] == ob.name:
+            action = ob.animation_data.action
+            now = set(retarget.selected_keys(ob, action)[0])
+            again = now == set(c["keys"]) and action.name == c["action"]
+            line = (f"Copied {retarget.clipboard_label()}.\n"
+                    + ("Click to copy it again" if again else f"Click to copy {what} instead"))
+        return line
+    if c is None:
+        return "Copy Motion from a character first, then select the character to paste it onto"
+    if c["source"] == ob.name:
+        return f"{retarget.clipboard_label()} is copied. Select the character to paste it onto"
+    line = (f"Paste {retarget.clipboard_label()} onto {ob.name}, retargeted to its skeleton, the first key "
+            f"on the playhead (frame {context.scene.frame_current}). Its keys in that stretch are replaced, "
+            "the rest of its animation is kept")
+    if mmcp_client.needs_sign_in():
+        line += "\nSign in to Animatica first: the motion is retargeted on Animatica's servers"
+    return line
 
 
 #: the model tool behind a bar button, where the names differ
@@ -1185,6 +1283,7 @@ class ANIMATICA_OT_bar_click(bpy.types.Operator):
         if not it.op:
             return {'CANCELLED'}
         group, name = it.op.split(".", 1)
+        _note.update(kind=None, text="")
         try:
             result = getattr(getattr(bpy.ops, group), name)('INVOKE_DEFAULT', **it.props)
         except RuntimeError as exc:
@@ -1193,6 +1292,9 @@ class ANIMATICA_OT_bar_click(bpy.types.Operator):
             text = str(exc).strip().splitlines()[-1]
             self.report({'ERROR'}, text.removeprefix("Error: ").strip() or "That didn't work")
             return {'CANCELLED'}
+        if _note["kind"]:
+            self.report({_note["kind"]}, _note["text"])
+            _note.update(kind=None, text="")
         return {'CANCELLED'} if result == {'CANCELLED'} else {'FINISHED'}
 
 
@@ -1204,8 +1306,6 @@ _TOGGLE_TIPS = {
     "loop": "Make the next take a seamless cycle, its last frame running into its first. "
             "A loop is a single block. Walk and run cycles work best at two to four seconds. "
             "Edits keep it a loop, and the zoetrope turns into a ring",
-    "show_picker": "Show the character in T-pose with the Autoposer's handles on it. "
-                   "Pick handles, switch them on or off, set their slack, or add and remove them",
     "auto_key_pose": "Key the pose as you pose it. When off, only Set Key adds a key",
     "key_pose_overlay": "Show the key poses, the trail and the frame numbers in the viewport. "
                         "Turn it off to judge the motion on its own",
@@ -1228,8 +1328,6 @@ class ANIMATICA_OT_toolbar_toggle(bpy.types.Operator):
         if not hasattr(s, self.name):
             return {'CANCELLED'}
         setattr(s, self.name, not getattr(s, self.name))
-        if self.name == "show_picker" and s.show_picker:
-            s.picker_collapsed = False          # opened to be used, not as a folded title
         return {'FINISHED'}
 
 
@@ -1370,7 +1468,7 @@ class ANIMATICA_PT_options(_Popover, bpy.types.Panel):
     bl_label = "Options"
 
     def draw(self, context):
-        from . import mmcp_client
+        from . import mmcp_client, posing
         s = context.scene.animatica
         layout = self.layout
 
@@ -1397,6 +1495,8 @@ class ANIMATICA_PT_options(_Popover, bpy.types.Panel):
         col.prop(s, "trail_radius", text="Reach (frames)")
         col.prop(s, "edit_strength", text="Intensity", slider=True)
         col.prop(s, "pose_on_ground", text="Described Pose on Ground")
+        if posing.present():
+            layout.operator("animatica_autoposer.handles_reset", text="Reset to T-Pose", icon='LOOP_BACK')
         # seeing the motion
         layout.separator()
         layout.label(text="Onion Skin", icon='ONIONSKIN_ON')
@@ -1590,58 +1690,6 @@ def _describe_blocker(context) -> str:
     if bpy.ops.animatica.generate_pose.poll():
         return ""
     return "Not available right now"
-
-
-class ANIMATICA_OT_toolbar_autoposer(bpy.types.Operator):
-    """Drag a hand, a foot or the hips to pose the whole body. Click again to stop"""
-    bl_idname = "animatica.toolbar_autoposer"
-    bl_label = "Autopose Tool"
-    bl_options = {'INTERNAL', 'UNDO'}
-
-    _download = False
-
-    def invoke(self, context, event):
-        from . import properties
-        from .autoposer import engine, poser
-
-        arm = properties._live_armature(context.scene.animatica.target_armature)
-        if arm is None:
-            return {'CANCELLED'}
-        from . import handles
-        if handles.tool_active(context):
-            # off: back to Blender's own select tool; the handles stay for next time
-            handles.deactivate(context)
-            return {'FINISHED'}
-        status = engine.status()
-        if not (status["runtime"] and status["model"]):
-            # Its download comes with its first use, asked once, rather than
-            # as a big button in the sidebar that read like a step to do first.
-            if engine.fetch_state()["running"] or engine.install_state()["running"]:
-                self.report({'INFO'}, f"Downloading the Autoposer… {engine.fetch_percent():.0f}%")
-                return {'CANCELLED'}
-            if not engine.online():
-                self.report({'WARNING'}, engine.offline_message())
-                return {'CANCELLED'}
-            self._download = True
-            return context.window_manager.invoke_confirm(
-                self, event, title="Download the Autoposer?",
-                message="It runs on your computer, so it is downloaded once (about 225 MB). "
-                        "Click the Autoposer again when it is done.",
-                confirm_text="Download", icon='INFO')  # invoke_confirm takes NONE, WARNING, QUESTION, ERROR or INFO only
-        cleaned = False
-        why = handles.activate(context)
-        if why:
-            self.report({'WARNING'}, why)
-            return {'CANCELLED'}
-        keyed = context.scene.tool_settings.use_keyframe_insert_auto
-        self.report({'INFO'}, "Autopose: drag a hand, a foot, the hips or the head"
-                    + (". Auto Keying keys each pose" if keyed else ". Press I to key the pose"))
-        return {'FINISHED'}
-
-    def execute(self, context):
-        if self._download:
-            return bpy.ops.autoposer.download()
-        return {'CANCELLED'}
 
 
 class ANIMATICA_OT_toolbar_prompt_here(bpy.types.Operator):
@@ -1862,7 +1910,7 @@ class ANIMATICA_PT_overlay(bpy.types.Panel):
 # ---------------------------------------------------------------------------
 
 _classes = (ANIMATICA_OT_toolbar_toggle, ANIMATICA_OT_toolbar_generate, ANIMATICA_OT_toolbar_redo,
-            ANIMATICA_OT_toolbar_autoposer, ANIMATICA_OT_toolbar_pose_prompt,
+            ANIMATICA_OT_toolbar_pose_prompt,
 ANIMATICA_OT_toolbar_autokey, ANIMATICA_OT_toolbar_overlay,
             ANIMATICA_OT_toolbar_wormhole, ANIMATICA_PT_overlay,
             ANIMATICA_OT_toolbar_pose_generate, ANIMATICA_OT_toolbar_field_pose, ANIMATICA_PT_options,

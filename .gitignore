@@ -13,8 +13,5 @@ dist/
 *.swp
 .DS_Store
 
-# Weights staged into a test build; never committed
-animatica_blender/autoposer/model/
-
 # Test output (reports, screenshots)
 tests/out/

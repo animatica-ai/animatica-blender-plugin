@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import math
 import time
+import zlib
 
 import blf
 import bpy
@@ -1075,7 +1076,6 @@ def rebuild(context=None) -> int:
         except Exception:                   # noqa: BLE001
             pass
         _baking = False
-        _seen["quiet_until"] = time.monotonic() + 0.06
         # The walk above happened with the control-seating handler muted, so
         # the controls are describing whatever frame the bake stopped on.
         try:
@@ -1339,63 +1339,151 @@ def on_redraw_setting(_settings=None) -> None:
 # Change detection
 # ---------------------------------------------------------------------------
 
+#: how often (s) the keys are looked at while the animation plays, and from a redraw
+KEYS_CHECK_PLAYING = 0.25
+KEYS_CHECK_DRAW = 0.3
+#: the keys never looked at yet (not the same as "looked at, and there is no action")
+_UNSEEN = object()
+
+
+def _keys_fingerprint(action) -> int:
+    """A number that changes with any edit to ``action``'s keys: one added, deleted or
+    moved, a handle or an interpolation changed, a curve added, removed or muted."""
+    from . import constraints_ui
+    crc = 0
+    for fc in constraints_ui.iter_action_fcurves(action):
+        kps = fc.keyframe_points
+        n = len(kps)
+        crc = zlib.crc32(f"{fc.data_path}[{fc.array_index}]{n}:{int(fc.mute)}:{len(fc.modifiers)}".encode(), crc)
+        if not n:
+            continue
+        co = np.empty(n * 6, dtype=np.float32)
+        kps.foreach_get("co", co[:2 * n])
+        kps.foreach_get("handle_left", co[2 * n:4 * n])
+        kps.foreach_get("handle_right", co[4 * n:])
+        interp = np.empty(n, dtype=np.int32)
+        kps.foreach_get("interpolation", interp)
+        crc = zlib.crc32(interp.tobytes(), zlib.crc32(co.tobytes(), crc))
+    return crc
+
+
+def _keys_edited(action) -> bool:
+    """Whether ``action``'s keys changed since they were last looked at; remembers them."""
+    _seen["keys_at"] = time.monotonic()
+    fp = None if action is None else (action.as_pointer(), _keys_fingerprint(action))
+    if fp == _seen["keys"]:
+        return False
+    first = _seen["keys"] is _UNSEEN
+    _seen["keys"] = fp
+    return not first
+
+
+def _placement(arm) -> tuple:
+    """Where the character's object stands (ghosts are baked in world space)."""
+    return tuple(round(v, 5) for row in arm.matrix_world for v in row)
+
+
+def _edited(settings) -> None:
+    """The motion changed: what the overlay shows of it is out of date."""
+    # The plan is cheap and the panel reports it even with the ghosts off,
+    # so it is always invalidated; only the geometry waits on the toggle.
+    invalidate_plan()
+    if overlay_on(settings) and settings.key_pose_auto_refresh:
+        request_rebuild()
+    else:
+        tag_redraw()
+
+
+def poll_edits(settings, gap: float = KEYS_CHECK_DRAW) -> None:
+    """Catch an edit no update reported (or one looked at too soon to tell): from a
+    redraw, and from the recheck a throttled look leaves behind. Cheap to call often --
+    the keys are looked at once every ``gap`` seconds at most."""
+    if _baking or posing() or settings is None or settings.is_generating:
+        return
+    if time.monotonic() - _seen["keys_at"] < gap:
+        return
+    arm = _target(settings)
+    if arm is None:
+        return
+    edited = _keys_edited(_action(arm))
+    if _seen["placement"] is None:
+        _seen["placement"] = _placement(arm)
+    if edited:
+        _edited(settings)
+
+
+def _recheck_keys():
+    poll_edits(_settings(getattr(bpy.context, "scene", None)), gap=0.0)
+    return None
+
+
+def _keys_due(gap: float) -> bool:
+    """Whether the keys may be looked at again; if not, a look is booked for when they may."""
+    wait = gap - (time.monotonic() - _seen["keys_at"])
+    if wait <= 0.0:
+        return True
+    if not bpy.app.timers.is_registered(_recheck_keys):
+        bpy.app.timers.register(_recheck_keys, first_interval=wait)
+    return False
+
+
 @persistent
 def _on_depsgraph(scene, depsgraph) -> None:
-    """React to the two edits that change the plan.
+    """React to the edits that change what the overlay shows: the keys of the
+    character's action (inserted, deleted, moved, retimed, their handles), and
+    the character's object moved (ghosts are baked in world space).
 
-    Only two kinds of update can: a change to the **action** (inserting,
-    deleting, retiming or auto-keying a pose — Blender tags the Action
-    datablock and nothing else), and a transform on the **armature object**
-    (ghosts are baked in world space, so sliding the rig leaves them behind).
+    Blender only says the action or the object was *updated*, and it says so for
+    evaluation as well as for edits: every frame of playback, every scrub, every
+    frame a bake steps through and back. Telling them apart by circumstance --
+    not while playing, not on a frame change, not just after a capture -- dropped
+    real edits: a key deleted while the animation played, or just after the
+    onion skin captured a frame (it fills in for seconds after every edit), left
+    the ghosts and the trail stale for good. So the keys themselves are compared,
+    by a fingerprint, with the ones last seen: an evaluation leaves it as it was,
+    an edit changes it whenever and however it came. A redraw looks too
+    (:func:`poll_edits`), so even an edit nothing reported shows within moments.
 
-    Everything else is ignored on purpose, above all the plain pose edit:
-    dragging a bone tags the object on every mouse-move, but until it is keyed
-    there is no plan change to show, and rebaking mid-drag would move the
-    playhead under the artist.
+    The pose being dragged is still left alone: until it is keyed there is no
+    change to show, and rebaking mid-drag would move the playhead under the
+    artist. A drag keys (and asks for a rebuild) when it ends.
     """
     if _baking or posing():
-        return                  # a drag keys (and asks for a rebuild) when it ends
+        return
     settings = _settings(scene)
     if settings is None:
         return
     arm = _target(settings)
     if arm is None:
         return
-    # Playback reports the action updated on every frame — animation
-    # evaluation touches it — and that is not an edit. Taking it for one meant
-    # a rebuild request sixty times a second, each pushing the wait out, so
-    # nothing ever refreshed while the animation ran. Playback cannot change a
-    # key; the paths that do (keying a pose, dragging a curve) ask for a
-    # rebuild themselves and do not come through here.
-    screen = getattr(bpy.context, "screen", None)
-    if screen is not None and getattr(screen, "is_animation_playing", False):
-        return
-    # Nor is a frame change -- scrubbing evaluates the action too -- nor the
-    # evaluation that follows a bake putting the playhead back: taking those
-    # for edits emptied the onion skin's cache on every scrub, and after every
-    # capture, so it never filled.
-    frame = (int(scene.frame_current), round(float(scene.frame_subframe), 3))
-    if frame != _seen["frame"]:
-        _seen["frame"] = frame
-        return
-    if time.monotonic() < _seen["quiet_until"]:
-        return
-
     action = _action(arm)
+    keys_touched = moved = False
     for update in depsgraph.updates:
         source = getattr(update.id, "original", update.id)
-        keys_changed = action is not None and source == action
-        moved = source == arm and update.is_updated_transform
-        if not (keys_changed or moved):
-            continue
-        # The plan is cheap and the panel reports it even with the ghosts off,
-        # so it is always invalidated; only the geometry waits on the toggle.
-        invalidate_plan()
-        if overlay_on(settings) and settings.key_pose_auto_refresh:
-            request_rebuild()
-        else:
-            tag_redraw()
+        if action is not None and source == action:
+            keys_touched = True
+        elif source == arm and update.is_updated_transform:
+            moved = True
+    if not (keys_touched or moved):
         return
+    frame = (int(scene.frame_current), round(float(scene.frame_subframe), 3))
+    stepped = frame != _seen["frame"]
+    _seen["frame"] = frame
+    edited = False
+    if keys_touched:
+        if playing():
+            # every frame of playback touches the action: a few looks a second
+            edited = _keys_due(KEYS_CHECK_PLAYING) and _keys_edited(action)
+        elif not stepped:
+            edited = _keys_edited(action)
+        # (a scrub -- the frame changed, nothing playing -- evaluates the keys, it can't edit them)
+    if moved:
+        place = _placement(arm)
+        if not stepped and place != _seen["placement"]:
+            edited = True
+        _seen["placement"] = place          # an animated object moves with the frame
+    if edited:
+        _edited(settings)
 
 
 @persistent
@@ -1597,9 +1685,10 @@ ONION_CHUNK = 3                 # frames captured per timer tick: short enough n
 ONION_TICK = 0.02
 ONION_MAX = 180                 # frames kept: each is a mesh on the GPU, and memory is what froze Blender
 
-#: what the change handler last saw: the frame (a change of it is not an edit),
-#: and how long after a bake its own evaluation is to be ignored
-_seen: dict = {"frame": None, "quiet_until": 0.0}
+#: what the change handler last saw: the frame (a change of it, nothing playing, is a
+#: scrub, not an edit), the keys' fingerprint and when it was taken, and where the
+#: character's object stood
+_seen: dict = {"frame": None, "keys": _UNSEEN, "keys_at": 0.0, "placement": None}
 
 _onion: dict = {"sig": None, "cache": {}, "extent": None, "dirty": True, "pending": False,
                "live": {}, "stale": {}, "seed": {}}
@@ -1654,8 +1743,8 @@ def posing() -> bool:
     until it is keyed, and any capture that steps the playhead and back
     re-evaluates the action over it: the dragged pose was lost."""
     try:
-        from . import curve_edit, handles, wormhole
-        return bool(handles._drag["active"] or wormhole._drag["active"] or curve_edit._drag["active"])
+        from . import curve_edit, posing, wormhole
+        return bool(posing.dragging() or wormhole._drag["active"] or curve_edit._drag["active"])
     except Exception:                       # noqa: BLE001
         return False
 
@@ -1894,7 +1983,6 @@ def fill_onion(context, chunk: int = ONION_CHUNK) -> bool:
         except Exception:                   # noqa: BLE001
             pass
         _baking = False
-        _seen["quiet_until"] = time.monotonic() + 0.06
     tag_redraw()
     return bool(_onion_todo(scene, settings))
 
@@ -2175,6 +2263,7 @@ def _draw_geometry():
     if gate is None:
         return
     settings, p = gate
+    poll_edits(settings)
 
     trail_ready = _trail_ready(settings)
     ghosts_ready = _ghosts_ready(settings)
@@ -2705,8 +2794,9 @@ def unregister() -> None:
     _purge_stale_handlers(bpy.app.handlers.depsgraph_update_post, _DEPSGRAPH_HANDLER_NAME)
     for handlers in (bpy.app.handlers.undo_post, bpy.app.handlers.redo_post):
         _purge_stale_handlers(handlers, _UNDO_HANDLER_NAME)
-    if bpy.app.timers.is_registered(_rebuild_timer):
-        bpy.app.timers.unregister(_rebuild_timer)
+    for timer in (_rebuild_timer, _recheck_keys):
+        if bpy.app.timers.is_registered(timer):
+            bpy.app.timers.unregister(timer)
     clear()
     invalidate_plan()
     for cls in reversed(_classes):

@@ -108,46 +108,6 @@ def _draw_rig_held(layout, context, settings) -> None:
     box.operator("animatica.give_back_rig", icon='LOOP_BACK', text="Give Back Rig")
 
 
-def _draw_skeleton(layout, context, arm, open_if_wrong=False) -> None:
-    """Which bone plays each joint the Autoposer poses — found from the rig's shape, and
-    correctable here when a rig's shape is unusual enough to fool it."""
-    from .autoposer import poser
-
-    scene = context.scene
-    shown = scene.ap_show_joints or open_if_wrong
-    row = layout.row(align=True)
-    row.prop(scene, "ap_show_joints", text="",
-             icon='DISCLOSURE_TRI_DOWN' if shown else 'DISCLOSURE_TRI_RIGHT', emboss=False)
-    row.label(text=f"Skeleton · {poser.skeleton_summary(arm)}")
-    row.operator("autoposer.detect_joints", text="", icon='FILE_REFRESH')
-    if not shown:
-        return
-    col = layout.column(align=True)
-    col.use_property_split = True
-    col.use_property_decorate = False
-    if not len(arm.ap_joints):
-        # Nothing stored yet: show what detection found, and store it on the first edit.
-        col.operator("autoposer.detect_joints", text="Edit Joints", icon='GREASEPENCIL')
-        jm = poser.joint_map_of(arm)
-        for j in poser.joint_map.CANON:
-            if j in poser.MARKER_JOINTS:
-                continue
-            r = col.row()
-            r.active = j in jm
-            r.label(text=poser.control_label(j))
-            r.label(text=jm.get(j, "—"))
-        return
-    for it in arm.ap_joints:
-        if it.joint in poser.MARKER_JOINTS:
-            continue
-        col.prop_search(it, "bone", arm.data, "bones", text=poser.control_label(it.joint))
-
-
-def handles_have(context, arm) -> bool:
-    from . import handles
-    return handles.has(context.scene, arm)
-
-
 def _draw_set_keyframe(layout, context, settings) -> None:
     """The one button for committing a pose you posed by hand.
 
@@ -740,7 +700,7 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
     bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
-        from .autoposer import engine, poser
+        from . import posing
 
         layout = self.layout
         settings = context.scene.animatica
@@ -756,86 +716,21 @@ class ANIMATICA_PT_pose(AnimaticaPanelBase, Panel):
         head.label(text="Autoposer", icon='OUTLINER_OB_ARMATURE')
         sub = layout.row()
         sub.active = False
-        sub.label(text="Drag a hand, a foot or the hips to pose the body")
-        from . import key_poses
-        if key_poses.trail_on(settings):
-            # The trail is a handle too; said where posing is, not in the
-            # settings that switch it on.
-            sub = layout.row()
-            sub.active = False
-            sub.label(text="Or click a point on the motion trail and drag it")
+        if posing.present():
+            sub.label(text="Drag a hand, a foot or the hips to pose the body")
+            from . import key_poses
+            if key_poses.trail_on(settings):
+                # The trail is a handle too; said where posing is, not in the
+                # settings that switch it on.
+                sub = layout.row()
+                sub.active = False
+                sub.label(text="Or click a point on the motion trail and drag it")
+        else:
+            # a product of its own: posing by hand is not this add-on's
+            sub.label(text=f"Posing by hand comes with {posing.PRO_NAME}")
         from . import joint_lock
         joint_lock.draw_list(layout, arm)
-        status = engine.status()
-        if not (status["runtime"] and status["model"]):
-            box = layout.box()
-            fetching = engine.fetch_state()
-            installing = engine.install_state()
-            if fetching["running"]:
-                box.label(text=f"Downloading the poser… {engine.fetch_percent():.0f}%",
-                          icon='SORTTIME')
-            elif installing["running"]:
-                box.label(text="Installing the inference runtime…", icon='SORTTIME')
-            elif not engine.online():
-                # Nothing is fetched without Blender's online access.
-                box.label(text=(status.get("model_note") or
-                                "The Autoposer needs a one-off download")[:60], icon='INFO')
-                mmcp_client.draw_offline(box, engine.offline_message())
-            else:
-                if status.get("model_note"):
-                    box.label(text=status["model_note"][:60], icon='INFO')
-                err = fetching["error"] or installing["error"]
-                if err:
-                    row = box.row()
-                    row.alert = True
-                    row.label(text=err[:60], icon='ERROR')
-                row = box.row()
-                row.scale_y = 1.2
-                row.operator("autoposer.download", icon='IMPORT',
-                             text=engine.download_label())
-            box.label(text="Details in Preferences → Animatica")
-        else:
-            from . import handles
-            problem = handles.problem(context, arm)
-            if problem and problem != poser.NO_MODEL:
-                row = layout.row()
-                row.alert = True
-                row.label(text=problem[:70], icon='ERROR')
-            row = layout.row()
-            row.scale_y = 1.3
-            row.enabled = not problem
-            active = handles.tool_active(context)
-            row.operator("animatica.toolbar_autoposer", icon='ARMATURE_DATA', depress=active,
-                         text="Autopose Tool (on)" if active else "Autopose Tool")
-            controls = handles.items(context.scene, arm)
-            if not controls:
-                _draw_skeleton(layout, context, arm, open_if_wrong=bool(problem))
-            # The handles, in the artist's words rather than the rig's. Adding
-            # one belongs in the same block as picking one, so the + sits with
-            # them either way round.
-            elif settings.pose_details:
-                col = layout.column(align=True)
-                for b in controls:
-                    row = col.row(align=True)
-                    row.prop(b, "ap_enabled", text=poser.control_label(b.ap_joint, b.ap_kind), toggle=True)
-                    sub = row.row(align=True)
-                    sub.active = b.ap_enabled
-                    sub.prop(b, "ap_rot", text="Rot", toggle=True)
-                    sub.prop(b, "ap_tol_m", text="")
-                col.menu("ANIMATICA_MT_add_handle", text="Add Handle", icon='ADD')
-            else:
-                grid = layout.grid_flow(row_major=True, columns=4, align=True)
-                for b in controls:
-                    grid.prop(b, "ap_enabled", text=poser.control_label(b.ap_joint, b.ap_kind), toggle=True)
-                grid.menu("ANIMATICA_MT_add_handle", text="", icon='ADD')
-        if arm is not None and handles_have(context, arm):
-            layout.prop(settings, "show_picker", text="Handle Picker in the Viewport",
-                        icon='RESTRICT_SELECT_OFF')
-            row = layout.row(align=True)
-            row.prop(settings, "pose_tightness", slider=True)
-            row.prop(settings, "pose_details", text="", icon='OPTIONS')
-            if settings.pose_details:
-                _draw_skeleton(layout, context, arm)
+        posing.draw_controls(layout, context)
 
         # --- the pose at this frame: proposed by the model, or stated -----
         layout.separator()
@@ -1065,7 +960,8 @@ class ANIMATICA_PT_settings_viewport(AnimaticaPanelBase, Panel):
             col.use_property_split = True
             col.use_property_decorate = False
             col.prop(arm, "show_in_front", text="Rig In Front")
-            col.prop(scene, "ap_hide_deform", text="Hide Skeleton")
+            if hasattr(scene, "autoposer_hide_deform"):       # the Autoposer's, when it is here
+                col.prop(scene, "autoposer_hide_deform", text="Hide Skeleton")
 
 
 class ANIMATICA_PT_settings_posing(AnimaticaPanelBase, Panel):
@@ -1075,14 +971,14 @@ class ANIMATICA_PT_settings_posing(AnimaticaPanelBase, Panel):
     bl_parent_id = "ANIMATICA_PT_settings"
     bl_options = {'DEFAULT_CLOSED'}
 
+    @classmethod
+    def poll(cls, context):
+        from . import posing
+        return posing.present()
+
     def draw(self, context):
-        layout = self.layout
-        layout.use_property_split = True
-        layout.use_property_decorate = False
-        layout.prop(context.scene, "ap_floor", text="Solid Floor")
-        row = layout.row()
-        row.use_property_split = False
-        row.operator("autoposer.rest", text="Rest Pose", icon='LOOP_BACK')
+        from . import posing
+        posing.draw_settings(self.layout, context)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
