@@ -337,6 +337,11 @@ def finish(context, arm, *, accepted: bool) -> None:
     if ad is not None and ad.action is not None and _BASELINE in ad.action:
         del ad.action[_BASELINE]
     _clear(arm)
+    # what the overlay shows -- the ghosts, Marionette's trail and onion skin -- is
+    # of the take; a Discard after a splice rewrites the action in place, which
+    # nothing else reports
+    from . import key_poses
+    key_poses.motion_replaced()
 
 
 def abort(context, arm) -> None:

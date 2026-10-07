@@ -2,8 +2,9 @@
 """Animatica Marionette, when it is installed alongside: the one place this add-on reaches it.
 
 The two are separate products: this one makes motion and shows it (prompts, key poses, takes,
-the ghosts), the Autoposer edits it by hand -- the Autopose handles, the motion trail, the
-zoetrope, Lock in Place, the reach of an edit, a ghost clicked to edit, the root path bent.
+the ghosts of the key poses), Marionette edits it by hand -- the Autopose handles, the motion
+trail, the onion skin and the zoetrope, Lock in Place, the reach of an edit, a ghost clicked to
+edit, the root path bent.
 Installed together, its buttons are on this add-on's bar and its rows in these panels, it samples
 and draws in this add-on's overlay pass, and its edits key into the take. Without it nothing
 here edits by hand, and what needs to know which bone is a hand or a foot reads the bone names.
@@ -161,11 +162,27 @@ def reseat(scene) -> None:
             pass
 
 
-def onion_layout():
-    """How the Autoposer lays the onion skin out while editing (the frames within Reach, the
-    zoetrope), or None: the onion skin is then this add-on's own Before/After."""
+def motion_changed(replaced: bool = False) -> None:
+    """The rig's motion changed (keys edited), or was ``replaced`` (a take kept or
+    thrown away): what Marionette draws of it -- its onion skin -- is captured
+    again, and, replaced, nothing of the old one is shown meanwhile."""
     ed = editing()
-    return ed.onion_layout() if ed is not None else None
+    if ed is not None:
+        try:
+            ed.motion_changed(replaced)
+        except Exception:                               # noqa: BLE001
+            pass
+
+
+def show_onion(context) -> None:
+    """Switch on the Autoposer's onion skin (the fine-tune hint does, so the
+    frames around an edit show)."""
+    ed = editing()
+    if ed is not None:
+        try:
+            ed.show_onion(context)
+        except Exception:                               # noqa: BLE001
+            pass
 
 
 def path_overlay(action, spans, fps):

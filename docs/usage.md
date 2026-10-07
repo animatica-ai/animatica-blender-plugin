@@ -180,7 +180,7 @@ The model does not move fingers, so each hand gets a shape laid over every
 take: **Relaxed** (the default), **Gripping** (closed around a handle) or
 **Straight** (as generated). Set **Left Hand** and **Right Hand** separately.
 
-## See the plan — ghosts and the onion skin
+## See the plan — the ghosts
 
 Your key poses are the plan: each one is a full-body pose the motion has to
 pass through. **Settings → Viewport** controls what is drawn.
@@ -192,18 +192,15 @@ with its frame number. On the timeline, a diamond marks each pose in the
 viewport and red on the timeline; widen a prompt block, or move the pose, to
 bring it back.
 
-**The onion skin.** The onion button on the bar shows the motion around the
-playhead as ghosts, green before and blue after, so you can check that a pose
-fits what comes before and after it. **Frames** shows the poses **Before** and
-**After** the playhead, **Step** frames apart; **Keyframes** shows your key
-poses either side; **All Keys** shows every one. Set them, with the opacity
-and colours, in **Options** on the bar or in Blender's **Overlays** popover.
+The **Ghosts** button on the bar switches them; **Options** sets their style
+(the mesh or the skeleton) and the frame numbers.
 
 **The root trajectory.** Tick **Root Trajectory** to draw the path the
 character travels along, on the floor, coloured by speed. It is what In place
 takes out.
 
-**Editing the motion** is Marionette's: the motion trail through the
+**Editing the motion** is Marionette's: the **onion skin** (the motion around
+the playhead, green before and blue after), the motion trail through the
 ghosts (drag it to repose the body, **Smooth** a wobble), the **zoetrope**
 (the onion skin spread out in space, each slice posable), **Lock in Place**
 (a hand or foot held on one spot for a stretch of frames), the reach of an

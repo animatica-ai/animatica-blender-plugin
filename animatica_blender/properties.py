@@ -971,62 +971,6 @@ class AnimaticaSettings(PropertyGroup):
         default=False, options={'SKIP_SAVE'},
         update=lambda self, context: _redraw_3d_views(),
     )
-    # Onion skin, in Pose -- Grease Pencil's own controls, in its words
-    onion_mode: EnumProperty(
-        name="Mode",
-        description="Which key poses are drawn as onion skins",
-        items=(
-            ('FRAMES', "Frames", "The motion itself: the pose every Step frames before and after the "
-                                 "playhead (set by Before and After)"),
-            ('KEYFRAMES', "Keyframes", "Your key poses on either side of the playhead (set by Before "
-                                       "and After)"),
-            ('ALL', "All Keys", "Every key pose, before and after the playhead"),
-        ),
-        default='FRAMES',
-        update=lambda self, context: _redraw_3d_views(),
-    )
-    onion_before: IntProperty(
-        name="Before",
-        description="How many poses to draw before the playhead (Frames and Keyframes modes)",
-        default=2, min=0, max=16,
-        update=lambda self, context: _redraw_3d_views(),
-    )
-    onion_after: IntProperty(
-        name="After",
-        description="How many poses to draw after the playhead (Frames and Keyframes modes)",
-        default=2, min=0, max=16,
-        update=lambda self, context: _redraw_3d_views(),
-    )
-    onion_step: IntProperty(
-        name="Step",
-        description="Frames between the onion skins in Frames mode",
-        default=2, min=1, max=24,
-        update=lambda self, context: _redraw_3d_views(),
-    )
-    onion_opacity: FloatProperty(
-        name="Opacity",
-        description="How solid the onion skins are",
-        default=0.32, min=0.05, max=1.0, subtype='FACTOR',
-        update=lambda self, context: _redraw_3d_views(),
-    )
-    onion_fade: BoolProperty(
-        name="Fade",
-        description="Draw the key poses further from the playhead fainter",
-        default=True,
-        update=lambda self, context: _redraw_3d_views(),
-    )
-    onion_color_before: FloatVectorProperty(
-        name="Before",
-        description="The colour of the key poses before the playhead",
-        subtype='COLOR', size=3, min=0.0, max=1.0, default=(0.36, 0.80, 0.34),
-        update=lambda self, context: _redraw_3d_views(),
-    )
-    onion_color_after: FloatVectorProperty(
-        name="After",
-        description="The colour of the key poses after the playhead",
-        subtype='COLOR', size=3, min=0.0, max=1.0, default=(0.42, 0.50, 1.00),
-        update=lambda self, context: _redraw_3d_views(),
-    )
     pose_on_ground: BoolProperty(
         name="Stand on the Ground",
         description=("Put the lowest point of a pose made from words on the ground. Turn it "

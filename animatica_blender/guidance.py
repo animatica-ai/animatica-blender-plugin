@@ -198,8 +198,8 @@ class ANIMATICA_OT_blocks_over_keys(bpy.types.Operator):
 
 
 class ANIMATICA_OT_hint_finetune(bpy.types.Operator):
-    """Fine-tune the take. Turns on the Autopose tool and the onion skins, so you
-    can drag a handle and see the frames around it follow"""
+    """Fine-tune the take. Turns on the Autopose tool and Marionette's onion skin, so
+    you can drag a handle and see the frames around it follow"""
     bl_idname = "animatica.hint_finetune"
     bl_label = "Fine-tune"
     bl_options = {'INTERNAL', 'UNDO'}
@@ -211,8 +211,7 @@ class ANIMATICA_OT_hint_finetune(bpy.types.Operator):
         from . import posing
         s = context.scene.animatica
         s.key_pose_overlay = True
-        s.key_pose_ghosts = True
-        s.onion_mode = 'FRAMES'
+        posing.show_onion(context)          # Marionette's onion skin (when installed)
         handles = posing.handles()          # posing it is the Autoposer's (when installed)
         if handles is not None and not handles.tool_active(context):
             why = handles.activate(context)

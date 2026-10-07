@@ -2,11 +2,12 @@
 Pro's. Without Pro:
 
 * none of the editing tools is here -- no operator, no setting, no click on a ghost;
-* the bar has the onion skin and no editing buttons (the trail, the zoetrope, the reach of an
+* the bar has the ghosts of the key poses and no editing buttons (the onion skin, the trail, the
+  zoetrope, the reach of an
   edit, Smooth, Lock in Place, the Autopose tool);
 * each place that asks Pro gets nothing back and carries on (the bar, the panels, the bake pass,
   In place's root path, a take's locks);
-* the onion skin's frames are its own Before and After, Step apart (and round a loop's seam);
+* every key pose is a ghost (the motion plan), whatever the playhead: two keys, two ghosts;
 * every panel and popover draws, naming only settings and operators that are here.
 
 Headless, with the Animatic character in Blender's data (read, never fetched)::
@@ -38,11 +39,13 @@ MOVED_OPS = ("lock_joint", "unlock_joint", "lock_range", "smooth_trail", "drag_m
              "wormhole_drag", "reach_drag", "edit_key_pose", "pick_ghost", "give_back_rig",
              "edit_root_trajectory", "reset_root_trajectory", "toolbar_wormhole")
 #: the settings that moved to Pro's
-MOVED_PROPS = ("trail_radius", "edit_strength", "onion_wormhole", "wormhole_step", "wormhole_spacing",
+MOVED_PROPS = ("onion_mode", "onion_before", "onion_after", "onion_step", "onion_opacity", "onion_fade",
+               "onion_color_before", "onion_color_after",
+               "trail_radius", "edit_strength", "onion_wormhole", "wormhole_step", "wormhole_spacing",
                "key_pose_trail", "key_pose_trail_hips", "key_pose_trail_head", "key_pose_trail_hands",
                "key_pose_trail_feet", "editing_key_pose_frame")
 #: the bar's editing buttons, all Pro's
-EDIT_BUTTONS = {"autopose", "picker", "reset_controls", "wormhole", "trail", "reach", "smooth", "lock"}
+EDIT_BUTTONS = {"autopose", "picker", "reset_controls", "onion", "wormhole", "trail", "reach", "smooth", "lock"}
 
 
 def check(name, ok, info=""):
@@ -166,7 +169,7 @@ def setup():
 def test_bar(arm):
     ctx = bpy.context
     ids = [it.id for it in toolbar.items(ctx)]
-    check("the bar has the onion skin", "onion" in ids, ", ".join(ids))
+    check("the bar has the ghosts of the key poses", "ghosts" in ids, ", ".join(ids))
     check("...and the key, Generate's field and Options", {"set_key", "prompt", "options"} <= set(ids))
     there = sorted(EDIT_BUTTONS & set(ids))
     check("no editing button on the bar", not there, ", ".join(there))
@@ -175,7 +178,7 @@ def test_bar(arm):
     s = ctx.scene.animatica
     s.key_pose_ghosts = False
     bpy.ops.animatica.toolbar_overlay(part='GHOSTS')
-    check("the onion skin button switches it on", s.key_pose_ghosts and s.key_pose_overlay)
+    check("the Ghosts button switches them on", s.key_pose_ghosts and s.key_pose_overlay)
 
 
 def test_hooks_answer_nothing(arm):
@@ -184,7 +187,9 @@ def test_hooks_answer_nothing(arm):
     check("no sampler in the bake pass", posing.samplers() == [])
     check("no ghost being edited", posing.editing_frame(ctx.scene) == -1)
     check("no edit's hint", posing.hint(ctx) is None)
-    check("no onion layout of Pro's", posing.onion_layout() is None)
+    posing.motion_changed()
+    posing.motion_changed(replaced=True)
+    posing.show_onion(ctx)
     check("nothing dragging", posing.dragging() is False)
     spans = [{"first": 1, "last": 37}]
     check("In place's root path left as fitted", posing.path_overlay(arm.animation_data.action, spans, 24) is spans
@@ -194,24 +199,24 @@ def test_hooks_answer_nothing(arm):
     posing.reseat(ctx.scene)
     posing.end_edit(ctx.scene)
     lay = _Layout()
-    drew = [k for k in ("pose", "overlay", "options", "options_onion", "options_trail", "popover",
-                        "popover_onion", "review") if posing.draw_panel(k, lay, ctx)]
+    drew = [k for k in ("pose", "overlay", "options", "popover", "review") if posing.draw_panel(k, lay, ctx)]
     check("no panel rows of Pro's", not drew and not lay.calls, ", ".join(drew))
     check("Set Key Pose still keys (it ends no edit of Pro's)",
           bpy.ops.animatica.set_key_pose() == {'FINISHED'})
 
 
-def test_onion_frames(arm):
+def test_ghosts(arm):
+    """Every key pose is a ghost to draw, wherever the playhead is (but not under it)."""
     sc = bpy.context.scene
-    s = sc.animatica
-    s.onion_mode = 'FRAMES'
-    s.onion_before, s.onion_after, s.onion_step = 2, 3, 3
-    sc.frame_set(25)
-    got = key_poses.onion_frames(sc, s)
-    check("Frames: Before and After, Step apart", got == [19, 22, 28, 31, 34], f"{got}")
-    s.onion_before, s.onion_after, s.onion_step = 0, 1, 1
-    got = key_poses.onion_frames(sc, s)
-    check("...none before, one after", got == [26], f"{got}")
+    key_poses._ghosts["frames"] = [1, 13, 25, 37]          # as a bake leaves them
+    p = key_poses.plan(sc)
+    sc.frame_set(30)
+    shown = [f for f, _e in key_poses._visible_poses(sc, p)]
+    check("every key pose is a ghost (the plan), not just the ones by the playhead", shown == [1, 13, 25, 37],
+          f"{shown}")
+    sc.frame_set(13)
+    shown = [f for f, _e in key_poses._visible_poses(sc, p)]
+    check("...but not the one under the playhead", shown == [1, 25, 37], f"{shown}")
 
 
 def test_panels(arm):
@@ -219,14 +224,14 @@ def test_panels(arm):
     classes, errors = draw_panels(bpy.context, bad)
     check("every panel draws", len(classes) >= 8 and not errors,
           f"{len(classes)} panels; " + "; ".join(f"{k}: {v}" for k, v in errors.items()))
-    check("...naming only settings and operators that are here", Checked.seen >= 40 and not bad,
+    check("...naming only settings and operators that are here", Checked.seen >= 30 and not bad,
           f"{Checked.seen} rows; " + ", ".join(sorted(set(bad))))
 
 
 def main():
     test_nothing_of_editing_is_here()
     arm = setup()
-    for t in (test_bar, test_hooks_answer_nothing, test_onion_frames, test_panels):
+    for t in (test_bar, test_hooks_answer_nothing, test_ghosts, test_panels):
         try:
             t(arm)
         except Exception:                               # noqa: BLE001

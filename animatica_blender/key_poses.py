@@ -89,9 +89,7 @@ BONE_LINE_WIDTH  = 2.0
 # belongs to no instruction, so it gets a neutral tint rather than a block's.
 UNBLOCKED_COLOR = (0.62, 0.68, 0.78)
 
-# Onion skin, in Pose: Blender's own onion colours (Grease Pencil's green
-# before, blue after), lifted to read on a grey viewport -- the defaults of
-# onion_color_before / _after, which the artist can change.
+# A pose the next take leaves out (outside every block's window).
 DROPPED_COLOR   = (0.50, 0.50, 0.52)
 
 # The root trajectory: the path the take travels along without the sway of its
@@ -587,9 +585,8 @@ def _ghost_bones(arm) -> list[str]:
     return [pb.name for pb in arm.pose.bones if not pb.bone.hide]
 
 
-# The joints each onion ghost also records the position of: the end effectors,
-# the root and the head -- the ones an editing tool grabs a ghost by (the
-# Autoposer's zoetrope handles, when it is installed).
+# The end effectors, the root and the head: the joints an editing tool takes a
+# body by (Marionette's, when it is installed).
 _END_JOINTS = ("Hips", "Head", "LeftHand", "RightHand", "LeftFoot", "RightFoot")
 
 
@@ -990,11 +987,24 @@ def request_rebuild(*, coalesce: bool = False) -> None:
     _root_path["dirty"] = True
     _root_path["reuse"] = False
     if not coalesce:
-        # an edit: the motion's poses changed. (A coalescing ask comes from a
-        # draw finding a cache stale -- it says nothing about the motion, and
-        # emptying the onion skin's cache on it meant it never filled.)
-        _onion["dirty"] = True
+        # an edit: the motion's poses changed -- Marionette's onion skin, when
+        # it is installed, is of them too. (A coalescing ask comes from a draw
+        # finding a cache stale: it says nothing about the motion.)
+        posing.motion_changed()
     _arm_rebuild_timer(coalesce)
+
+
+def motion_replaced() -> None:
+    """The rig's motion was swapped out from under the overlay -- a take thrown
+    away or kept, another version shown: what is drawn of it is of the motion
+    before. An action rewritten in place tells the change handler nothing
+    (Discard after a splice), so everything is let go and baked again."""
+    _forget_ghosts()
+    _seen["keys"] = _UNSEEN              # the keys looked at afresh
+    invalidate_plan()
+    from . import posing
+    posing.motion_changed(replaced=True)
+    request_rebuild()
 
 
 def request_root_refresh() -> None:
@@ -1292,8 +1302,6 @@ def _overlay_gate(context):
 
 def _forget_ghosts() -> None:
     """Drop every cached ghost (the GPU batches with them)."""
-    if _onion["cache"] or _onion["stale"] or _onion["live"] or _onion["seed"]:
-        _onion.update(cache={}, stale={}, live={}, seed={}, sig=None, dirty=True)
     if _ghosts.get("frames"):
         _ghosts["frames"] = []
         _ghosts["ghosts"] = {}
@@ -1384,113 +1392,10 @@ def refresh_held_by() -> str:
     return ""
 
 
-def bar_mode(context=None) -> str:
-    """There is one bar now (no Pose and Motion): what the viewport draws is
-    up to its own switches -- the onion skin and its mode, the trail, the
-    root path. Kept so the drawing code reads as it did: always 'POSE'."""
-    return 'POSE'
-
-
-def _onion_ranks(scene, settings) -> dict:
-    """Pose: the key poses either side of the playhead that are onion
-    skins, by rank -- negative before, positive after."""
-    current = scene.frame_current
-    before = [f for f in _ghosts["frames"] if f < current][::-1]
-    after = [f for f in _ghosts["frames"] if f > current]
-    if settings.onion_mode == 'KEYFRAMES':
-        before, after = before[:settings.onion_before], after[:settings.onion_after]
-    out = {f: -(i + 1) for i, f in enumerate(before)}
-    out.update({f: i + 1 for i, f in enumerate(after)})
-    return out
-
-
-def onion_look(settings, rank: int, n_side: int, frames_away: int | None = None):
-    """``(rgb, alpha)`` of an onion skin ``rank`` key poses away (negative:
-    before). Fade takes it down towards a quarter by the furthest one. While
-    the Autoposer lays the onion skin out (``frames_away`` from the playhead),
-    a ghost is as solid as the share of a drag it would take."""
-    rgb = tuple(settings.onion_color_before if rank < 0 else settings.onion_color_after)
-    alpha = float(settings.onion_opacity)
-    from . import posing
-    layout = posing.onion_layout()
-    k = layout.alpha(settings, rank, n_side, frames_away) if layout is not None else None
-    if k is not None:
-        return rgb, alpha * k
-    if settings.onion_fade and n_side > 1:
-        alpha *= 1.0 - 0.75 * (abs(rank) - 1) / (n_side - 1)
-    return rgb, alpha
-
-
-# ---------------------------------------------------------------------------
-# Onion skin of the motion (Pose, Frames mode)
-# ---------------------------------------------------------------------------
-#
-# Grease Pencil's Frames mode: the pose every Step frames either side of the
-# playhead, from the motion itself -- a generated take is a key on every
-# frame, and it is that motion an animator reads an onion skin for.
-#
-# Capturing a pose means moving the playhead, which cannot happen while the
-# animation plays. So the motion's poses are kept in a cache, filled a few
-# frames at a time while nothing is playing -- the frames around the playhead
-# first, then outward through the whole take -- and playback draws from it.
-# Any edit (request_rebuild) empties it.
-
-ONION_DEPTH_NUDGE = 0.025       # m: an onion ghost sits just behind the live body
-ONION_CHUNK = 3                 # frames captured per timer tick: short enough not to stutter
-ONION_TICK = 0.02
-ONION_MAX = 180                 # frames kept: each is a mesh on the GPU, and memory is what froze Blender
-
 #: what the change handler last saw: the frame (a change of it, nothing playing, is a
 #: scrub, not an edit), the keys' fingerprint and when it was taken, and where the
 #: character's object stood
 _seen: dict = {"frame": None, "keys": _UNSEEN, "keys_at": 0.0, "placement": None}
-
-_onion: dict = {"sig": None, "cache": {}, "extent": None, "dirty": True, "pending": False,
-               "live": {}, "stale": {}, "seed": {}}
-
-
-def onion_entry(frame):
-    """The ghost to draw at ``frame``: the drag's live one, else the cache's,
-    else the one from before the last edit until its frame is captured again
-    (emptied on every edit, the ghosts blinked off and back)."""
-    return _onion["live"].get(frame) or _onion["cache"].get(frame) or _onion["stale"].get(frame)
-
-
-def set_onion_live(entries) -> None:
-    """Ghosts a drag shows in place of the cache's while it runs."""
-    _onion["live"] = dict(entries or {})
-    tag_redraw()
-
-
-def seed_onion(entries) -> None:
-    """Ghosts known to be right after an edit (captured as it was keyed):
-    the cache starts from them instead of from nothing."""
-    _onion["seed"] = dict(entries or {})
-
-
-def capture_onion_entry(context, arm):
-    """The rig's ghost as it stands now (no frame stepped), as the cache
-    keeps one."""
-    settings = _settings(context.scene)
-    if settings is None:
-        return None
-    context.view_layer.update()
-    depsgraph = context.evaluated_depsgraph_get()
-    mode = settings.key_pose_display
-    meshes = _skinned_meshes(arm, context) if mode in {'AUTO', 'MESH'} else []
-    bone_names = _ghost_bones(arm) if (mode == 'BONES' or (mode == 'AUTO' and not meshes)) else []
-    joint_bones = _onion.get("joint_bones") or end_bones(arm)
-    entry = {"tris": None, "lines": None, "joints": capture_joints(arm, joint_bones, depsgraph)}
-    if meshes:
-        captured = _capture_meshes(meshes, depsgraph)
-        if captured is not None:
-            verts, tris = captured
-            entry["tris"] = batch_for_shader(_shader(), 'TRIS', {"pos": verts}, indices=tris)
-    if bone_names:
-        segments = _capture_bones(arm, bone_names, depsgraph)
-        if segments is not None:
-            entry["lines"] = batch_for_shader(_line_uniform_shader(), 'LINES', {"pos": segments})
-    return entry
 
 
 def posing() -> bool:
@@ -1544,254 +1449,17 @@ def frames_from(f, c, span=None) -> int:
     return d
 
 
-def onion_ranked(scene, settings) -> list:
-    """``[(frame, rank)]`` of the onion skins on show: rank -1, -2... before
-    the playhead and 1, 2... after it (in a loop, the short way round)."""
-    span = loop_span(settings)
-    c = int(scene.frame_current)
-    shown = onion_frames(scene, settings)
-    keyed = sorted(shown, key=lambda f: frames_from(f, c, span))
-    before = [f for f in keyed if frames_from(f, c, span) < 0]
-    after = [f for f in keyed if frames_from(f, c, span) > 0]
-    return [(f, -(len(before) - i)) for i, f in enumerate(before)] + [(f, i + 1) for i, f in enumerate(after)]
-
-
-def onion_frames(scene, settings) -> list[int]:
-    """The frames the onion skin shows: Before and After, Step apart either
-    side of the playhead (Grease Pencil's Frames mode, not cut to the scene's
-    range; in a loop, round the seam). With the Autoposer, the frames an edit
-    here reaches (its Reach), or the zoetrope's -- so what you see is what an
-    edit carries."""
-    from . import posing
-    layout = posing.onion_layout()
-    if layout is not None:
-        frames = layout.frames(scene, settings)
-        if frames is not None:
-            return frames
-    c, step = int(scene.frame_current), max(1, int(settings.onion_step))
-    before, after = int(settings.onion_before), int(settings.onion_after)
-    span = loop_span(settings) if settings.onion_mode == 'FRAMES' else None
-    if span is not None:
-        here = loop_wrap(c, span)
-        frames = {loop_wrap(c + k * step, span) for k in range(-before, after + 1)}
-        frames.discard(here)
-        return sorted(frames, key=lambda f: frames_from(f, c, span))
-    out = [c - k * step for k in range(before, 0, -1)]
-    return out + [c + k * step for k in range(1, after + 1)]
-
-
-def _onion_sig(settings):
-    arm = _target(settings)
-    action = _action(arm)
-    if arm is None or action is None:
-        return None
-    return (arm.name, action.as_pointer(), settings.key_pose_display)  # not its name: keeping a take renames it
-
-
-def onion_wanted(context, settings) -> bool:
-    return (settings is not None and bar_mode(context) == 'POSE' and ghosts_on(settings)
-            and settings.onion_mode == 'FRAMES')
-
-
-def _onion_todo(scene, settings) -> list[int]:
-    """Frames still to capture: the ones on show first, then outward from the
-    playhead through the motion."""
-    cache = _onion["cache"]
-    want = [f for f in onion_frames(scene, settings) if f not in cache]
-    ext = _onion["extent"]
-    if ext is None or len(cache) >= ONION_MAX:
-        return want
-    lo, hi = ext
-    c = int(scene.frame_current)
-    rest = []
-    for d in range(0, max(c - lo, hi - c) + 1):
-        for f in (c - d, c + d) if d else (c,):
-            if lo <= f <= hi and f not in cache:
-                rest.append(f)
-        if len(rest) >= ONION_CHUNK * 4:
-            break
-    return want + [f for f in rest if f not in want]
-
-
-def request_onion(context, settings) -> None:
-    """From a draw: keep the cache right, and fill it while nothing plays."""
-    sig = _onion_sig(settings)
-    if sig is None:
-        return
-    if sig != _onion["sig"] or _onion["dirty"]:
-        same = sig == _onion["sig"]
-        # what was on show stays until captured again -- only the last cache,
-        # not every one before it (each ghost is a mesh on the GPU)
-        stale = dict(_onion["cache"]) if same else {}
-        _onion.update(sig=sig, cache=dict(_onion["seed"]) if same else {}, stale=stale, seed={},
-                      dirty=False, extent=_motion_extent(_action(_target(settings))), joint_bones=None)
-    if _onion["pending"] or _baking or settings.is_generating:
-        return
-    if playing() or posing():
-        return                                 # the cache draws; nothing is captured mid-playback
-    if _onion_todo(context.scene, settings):
-        _onion["pending"] = True
-        bpy.app.timers.register(_onion_timer, first_interval=ONION_TICK)
-
-
-def _onion_timer():
-    try:
-        more = fill_onion(bpy.context)
-    except Exception as exc:                # noqa: BLE001 -- a timer must not raise
-        print(f"[Animatica] onion skin failed: {exc}")
-        more = False
-    if more:
-        return ONION_TICK
-    _onion["pending"] = False
-    return None
-
-
-def fill_onion(context, chunk: int = ONION_CHUNK) -> bool:
-    """Capture a few of the frames still missing. True while there is more
-    to do and it is still the time to do it. Moves the playhead and puts it
-    back, so never from a draw."""
-    global _baking
-    scene = context.scene
-    settings = _settings(scene)
-    if settings is None or settings.is_generating or _baking or not onion_wanted(context, settings):
-        return False
-    if playing() or posing():
-        return False
-    arm = _target(settings)
-    if arm is None or _onion_sig(settings) != _onion["sig"]:
-        return False
-    todo = _onion_todo(scene, settings)[:chunk]
-    if not todo:
-        return False
-    mode = settings.key_pose_display
-    meshes = _skinned_meshes(arm, context) if mode in {'AUTO', 'MESH'} else []
-    bone_names = _ghost_bones(arm) if (mode == 'BONES' or (mode == 'AUTO' and not meshes)) else []
-    joint_bones = _onion.get("joint_bones")
-    if joint_bones is None:
-        joint_bones = _onion["joint_bones"] = end_bones(arm)    # what an editing tool grabs a ghost by
-    shader, line_shader = _shader(), _line_uniform_shader()
-    saved_frame, saved_sub = scene.frame_current, scene.frame_subframe
-    _baking = True
-    try:
-        for f in todo:
-            scene.frame_set(f)
-            context.view_layer.update()
-            depsgraph = context.evaluated_depsgraph_get()
-            entry = {"tris": None, "lines": None,
-                     "joints": capture_joints(arm, joint_bones, depsgraph)}
-            if meshes:
-                captured = _capture_meshes(meshes, depsgraph)
-                if captured is not None:
-                    verts, tris = captured
-                    entry["tris"] = batch_for_shader(shader, 'TRIS', {"pos": verts}, indices=tris)
-            if bone_names:
-                segments = _capture_bones(arm, bone_names, depsgraph)
-                if segments is not None:
-                    entry["lines"] = batch_for_shader(line_shader, 'LINES', {"pos": segments})
-            _onion["cache"][f] = entry
-        _evict_onion(scene, settings)
-    finally:
-        scene.frame_set(saved_frame, subframe=saved_sub)
-        try:
-            context.view_layer.update()     # its evaluation, while still marked as ours
-        except Exception:                   # noqa: BLE001
-            pass
-        _baking = False
-    tag_redraw()
-    return bool(_onion_todo(scene, settings))
-
-
-def _evict_onion(scene, settings) -> None:
-    """Keep the cache at ONION_MAX: the frames furthest from the playhead go
-    first, the ones on show never. (It only grew: scrubbing a long take with
-    the onion skins on added a mesh on the GPU for every frame visited.)"""
-    cache = _onion["cache"]
-    if len(cache) <= ONION_MAX:
-        return
-    shown = set(onion_frames(scene, settings))
-    c = int(scene.frame_current)
-    span = loop_span(settings)
-    spare = sorted((f for f in cache if f not in shown), key=lambda f: -abs(frames_from(f, c, span)))
-    for f in spare[:len(cache) - ONION_MAX]:
-        del cache[f]
-    for f in [f for f in _onion["stale"] if f not in shown]:
-        del _onion["stale"][f]          # the ones before an edit: only those still on show
-
-
-def bake_onion(context) -> int:
-    """Fill the cache for the frames on show now (tests, and a caller that
-    cannot wait for the timer)."""
-    while fill_onion(context, chunk=8):
-        if all(f in _onion["cache"] for f in onion_frames(context.scene, _settings(context.scene))):
-            break
-    return sum(1 for f in onion_frames(context.scene, _settings(context.scene)) if f in _onion["cache"])
-
-
-def _draw_onion_frames(settings, scene, scene_depth, xray) -> None:
-    """The Frames-mode onion skins from the cache, faintest first -- during
-    playback too."""
-    current = scene.frame_current
-    span = loop_span(settings)
-    ranked = onion_ranked(scene, settings)
-    before = [f for f, r in ranked if r < 0]
-    after = [f for f, r in ranked if r > 0]
-    shader = _shader()
-    from . import posing
-    layout = posing.onion_layout()
-    offsets = (layout.offsets(bpy.context, settings, ranked) if layout is not None else None) or {}
-    # A ghost a frame or two from the playhead lies almost on the live body,
-    # and the two fought for the same depth: the ghosts flickered as the take
-    # played. Pushed a little away from the camera, the live body always wins.
-    rv3d = getattr(bpy.context, "region_data", None)
-    behind = (rv3d.view_rotation @ Vector((0.0, 0.0, -1.0))) * ONION_DEPTH_NUDGE if rv3d else Vector()
-    for frame, r in sorted(ranked, key=lambda fr: -abs(fr[1])):
-        batches = onion_entry(frame)
-        if batches is None:
-            continue
-        rgb, alpha = onion_look(settings, r, len(before) if r < 0 else len(after),
-                                frames_from(frame, current, span))
-        gpu.matrix.push()
-        try:
-            # the zoetrope's slice out along the time axis (the Autoposer's); a nudge behind the body
-            gpu.matrix.translate(offsets.get(frame, Vector()) + behind)
-            if batches["tris"] is not None:
-                shader.bind()
-                shader.uniform_float("color", (*rgb, alpha))
-                gpu.state.face_culling_set('BACK')
-                _depth_only(lambda: batches["tris"].draw(shader), xray=xray)
-                batches["tris"].draw(shader)
-                gpu.state.depth_test_set(scene_depth)
-                gpu.state.face_culling_set('NONE')
-            if batches["lines"] is not None:
-                line_shader = _line_uniform_shader()
-                line_shader.bind()
-                line_shader.uniform_float("viewportSize", _viewport_size())
-                line_shader.uniform_float("lineWidth", BONE_LINE_WIDTH * _px())
-                line_shader.uniform_float("color", (*rgb, min(1.0, alpha * BONE_ALPHA_BOOST)))
-                batches["lines"].draw(line_shader)
-                gpu.state.depth_test_set(scene_depth)
-        finally:
-            gpu.matrix.pop()       # an error mid-draw left the matrix pushed for every later draw
-
-
 def _visible_poses(scene, p) -> list[tuple[int, dict]]:
-    """The key poses to draw, with their plan entry: every one in Motion,
-    the onion skins in Pose.
+    """The key poses to draw, with their plan entry: every one -- the motion
+    plan, the poses the next take passes through.
 
     The pose under the playhead is suppressed: the rig itself is standing
     there, and a ghost inside it just muddies the silhouette.
     """
     current = scene.frame_current
-    frames = _ghosts["frames"]
-    if bar_mode() == 'POSE':
-        settings = _settings(scene)
-        if settings.onion_mode == 'FRAMES':
-            return []                     # the motion's own frames are drawn instead
-        onion = _onion_ranks(scene, settings)
-        frames = [f for f in frames if f in onion]
     return [
         (f, p["entries"].get(f, {"block": None, "in_range": True}))
-        for f in frames
+        for f in _ghosts["frames"]
         if f != current
     ]
 
@@ -1970,8 +1638,8 @@ def _depth_only(draw, *, xray: bool) -> None:
 
 
 def _draw_geometry():
-    """POST_VIEW callback: the key-pose ghosts, the onion skin, the root path,
-    and what the Autoposer samples in the same pass (its motion trail)."""
+    """POST_VIEW callback: the key-pose ghosts (the motion plan), the root
+    path, and what Marionette samples in the same pass (its motion trail)."""
     context = bpy.context
     gate = _overlay_gate(context)
     if gate is None:
@@ -1983,18 +1651,11 @@ def _draw_geometry():
     samplers = [s for s in posing.samplers() if s.ready(settings)]
     ghosts_ready = _ghosts_ready(settings)
     root_ready = _root_path_ready(settings)
-    frames_onion = onion_wanted(context, settings)
-    if frames_onion:
-        request_onion(context, settings)
-        # (kept during a drag: the ghosts re-pose live, and show the edit
-        # going through time, as the wormhole's slices do)
-    if not samplers and not ghosts_ready and not root_ready and not frames_onion:
+    if not samplers and not ghosts_ready and not root_ready:
         return
 
-    onion = bar_mode(context) == 'POSE'
     visible = _visible_poses(context.scene, p) if ghosts_ready else []
     ranks = _rank_from_playhead(_ghosts["frames"], context.scene.frame_current)
-    onion_ranks = _onion_ranks(context.scene, settings) if onion else {}
     editing = _editing_frame(settings)
     shader = _shader()
     ghosts = _ghosts["ghosts"]
@@ -2007,14 +1668,11 @@ def _draw_geometry():
     # Nothing writes depth except each ghost's own pre-pass, which turns the
     # mask on for exactly as long as it takes (see _depth_only).
     gpu.state.depth_mask_set(False)
-    nudged = False
     try:
         if root_ready:
             _draw_root_path()
         for s in samplers:
             s.draw_view(context, settings, p)
-        if frames_onion:
-            _draw_onion_frames(settings, context.scene, scene_depth, xray)
 
         # Faintest first, so the poses nearest the playhead land on top.
         order = sorted(visible, key=lambda item: _pose_alpha(item[0], item[1], ranks, editing))
@@ -2024,17 +1682,6 @@ def _draw_geometry():
                 continue
             rgb = _pose_color(frame, entry, settings)
             alpha = _pose_alpha(frame, entry, ranks, editing)
-            nudged = False
-            if onion and frame in onion_ranks and frame != editing:
-                r = onion_ranks[frame]
-                side = sum(1 for v in onion_ranks.values() if (v < 0) == (r < 0))
-                rgb, alpha = onion_look(settings, r, side)
-                rv = getattr(context, "region_data", None)
-                if rv is not None:
-                    # just behind the live body, as the Frames onion skin: no depth fight
-                    gpu.matrix.push()
-                    gpu.matrix.translate((rv.view_rotation @ Vector((0.0, 0.0, -1.0))) * ONION_DEPTH_NUDGE)
-                    nudged = True
             shader.bind()
             shader.uniform_float("color", (*rgb, alpha))
             if batches["tris"] is not None:
@@ -2062,12 +1709,7 @@ def _draw_geometry():
                 batches["lines"].draw(line_shader)
                 gpu.state.depth_test_set(scene_depth)
                 shader.bind()
-            if nudged:
-                gpu.matrix.pop()
-                nudged = False
     finally:
-        if nudged:
-            gpu.matrix.pop()       # an error mid-ghost: not left pushed for every later draw
         gpu.state.blend_set('NONE')
         gpu.state.color_mask_set(True, True, True, True)
         gpu.state.depth_mask_set(True)
@@ -2175,12 +1817,8 @@ def _draw_screen():
         font_id = 0
         px = _px()
         blf.size(font_id, int(LABEL_SIZE * px))
-        onion = bar_mode(context) == 'POSE'
-        near = _onion_ranks(context.scene, settings) if onion else {}
         taken = []                        # labels already drawn: a new one never lands on one
         for frame, entry in _visible_poses(context.scene, p):
-            if onion and abs(near.get(frame, 99)) > 1 and frame != editing and not _flashing(frame):
-                continue                  # Pose: the nearest key either side is named, the rest are seen
             anchor = roots.get(frame)
             if anchor is None:
                 continue

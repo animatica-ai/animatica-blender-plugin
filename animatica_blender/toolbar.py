@@ -318,9 +318,9 @@ def _bar_items(context, arm) -> list:
             label = "Generate"
         out.append(Item("generate", "generate", "animatica.toolbar_generate", label=label,
                         primary=kind == "ready", enabled=kind == "ready", group=5))
-    # 8 see the motion around this frame: the onion skin; then, with the Autoposer, editing it
-    # (the zoetrope, the trail, the reach of an edit, Smooth, Lock in Place)
-    out.append(Item("onion", "onion", "animatica.toolbar_overlay", {"part": "GHOSTS"},
+    # 8 see the plan: the key poses as ghosts; then, with Marionette, editing the motion
+    # (the onion skin, the zoetrope, the trail, the reach of an edit, Smooth, Lock in Place)
+    out.append(Item("ghosts", "ghost", "animatica.toolbar_overlay", {"part": "GHOSTS"},
                     on=key_poses.ghosts_on(s), group=8))
     out += [_from_pro(d) for d in pro.bar_items(context, arm, "edit")]
     # the whole motion onto another character: copy it off this one, paste it there
@@ -576,7 +576,7 @@ def _shelf_lift(area, region) -> float:
 #: what goes first when even the compact bar does not fit, and where it is then:
 #: the Options popover beside Generate shows whatever was folded into it. The
 #: Autoposer's buttons say their own place on the same scale (Item.fold)
-FOLD = {"copy_paste": 0, "pin": 2, "waypoint": 3, "onion": 7, "model": 9, "auto_key": 10,
+FOLD = {"copy_paste": 0, "pin": 2, "waypoint": 3, "ghosts": 7.5, "model": 9, "auto_key": 10,
         "key_steps": 11, "set_key": 13}
 #: folded together: one without the other would be half a control
 _FOLD_TOGETHER = {"key_steps": ("key_prev", "key_next"), "copy_paste": ("copy_motion", "paste_motion")}
@@ -1012,7 +1012,7 @@ TIPS = {
     "set_key": ("Set Key Pose  (I)", "Key the whole pose at this frame. Generate passes through every key pose, so key the moments that matter, like a foot contact, a peak or a landing, and the model fills in between"),
     "key_next": ("Next Key Pose", "Jump to your next key pose after the playhead. Keys inside the take are skipped (Up Arrow stops on every key)"),
     "auto_key": ("Auto Keying", "Blender's record button. When it is on, every pose you make is keyed. When it is off, press I to key the poses you want to keep"),
-    "onion": ("Onion Skin", "Show the motion around this frame as ghosts, green before and blue after, so you can check that a key pose fits what comes before and after it. Set the mode, opacity and colours in Pose Options"),
+    "ghosts": ("Ghosts", "Show each key pose as a ghost where it stands, tinted by its block and labelled with its frame: the plan the next take passes through"),
     "waypoint": ("Add Waypoint", "Mark where the character should be at this frame. A prompt can say \u201cto the door\u201d, but only a waypoint says where the door is"),
     "pin": ("Pin a Hand or Foot", "Hold a hand or foot to a target, like a rail or a door handle, so the contact stays put instead of sliding"),
     "prompt": ("Prompt", "What happens in the block under the playhead (a block is a stretch of the timeline with its own prompt). Click and type. One action per block, like \u201cwalks to the door\u201d then \u201csits\u201d, is followed more closely than several in one"),
@@ -1058,9 +1058,9 @@ def tip(context, it) -> str:
     elif it.id == "pose_prompt" and not it.enabled:
         line = _describe_blocker(context) or line
     elif it.id == "options":
-        title, line = "Options", ("The next take (Loop, In Place, versions), the onion skin, and whether a "
+        title, line = "Options", ("The next take (Loop, In Place, versions), the ghosts, and whether a "
                                   "described pose stands on the ground")
-    elif it.id in ("auto_key", "onion"):
+    elif it.id in ("auto_key", "ghosts"):
         title += " (on)" if it.on else " (off)"
     elif it.id == "prompt":
         text = it.label
@@ -1241,7 +1241,7 @@ _TOGGLE_TIPS = {
     "loop": "Make the next take a seamless cycle, its last frame running into its first. "
             "A loop is a single block. Walk and run cycles work best at two to four seconds",
     "auto_key_pose": "Key the pose as you pose it. When off, only Set Key adds a key",
-    "key_pose_overlay": "Show the key poses, the onion skin and the frame numbers in the viewport. "
+    "key_pose_overlay": "Show the key poses as ghosts, with their frame numbers, in the viewport. "
                         "Turn it off to judge the motion on its own",
 }
 
@@ -1349,7 +1349,7 @@ class ANIMATICA_OT_toolbar_model(bpy.types.Operator):
 
 _MENU_TIPS = {
     "ANIMATICA_MT_examples": "Open an example scene with a character, prompts and poses, ready to Generate",
-    "ANIMATICA_PT_options": "Settings for the next take and the onion skin",
+    "ANIMATICA_PT_options": "Settings for the next take and the ghosts",
 }
 
 
@@ -1425,24 +1425,15 @@ class ANIMATICA_PT_options(_Popover, bpy.types.Panel):
         col.prop(s, "pose_on_ground", text="Described Pose on Ground")
         # editing it: the Autoposer's (the reach of an edit, Reset to T-Pose)
         posing.draw_panel("options", layout, context)
-        # seeing the motion
+        # seeing the plan: the key poses as ghosts
         layout.separator()
-        layout.label(text="Onion Skin", icon='ONIONSKIN_ON')
-        layout.row().prop(s, "onion_mode", expand=True)
+        layout.label(text="Ghosts", icon='GHOST_ENABLED')
         col = column()
-        # the frames it shows: the Autoposer's while it edits (the frames an edit reaches, the
-        # zoetrope), else these
-        if not posing.draw_panel("options_onion", col, context):
-            sub = col.column(align=True)
-            sub.prop(s, "onion_before", text="Before")
-            sub.prop(s, "onion_after", text="After")
-            if s.onion_mode == 'FRAMES':
-                col.prop(s, "onion_step", text="Step")
-        col.prop(s, "onion_opacity", text="Opacity", slider=True)
-        col.prop(s, "onion_fade", text="Fade")
-        col.prop(s, "onion_color_before", text="Before")
-        col.prop(s, "onion_color_after", text="After")
-        posing.draw_panel("options_trail", col, context)
+        col.prop(s, "key_pose_ghosts", text="Key Poses")
+        sub = col.column()
+        sub.active = s.key_pose_ghosts
+        sub.prop(s, "key_pose_display", text="Style")
+        sub.prop(s, "key_pose_labels", text="Frame Numbers")
         layout.separator()
         layout.prop(s, "show_hints", text="Next-Step Hints")
         _draw_folded(layout, context)
@@ -1470,12 +1461,12 @@ class ANIMATICA_OT_toolbar_autokey(bpy.types.Operator):
 
 
 class ANIMATICA_OT_toolbar_overlay(bpy.types.Operator):
-    """Show or hide the onion skin in the viewport"""
+    """Show or hide the key poses as ghosts in the viewport"""
     bl_idname = "animatica.toolbar_overlay"
     bl_label = "Show"
     bl_options = {'INTERNAL'}
 
-    part: bpy.props.EnumProperty(items=(('GHOSTS', "Onion Skin", ""),), options={'HIDDEN'})
+    part: bpy.props.EnumProperty(items=(('GHOSTS', "Ghosts", ""),), options={'HIDDEN'})
 
     def invoke(self, context, event):
         return self.execute(context)
@@ -1786,25 +1777,9 @@ class ANIMATICA_PT_overlay(bpy.types.Panel):
         layout = self.layout
         layout.active = s.key_pose_overlay
         col = layout.column()
-        posing.draw_panel("popover", col, context)          # the Autoposer's motion trail
-        col.prop(s, "key_pose_ghosts", text="Onion Skin (Pose)")
-        onion = layout.column()
-        onion.active = s.key_pose_overlay and s.key_pose_ghosts
-        onion.row().prop(s, "onion_mode", expand=True)
-        split = onion.column()
-        split.use_property_split = True
-        split.use_property_decorate = False
-        if s.onion_mode in {'FRAMES', 'KEYFRAMES'}:
-            sub = split.column(align=True)
-            sub.prop(s, "onion_before", text="Before")
-            sub.prop(s, "onion_after", text="After")
-        if s.onion_mode == 'FRAMES':
-            split.prop(s, "onion_step", text="Step")
-            posing.draw_panel("popover_onion", split, context)    # the zoetrope
-        split.prop(s, "onion_opacity", text="Opacity", slider=True)
-        split.prop(s, "onion_fade", text="Fade")
-        split.prop(s, "onion_color_before", text="Before")
-        split.prop(s, "onion_color_after", text="After")
+        col.prop(s, "key_pose_ghosts", text="Ghosts (Key Poses)")
+        col.prop(s, "key_pose_labels", text="Frame Numbers")
+        posing.draw_panel("popover", col, context)          # Marionette's: onion skin, zoetrope, trail
 
 
 # ---------------------------------------------------------------------------

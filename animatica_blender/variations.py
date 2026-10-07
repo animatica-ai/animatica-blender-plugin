@@ -98,10 +98,7 @@ def show(context, arm, index: int) -> None:
     # the trail, the plan. A version can be baked into the same action, so
     # nothing else tells them (the ghosts stayed those of the first version)
     from . import key_poses
-    key_poses.set_onion_live({})         # a drag's ghosts (the Autoposer's) are of it too
-    key_poses._forget_ghosts()
-    key_poses.invalidate_plan()
-    key_poses.request_rebuild()
+    key_poses.motion_replaced()
 
 
 class ANIMATICA_OT_show_variation(Operator):
