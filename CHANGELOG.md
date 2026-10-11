@@ -8,10 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
-## [1.0.0] — preview
+## [1.0.0] — 2026-10-11
 
-The first 1.0 preview, as Animatica Choreographer. It includes everything in the 0.7.0
-previews below.
+Animatica Choreographer 1.0. It includes everything in the 0.7.0 previews below, which were
+never released on their own.
 
 ### Changed
 
@@ -32,6 +32,10 @@ previews below.
   frame, as in 0.6. The bar's Ghosts button switches them. (In the 0.7
   previews, the Frames onion skin replaced them.) The onion skin is now
   Marionette's.
+- **The bar with Marionette.** Marionette's tools for refining a take (the
+  reach of a drag, the Smooth Brush, Lock in Place, the Motion Check) sit
+  before Ghosts, and its views (the onion skin, the zoetrope, the trail)
+  after it.
 - **Renamed Animatica Choreographer.** The add-on is now listed as Animatica
   Choreographer, beside Animatica Marionette.
 - **Settings that moved.** Reach, Intensity, the onion skin's settings, the
@@ -57,9 +61,15 @@ previews below.
   Motion") and in the viewport's right-click menu.
 - **Fingers.** Fingers are not transferred yet. The target's own finger
   animation is kept.
+- **Marionette's suggestions in the hints.** With Marionette installed, the
+  line above the bar also shows what it suggests for the take on screen.
 
 ### Fixed
 
+- **A locked block shows it is locked.** It is drawn darker, framed in white,
+  with a padlock before its prompt (on a narrow block, the padlock alone).
+  Since the lock icon moved to Marionette, a locked block looked like any
+  other.
 - **Discard brings the ghosts back to your motion.** Throwing a take away
   (or keeping one, or switching versions) bakes the ghosts again, and
   Marionette's onion skin and trail, from the motion that is back.
