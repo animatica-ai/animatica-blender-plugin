@@ -142,6 +142,17 @@ def hint(context):
         return None
 
 
+def suggestion(context):
+    """A next step the editing add-on suggests for the motion showing (a hint like the others:
+    ``{id, text, why, op, props}``), or None."""
+    ed = editing()
+    fn = getattr(ed, "suggestion", None) if ed is not None else None
+    try:
+        return fn(context) if fn is not None else None
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
 def after_take(arm, action, start, end) -> None:
     """A take was baked over these frames (the locks over them hold again)."""
     ed = editing()

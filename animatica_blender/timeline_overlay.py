@@ -7,7 +7,9 @@ Drawn under Blender's own Timeline, in the floating bar's look (ui_style):
 * the blocks -- neutral tiles with the block's own colour as a swatch (the
   colour its ghosts and trail carry in the viewport); the one under the
   playhead lifted in mulberry, since that is the one the bar's Prompt and
-  Redo act on; the selected one outlined; a padlock on a locked one;
+  Redo act on; the selected one outlined; a locked one darker, framed in white
+  and led by a padlock -- the padlock alone where the block is too narrow for
+  its prompt too;
 * a waypoint rail below -- a flag per waypoint, dragged to retime it.
 
 Frame numbers show only when they are wanted: on the block under the mouse,
@@ -570,11 +572,15 @@ def _draw(context, region, props, window, key_pose_ticks, waypoint_frames):
 
         empty = _is_unconditioned(fr)
         is_under = i == under
+        locked = bool(getattr(fr, "locked", False))
         # The block in its own colour (the colour its ghosts and trail carry
         # in the viewport), deep enough for white text; lighter under the
-        # mouse and under the playhead.
+        # mouse and under the playhead. A locked one deeper: its motion is
+        # kept, settled -- it looked like any other, a small padlock aside
         sw = _strip_color(fr, i)
         lift = 0.86 if (i == hover or is_under) else 0.74
+        if locked:
+            lift = 0.62 if (i == hover or is_under) else 0.50
         fill = tuple(sw[c] * lift + st.TILE[c] * (1 - lift) for c in range(3)) + (1.0,)
         if empty:
             st.rounded(rect, r, _dim((1, 1, 1, 0.03), k))
@@ -587,6 +593,8 @@ def _draw(context, region, props, window, key_pose_ticks, waypoint_frames):
 
         if not fr.enabled:
             _hatch(rect, u)
+        if locked and not empty:
+            st.outline(rect, r, max(1.0, 1.2 * u), _dim((1, 1, 1, 0.55), k))     # framed: kept
 
         if generating and in_take:
             sx = fx(span[0]) + progress * (fx(span[1]) - fx(span[0]))
@@ -614,7 +622,6 @@ def _draw(context, region, props, window, key_pose_ticks, waypoint_frames):
                          max(1.0, 0.8 * u), gc)
 
         # --- what it says: frames at the edges, the prompt in the middle, its length under it
-        locked = bool(getattr(fr, "locked", False))
         tx = x0 + (8 + 3) * u if wide else x0 + 4 * u
         right = x1 - (8 + 3) * u if wide else x1 - 4 * u
         _font(TAG_SIZE * u)
@@ -626,10 +633,17 @@ def _draw(context, region, props, window, key_pose_ticks, waypoint_frames):
             _text(b_txt, right - bw, y, _dim(st.MUTED, k))
             tx += aw + 6 * u
             right -= bw + 6 * u
-        if locked and right - tx > LOCK_SIZE * u + MIN_LABEL_WIDTH * u:
-            ls = LOCK_SIZE * u
-            st.icon("lock", right - ls / 2, cy, ls, _dim((1, 1, 1, 0.75), k))
-            right -= ls + 4 * u
+        if locked:
+            # the padlock leads the prompt; with no room for both, it is shown alone: that the
+            # motion is kept matters more than the start of a cut-off prompt
+            ls = LOCK_SIZE * u * 1.2
+            if right - tx > ls + 4 * u + MIN_LABEL_WIDTH * u:
+                _padlock(tx + ls / 2, cy, ls, _dim(st.WHITE, k))
+                tx += ls + 4 * u
+            elif not (inline_edit_state["active"] and inline_edit_state["index"] == i):
+                if x1 - x0 > ls + 2 * u:
+                    _padlock((x0 + x1) / 2, cy, min(ls, (x1 - x0) - 2 * u), _dim(st.WHITE, k))
+                continue
         size = min(TEXT_SIZE * u, (g.b1 - g.b0) * 0.5)
         # room for a second line: the length under the prompt
         two_lines = (g.b1 - g.b0) >= (TEXT_SIZE + TAG_SIZE + 10) * u
@@ -728,6 +742,23 @@ def _dashed(rect, u, color):
     run(x0 + h, y0, x0 + h, y1)
     run(x1 - h, y0, x1 - h, y1)
     st.lines(segs, max(1.0, u * 0.75), color)
+
+
+def _padlock(cx, cy, size, color):
+    """A padlock ``size`` px tall centred on ``(cx, cy)``, drawn, not an icon: the lock icon
+    went with the editing tools to Animatica Marionette, and a locked block showed nothing."""
+    w = size * 0.70
+    body_h = size * 0.52
+    x0, x1 = cx - w / 2, cx + w / 2
+    y0 = cy - size / 2
+    y1 = y0 + body_h
+    st.rounded((x0, y0, x1, y1), size * 0.10, color)
+    # the shackle: a half ring over the body
+    rad = w * 0.30
+    top = y1 + size * 0.34 - rad
+    pts = [(cx + rad * math.cos(math.pi * i / 12), top + rad * math.sin(math.pi * i / 12)) for i in range(13)]
+    pts = [(cx + rad, y1)] + pts + [(cx - rad, y1)]
+    st.lines(list(zip(pts, pts[1:])), max(1.0, size * 0.13), color)
 
 
 def _hatch(rect, u):

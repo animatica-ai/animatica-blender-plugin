@@ -82,6 +82,11 @@ def next_step(context) -> dict | None:
                 "not sent. Stretch the block (click), or drag its edge in the Timeline",
             op="animatica.blocks_over_keys", props={}))
     pro = posing.present()          # the handles are Animatica Marionette's (a separate add-on)
+    if pro and (s.is_previewing or in_take):
+        # what the editing add-on has to say about the take showing (problems it found in it)
+        said = posing.suggestion(context)
+        if said:
+            out.append(said)
     if s.is_previewing:
         out.append(dict(
             id="review",

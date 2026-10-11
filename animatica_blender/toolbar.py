@@ -239,9 +239,10 @@ def _typing_pose() -> bool:
 
 
 def _bar_items(context, arm) -> list:
-    """Set keyframes, Generate, Accept, then fine-tune: the groups in that
-    order. The take's own buttons (Generate, or Accept and Reject while one
-    waits) sit after the field that says what it is."""
+    """Pose, key, direct the take, refine it, see it: the groups in that
+    order (Marionette's bar has the same, without directing the take). The
+    take's own buttons (Generate, or Accept and Reject while one waits) sit
+    after the field that says what it is."""
     from . import key_poses, mmcp_client
     from . import posing as pro
     s = context.scene.animatica
@@ -318,11 +319,17 @@ def _bar_items(context, arm) -> list:
             label = "Generate"
         out.append(Item("generate", "generate", "animatica.toolbar_generate", label=label,
                         primary=kind == "ready", enabled=kind == "ready", group=5))
-    # 8 see the plan: the key poses as ghosts; then, with Marionette, editing the motion
-    # (the onion skin, the zoetrope, the trail, the reach of an edit, Smooth, Lock in Place)
+    # 7.5 refine the take, with Marionette: the reach of a drag, the Smooth Brush, Lock in Place,
+    # the Motion Check
+    tools = [_from_pro(d) for d in pro.bar_items(context, arm, "tools")]
+    view = [_from_pro(d) for d in pro.bar_items(context, arm, "view")]
+    if not tools and not view:
+        view = [_from_pro(d) for d in pro.bar_items(context, arm, "edit")]   # a Marionette giving them together
+    out += tools
+    # 8 see it: the key poses as ghosts, then Marionette's onion skin, zoetrope and trail
     out.append(Item("ghosts", "ghost", "animatica.toolbar_overlay", {"part": "GHOSTS"},
                     on=key_poses.ghosts_on(s), group=8))
-    out += [_from_pro(d) for d in pro.bar_items(context, arm, "edit")]
+    out += view
     # the whole motion onto another character: copy it off this one, paste it there
     out += _clipboard_items(context, group=8.5)
     out.append(Item("options", "options", "animatica.toolbar_menu", {"menu": "ANIMATICA_PT_options"},
