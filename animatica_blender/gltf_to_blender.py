@@ -1902,10 +1902,16 @@ def bake_single_pose(
 
     rotations = _RotationBaker(armature_obj, nodes)
 
-    if root_translation not in ("skip", "height_only", "full"):
+    if root_translation not in ("skip", "height_only", "on_ground", "full"):
         raise ValueError(
-            f"root_translation must be 'skip', 'height_only', or 'full', got {root_translation!r}"
+            "root_translation must be 'skip', 'height_only', 'on_ground' or 'full', "
+            f"got {root_translation!r}"
         )
+    # On the ground: placed as height_only, then moved so the pose's lowest
+    # point touches the ground. The model's own height is not to be trusted
+    # for that: asked for "a person running down stairs" it stood the pose
+    # 0.8 m up, on steps only it could see.
+    seated = None          # (root pose bone, its ML, the ground) once placed
 
     written = 0
     for ch in channels:
@@ -1944,14 +1950,18 @@ def bake_single_pose(
             p_mmcp = tuple(vec3s[source_frame * 3:(source_frame + 1) * 3])
             pose_world = Vector(coords.mmcp_pos_to_blender(p_mmcp))
 
-            if root_translation == "height_only":
+            if root_translation in ("height_only", "on_ground"):
                 # Keep the bone's current world xy (whatever the user has
                 # placed the rig at, including any prior keyframe at this
                 # frame) and only override world z with the generated pose's
                 # height. Lets a "crouching" pose drop toward the floor
                 # without yanking the character to the canonical origin in xy.
+                # The height is over the ground under the character, not
+                # over world Z=0: on a roof below 0 the pose came out lifted
+                # to 0, standing on air (see _ground_under).
                 current_world = armature_obj.matrix_world @ bone.head
-                target_world = Vector((current_world.x, current_world.y, pose_world.z))
+                floor = _ground_under(armature_obj, current_world)
+                target_world = Vector((current_world.x, current_world.y, floor + pose_world.z))
             else:  # "full"
                 target_world = pose_world
 
@@ -1959,8 +1969,13 @@ def bake_single_pose(
             delta = arm_local - bone.bone.head_local
             bone.location = ML.transposed() @ delta
             bone.keyframe_insert(data_path="location", frame=target_frame)
+            if root_translation == "on_ground":
+                seated = (bone, ML, floor)
 
         written += 1
+
+    if seated is not None:
+        _stand_on_ground(armature_obj, *seated, target_frame)
 
     if written:
         if request_builder.is_control_rig(armature_obj):
@@ -1981,6 +1996,45 @@ def bake_single_pose(
         )
 
     return written
+
+
+def _stand_on_ground(armature_obj, bone, ML, floor: float, frame: int) -> None:
+    """Move the keyed pose up or down so its lowest point is on ``floor``.
+
+    The pose is evaluated as keyed (the scene goes to ``frame`` for it) and
+    the lowest joint -- a heel, a toe, a knee for a kneel -- is measured; the
+    root's location key takes the difference."""
+    scene = bpy.context.scene
+    was = scene.frame_current
+    if was != frame:
+        scene.frame_set(frame)
+    else:
+        bpy.context.view_layer.update()
+    mw = armature_obj.matrix_world
+    low = min(min((mw @ pb.head).z, (mw @ pb.tail).z) for pb in armature_obj.pose.bones
+              if pb.bone.use_deform)
+    dz = floor - low
+    if abs(dz) > 1e-4:
+        shift = mw.inverted().to_3x3() @ Vector((0.0, 0.0, dz))
+        bone.location = bone.location + ML.transposed() @ shift
+        bone.keyframe_insert(data_path="location", frame=frame)
+    if was != frame:
+        scene.frame_set(was)
+
+
+def _ground_under(armature_obj, at: Vector) -> float:
+    """World height of the ground under ``at`` (the root, where it stands):
+    the scene's surfaces, as the Autoposer and the waypoints read them, from
+    just above it and past the character's own meshes. With nothing there,
+    the armature's base plane, which is where the model's floor sits."""
+    from . import ground
+
+    try:
+        z = ground.surface_below(bpy.context.scene, at.x, at.y, at.z + ground.RAY_HEADROOM,
+                                 arm=armature_obj)
+    except Exception:                       # noqa: BLE001 -- a pose still lands
+        z = None
+    return float(z) if z is not None else float(armature_obj.matrix_world.translation.z)
 
 
 # ---------------------------------------------------------------------------

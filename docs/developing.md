@@ -10,7 +10,6 @@ cd animatica-blender-plugin
 make zip          # → dist/animatica-blender-X.Y.Z.zip
 make install      # symlink into Blender addons (reload addon after edits)
 make uninstall
-make zip-with-model MODEL_DIR=<bundle>   # a test build that carries the Autoposer model
 ```
 
 A linked install is a development checkout: the built-in updater refuses to
@@ -25,8 +24,10 @@ Override: `make install BLENDER_ADDONS_DIR=/path/to/scripts/addons`
 
 Python package: `animatica_blender/` — operators in `operators.py`, UI in
 `panels.py`, request assembly in `request_builder.py`, animation bake in
-`gltf_to_blender.py`, updates in `updater.py`, example scenes in `examples.py`,
-the Autoposer in `autoposer/`.
+`gltf_to_blender.py`, updates in `updater.py`, example scenes in `examples.py`.
+Posing and editing by hand are Animatica Marionette, a separate add-on;
+`posing.py` is the one place this add-on reaches it, and every call there is a
+no-op without it (`tests/test_without_pro.py`).
 
 Tests: `tests/` holds scripts that run inside Blender without a server, one
 per behaviour they guard. Headless:
@@ -46,9 +47,8 @@ blender --factory-startup --python tests/test_gui_object_rotation.py
 
 ## Protocol & servers
 
-The addon is an MMCP client. Generation runs on the server; the only model
-that runs inside Blender is the optional Autoposer (onnxruntime, downloaded on
-request).
+The addon is an MMCP client. Generation runs on the server; no model runs
+inside Blender.
 
 - [MMCP protocol](https://animatica.ai/mmcp)
 - [MMCP implementations](https://animatica.ai/mmcp/docs/get-started/implementations)

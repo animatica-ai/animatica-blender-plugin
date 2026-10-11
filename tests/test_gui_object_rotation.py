@@ -286,9 +286,12 @@ def scenario_generate(subject, take, frames, yaw, ref):
     check("preview vs yaw-0 bake", *max_diff(world_pose(arm, frames), ref))
     with bpy.context.temp_override(**override()):
         ret = bpy.ops.animatica.accept()
-    note(accept=sorted(ret), nla=[t.name for t in arm.animation_data.nla_tracks])
-    assert arm.animation_data.nla_tracks, "Accept left no NLA track"
-    check("accepted (NLA) vs yaw-0 bake", *max_diff(world_pose(arm, frames), ref))
+    act = arm.animation_data.action
+    note(accept=sorted(ret), action=act.name if act else None)
+    # Accept keeps the take on the rig as the artist's own action (0.7: no
+    # NLA track per block), and locks its blocks
+    assert act is not None and not act.name.startswith("Animatica_Motion"), "Accept left no action of the artist's"
+    check("accepted vs yaw-0 bake", *max_diff(world_pose(arm, frames), ref))
     n = len(frames)
     screenshot("generate", arm, [frames[n // 4], frames[n // 2], frames[3 * n // 4]])
 

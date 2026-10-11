@@ -94,18 +94,24 @@ def show(context, arm, index: int) -> None:
         action.name = name
     take.index = index
     take.action_name = action.name
+    # everything drawn from the motion is of the version before: the ghosts,
+    # the trail, the plan. A version can be baked into the same action, so
+    # nothing else tells them (the ghosts stayed those of the first version)
+    from . import key_poses
+    key_poses.motion_replaced()
 
 
 class ANIMATICA_OT_show_variation(Operator):
     bl_idname = "animatica.show_variation"
     bl_label = "Show Variation"
-    bl_description = "Show another version of this take. No new generation"
+    bl_description = "Show another version of this take, without generating again"
     bl_options = {'REGISTER', 'UNDO'}
 
     step: IntProperty(default=1)
+    index: IntProperty(default=-1, description="Show this version (from 0); -1 steps by Step instead")
     character: StringProperty(
         default="",
-        description="The character whose take to switch: empty for the active one, "
+        description="The character whose take to switch. Leave empty for the active one, or use "
                     "\"*\" for every character in the batch review",
     )
 
@@ -136,9 +142,9 @@ class ANIMATICA_OT_show_variation(Operator):
             return {'CANCELLED'}
         for arm in targets:
             try:
-                show(context, arm, take_of(arm).index + self.step)
+                show(context, arm, self.index if self.index >= 0 else take_of(arm).index + self.step)
             except Exception as exc:  # noqa: BLE001 — surfaced to the UI
-                self.report({'ERROR'}, f"{arm.name}: could not switch: {exc}")
+                self.report({'ERROR'}, f"Could not switch the take of {arm.name}: {exc}")
                 return {'CANCELLED'}
         return {'FINISHED'}
 
