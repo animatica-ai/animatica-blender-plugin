@@ -253,7 +253,10 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
             row = col.row()
             row.scale_y = 1.5
             if settings.batch_total:
-                row.label(text=f"Working… {settings.batch_done} of {settings.batch_total}"
+                # how many are back only once some are: a batched request
+                # answers them all at once
+                done, total = settings.batch_done, settings.batch_total
+                row.label(text=f"Working… {f'{done} of {total}' if done else total}"
                                f" characters · {elapsed}s", icon='SORTTIME')
             else:
                 row.label(text=f"Working… {elapsed}s", icon='SORTTIME')
@@ -316,7 +319,7 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
         # Every run is a new take (seed 0), so "again" is what it does; for a
         # batch, again for every take waiting.
         if batch.pending(settings):
-            row.operator("animatica.generate_batch", text="Regenerate All",
+            row.operator("animatica.generate_batch", text="Redo All",
                          icon='FILE_REFRESH').characters = json.dumps(batch.pending(settings))
         elif mmcp_client.needs_sign_in() and not in_preview:
             # the step that is missing, as the button: it signs in, then generates
@@ -650,10 +653,11 @@ def _draw_review(layout, context, settings, arm) -> None:
                               text="Regenerate Active Block")
             op.block_index = -1
     else:
+        # in the bar's words, as for one take
         row.operator("animatica.accept_batch", icon='CHECKMARK',
-                     text="Accept All" if n > 1 else "Accept")
+                     text="Keep All" if n > 1 else "Keep")
         row.operator("animatica.reject_batch", icon='X',
-                     text="Reject All" if n > 1 else "Reject")
+                     text="Discard All" if n > 1 else "Discard" if n else "Dismiss")
     layout.separator()
 
 

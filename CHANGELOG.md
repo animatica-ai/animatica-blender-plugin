@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [Unreleased]
+
+### Added
+
+- **The floating bar generates several characters at once.** With two or
+  more characters selected, its Generate makes a take for each: **Generate N
+  Characters**, or **Generate 2 of 3** when one has no prompt (the tooltip
+  says who is left out and why). **Shared**, beside it, gives every character
+  the active one's prompts, each with its own seed. While they are made, the
+  working button says how many (and how many are back, once some are: the
+  cloud answers them all at once). Then the bar has **Keep All**, **Redo
+  All**, a button per version for the whole crowd, and **Discard All**, and
+  the hint above it says what each does. The hint also offers the typed
+  prompt to selected characters that have none. Sign in to Generate makes
+  them all once signed in.
+
+### Fixed
+
+- Ctrl+Z back to a Generate click no longer leaves the bar on Cancel with
+  nothing running, and a batch's count ("0 of 2") no longer comes back on the
+  next single take. After an undo, "generating" is whether a take is really
+  being made.
+- Generating several characters is one undo step when the takes are in, as a
+  single Generate is: Ctrl+Z after Discard All brings the takes back.
+
+### Changed
+
+- The panel's batch review uses the bar's words: **Keep All**, **Redo All**
+  and **Discard All** (were Accept All, Regenerate All and Reject All). Their
+  tooltips no longer say a kept take moves to the NLA.
+
 ## [1.0.0] — 2026-10-11
 
 Animatica Choreographer 1.0. It includes everything in the 0.7.0 previews below, which were

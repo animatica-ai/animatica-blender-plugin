@@ -122,9 +122,11 @@ A few things you can rely on:
 
 ### Several characters at once
 
-Select two or more characters and the panel offers **Generate N Characters**,
-with a line saying how many generations it will cost. Choose how they are
-directed:
+Select two or more characters and the floating bar's Generate becomes
+**Generate N Characters** (or **Generate 2 of 3** when one has no prompt; its
+tooltip says who is left out and why). The panel offers the same button, with
+a line saying how many generations it will cost. Choose how they are directed
+with **Shared**, beside the bar's Generate, or in the panel:
 
 - **Each Their Own** — every character uses its own prompts, key poses,
   waypoints and pins. For a scene with distinct actors.
@@ -132,13 +134,16 @@ directed:
   its own seed, starting from where it stands: variations on one action, for a
   crowd. Waypoints and pins are left out.
 
-They are sent together, in one request when the server takes batches. The
-review then has a row per character, with its own ✓ (keep), ✗ (throw away)
-and ↻ (generate that one again). **Accept All** and **Reject All** act on all
-of them, and **Regenerate All** makes every waiting take again. With
-**Variations** above 1, each row has its own arrows, and **All: next
-variation** flips the whole crowd. **In place** acts on every take waiting. A
-character that failed is listed with the reason and does not stop the rest.
+They are sent together, in one request when the server takes batches; the
+bar's working button says how many it is making. Then the bar has **Keep All**, **Redo
+All** (failed characters go again too), a button per version that flips every
+character, and **Discard All**. In the panel, the review has a row per
+character, with its own ✓ (keep), ✗ (throw away) and ↻ (generate that one
+again). **Keep All** and **Discard All** act on all of them, and **Redo All**
+makes every waiting take again. With **Variations** above 1, each row has its
+own arrows, and **All: next variation** flips the whole crowd. **In place**
+acts on every take waiting. A character that failed is listed with the reason
+and does not stop the rest.
 
 ## The Pose panel
 

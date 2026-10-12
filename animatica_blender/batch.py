@@ -59,6 +59,45 @@ def selected_characters(context) -> list:
     return [found[n] for n in sorted(found)]
 
 
+def batch_selection(context) -> list:
+    """The selected characters when the next Generate makes them all: two or
+    more selected, nothing being made, and no take waiting to be judged (a
+    single take or a batch's) -- that comes first. Empty otherwise."""
+    s = getattr(context.scene, "animatica", None)
+    if s is None or s.is_generating or s.is_previewing or pending(s) or failures(s):
+        return []
+    chars = selected_characters(context)
+    return chars if len(chars) >= 2 else []
+
+
+def readiness(context, chars) -> list:
+    """``(character, why)`` for each of ``chars``: why Generate would leave it
+    out, or empty when it goes. The batch's own rule (no prompt, no take),
+    then what a single Generate asks (request_builder.generation_blockers),
+    so the button can say how many go before it is pressed."""
+    scene = context.scene
+    s = scene.animatica
+    caps = mmcp_client.cached_model(s.model_id)
+    shared = _snapshot(s.prompt_blocks) if s.batch_direction == 'SHARED' else None
+    out = []
+    for arm in chars:
+        blocks = shared if shared is not None else _blocks_of(arm, s)
+        if not any((getattr(b, "prompt", "") or "").strip() for b in blocks):
+            out.append((arm, "no prompt"))
+            continue
+        try:
+            why = request_builder.generation_blockers(
+                scene=scene, prompt_blocks=blocks, model_caps=caps, pose_frames=None,
+                constraint_objects=None if shared is not None
+                else constraints_ui.walk_scene_constraints(scene, owner=arm),
+                armature_obj=arm,
+            )
+        except Exception:       # noqa: BLE001 — the send says it, if this could not
+            why = []
+        out.append((arm, why[0] if why else ""))
+    return out
+
+
 def pending(settings) -> list:
     """Names of the characters whose batch take waits for Accept / Reject."""
     try:
@@ -103,6 +142,7 @@ class _Job:
     looped: bool
     future: object = None
     done: bool = False
+    ok: bool = False                # its take is on the character, waiting for review
     error: str = ""
     extra: dict = field(default_factory=dict)
 
@@ -147,9 +187,13 @@ class ANIMATICA_OT_generate_batch(Operator):
     bl_description = (
         "Generate every selected character at once, one generation each. Each "
         "character uses its own prompts, or all share the active character's "
-        "prompts with a different seed each. The takes wait for Accept All or "
-        "Reject All"
+        "prompts with a different seed each. The takes wait for Keep All or "
+        "Discard All"
     )
+    # One undo step when the takes are in, as a single Generate has: without
+    # it, Ctrl+Z after Discard All went back past the takes to the moment the
+    # batch started
+    bl_options = {'UNDO'}
 
     characters: StringProperty(
         default="",
@@ -162,6 +206,8 @@ class ANIMATICA_OT_generate_batch(Operator):
     _timer = None
     _pool: ThreadPoolExecutor | None = None
     _jobs: list | None = None
+    _skipped: list = []             # (reassigned per run, never changed in place)
+    _failed_before: list = []
 
     @classmethod
     def description(cls, context, props):
@@ -272,10 +318,12 @@ class ANIMATICA_OT_generate_batch(Operator):
         settings.generation_elapsed = 0
         settings.batch_total = len(jobs)
         settings.batch_done = 0
-        # Failures of characters being tried again are old news.
-        again = {j.name for j in jobs}
-        settings.batch_failed = json.dumps(
-            [f for f in failures(settings) if f.split(":")[0] not in again] + skipped)
+        # Failures of characters being tried again are old news. The list is
+        # written when the batch ends, not now: this is the moment the bar's
+        # click records as its undo step, and Ctrl+Z back to it showed this
+        # batch's failures with no batch behind them.
+        again = {j.name for j in jobs} | {line.split(":")[0] for line in skipped}
+        self._failed_before = [f for f in failures(settings) if f.split(":")[0] not in again]
         import time
         self._start = time.time()
         wm = context.window_manager
@@ -328,13 +376,16 @@ class ANIMATICA_OT_generate_batch(Operator):
                 arm[_PENDING_KEY] = json.dumps({"source": job.source_name})
                 settings.batch_pending = json.dumps(
                     [n for n in pending(settings) if n != job.name] + [job.name])
-                settings.batch_done += 1
+                job.ok = True
             except Exception as exc:  # noqa: BLE001 — one character's failure is not the batch's
                 operators._stash_quota_state(settings, exc)
                 self._quota_hit = self._quota_hit or getattr(exc, "code", None) == "quota_exceeded"
-                job.error = str(exc)
-                settings.batch_failed = json.dumps(failures(settings) + [f"{job.name}: {exc}"])
+                job.error = str(exc) or type(exc).__name__
 
+        # the count from the jobs themselves, each tick: an undo while they are
+        # made puts back the numbers of the step it returns to
+        settings.batch_total = len(self._jobs)
+        settings.batch_done = sum(1 for j in self._jobs if j.ok)
         if all(j.done for j in self._jobs):
             self._finish(context)
             if self._quota_hit:
@@ -360,6 +411,9 @@ class ANIMATICA_OT_generate_batch(Operator):
         settings.is_generating = False
         settings.cancel_requested = False
         settings.batch_total = 0
+        settings.batch_failed = json.dumps(
+            self._failed_before + self._skipped
+            + [f"{j.name}: {j.error}" for j in self._jobs or () if j.done and not j.ok])
 
 
 def _review(context, op_name: str, names: list | None = None) -> int:
@@ -419,7 +473,8 @@ def _refuse_in_tweak_mode(op, context, names: list | None = None) -> bool:
 class ANIMATICA_OT_accept_batch(Operator):
     bl_idname = "animatica.accept_batch"
     bl_label = "Accept All"
-    bl_description = "Keep every character's take. Each one moves to its own NLA track"
+    bl_description = ("Keep every character's take. Each becomes that character's own action, "
+                      "and the blocks it made are locked")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -464,7 +519,7 @@ class ANIMATICA_OT_review_one(Operator):
 
     @classmethod
     def description(cls, context, props):
-        return (f"Keep {props.character}'s take: it moves to its NLA track" if props.keep
+        return (f"Keep {props.character}'s take: it becomes {props.character}'s own action" if props.keep
                 else f"Throw {props.character}'s take away and go back to what it had")
 
     @classmethod
