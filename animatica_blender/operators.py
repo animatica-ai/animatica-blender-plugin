@@ -1452,6 +1452,7 @@ class ANIMATICA_OT_cancel_generation(Operator):
             s.is_generating = False
             s.cancel_requested = False
             s.generation_progress = 0.0
+            s.batch_total = 0               # a batch's count with it, or the next take showed it
             self.report({'INFO'}, "Cleared a generation that was no longer running")
             return {'FINISHED'}
         s.cancel_requested = True
@@ -2312,8 +2313,16 @@ def _generate_when_connected(started: float):
     if region is None:
         return None
     with ctx.temp_override(window=win, screen=win.screen, area=area, region=region):
+        from . import batch
         kind, text, _op = toolbar.gate(bpy.context)
-        if kind == "ready":
+        if kind in ("ready", "blocked") and batch.batch_selection(bpy.context):
+            # pressed with several characters selected: the take of each (it
+            # says itself who it leaves out)
+            try:
+                bpy.ops.animatica.generate_batch('INVOKE_DEFAULT')
+            except RuntimeError as exc:
+                print(f"[animatica] signed in; not generating yet: {exc}")
+        elif kind == "ready":
             bpy.ops.animatica.generate('INVOKE_DEFAULT')
         elif kind == "blocked":
             # signed in; the take still needs something only the artist can give

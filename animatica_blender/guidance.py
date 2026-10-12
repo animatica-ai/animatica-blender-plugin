@@ -71,6 +71,26 @@ def next_step(context) -> dict | None:
             why="Nothing in your scene changed. Click the hint or Generate to try again. "
                 "The full error is in Blender's system console",
             op="animatica.toolbar_generate", props={}))
+    from . import batch, toolbar
+    waiting, failures = batch.pending(s), batch.failures(s)
+    if waiting or failures:
+        # a batch's takes in front of you: what each button on the bar does with them
+        n = len(waiting)
+        if n > 1:
+            text = (f"Judge the {n} takes: Keep All keeps them · Redo All tries again "
+                    "· Discard All throws them away")
+        elif n:
+            text = "Judge the take: Keep keeps it · Redo tries again · Discard throws it away"
+        else:
+            text = "No take was made. Redo tries again, and the sidebar (N) says why"
+        if n and failures:
+            text += f" · {len(failures)} failed"
+        out.append(dict(
+            id="batch_review", text=text,
+            why="Each selected character got a take of its own. Keep keeps them as their own actions "
+                "and locks their blocks. The number buttons flip every character to another version. "
+                "To keep, redo or discard one character alone, use its row in the sidebar (N)",
+            op=None, props={}))
     dropped = key_poses.dropped_frames(scene) if not s.is_previewing else []
     if dropped:
         lo, hi = _window(context)
@@ -96,6 +116,8 @@ def next_step(context) -> dict | None:
                 "edit on it keeps it and locks its blocks, so a later Generate leaves them alone. "
                 "Key This Frame turns a frame you like into a key pose, and a Redo then passes through it",
             op=None, props={}))
+    elif waiting or failures:
+        pass                        # the batch's hint, above
     elif in_take and pro:
         # an accepted take under the playhead: fine-tune it
         out.append(dict(
@@ -114,7 +136,21 @@ def next_step(context) -> dict | None:
                 "carry an edit through the frames around it). A key pose set on the take stays, and "
                 "Redo makes the motion around it again",
             op=None, props={}))
-    busy = s.is_previewing or in_take
+    busy = s.is_previewing or in_take or bool(waiting or failures)
+    chars = [] if busy else batch.batch_selection(context)
+    ready = toolbar.batch_readiness(context, chars) if chars else []
+    bare = [name for name, why in ready if why == "no prompt"]
+    if chars and bare and s.batch_direction == 'OWN' and text_all.strip():
+        # several selected, and only some told what to do: the prompt typed can be everyone's
+        out.append(dict(
+            id="batch_shared",
+            text=f"{toolbar._names(bare)} {'has' if len(bare) == 1 else 'have'} no prompt. "
+                 f"Click to share {arm.name}'s with every selected character",
+            why="With Shared on, every selected character does the active character's prompts, each with "
+                "its own seed and from where it stands. Without it, a character with no prompt is left out. "
+                "To give one its own, Shift-click it so it is the active one, and type its prompt",
+            op="wm.context_toggle_enum",
+            props={"data_path": "scene.animatica.batch_direction", "value_1": 'OWN', "value_2": 'SHARED'}))
     if not busy and (not blocks or unprompted or not text_all.strip()):
         out.append(dict(
             id="motion_prompt",
@@ -141,7 +177,24 @@ def next_step(context) -> dict | None:
                 why="The model follows one instruction per block most closely. In a long block "
                     "with several actions they blur together. Split it in two to keep each one clear",
                 op=None, props={}))
-        if blocks and not unprompted:
+        go = [name for name, why in ready if not why]
+        if go:
+            # Generate makes every selected character: the ready line says so, and from whose prompts
+            count = f"{len(chars)} characters" if len(go) == len(chars) else f"{len(go)} of the {len(chars)}"
+            if s.batch_direction == 'SHARED':
+                text = f"Ready: Generate {count}, all doing {arm.name}'s prompts"
+                why = ("Every selected character does the active character's prompts, each with its own "
+                       "seed and from where it stands, so they differ like a crowd. Waypoints and pins are "
+                       "left out. Turn off Shared to have each follow its own")
+            else:
+                text = f"Ready: Generate {count}, each from its own prompts"
+                why = ("Each selected character gets a take of its own, from its own prompts, key poses "
+                       "and waypoints, all in one go. Turn on Shared to give them all the active "
+                       "character's prompts instead")
+            out.append(dict(id="batch_ready", text=text, why=why, op="animatica.toolbar_generate", props={}))
+        elif chars:
+            pass                    # the button says what stops them; the single take's Ready would mislead
+        elif blocks and not unprompted:
             if not keys:
                 text = "Ready: Generate. Key a pose first if you want to steer it"
                 why = ("Every block has a prompt, so Generate makes the motion. Without key poses "

@@ -24,6 +24,7 @@ with the viewport's Show Gizmo switch, as the navigation buttons do.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import struct
@@ -70,7 +71,8 @@ POSE_FIELD = -2
 #: the buttons of the take slot, whose widths the prompt field gives way to
 TAKE_IDS = {"connect", "generate", "working", "redo", "var_prev", "var_label", "var_next", "loop",
             *(f"var_{i}" for i in range(8)),
-            "reject", "generate_pose"}
+            "reject", "generate_pose",
+            "batch_shared", "keep_all", "redo_all", "discard_all"}
 EXPECTED_SECONDS = 30.0
 
 
@@ -285,14 +287,23 @@ def _bar_items(context, arm) -> list:
                     enabled=can("describe") and not s.is_generating, group=4, width="field_btn"))
     # 5-7 the take: Generate, or the take at work, or the take to judge
     kind, text, op = gate(context)
-    busy = s.is_generating or s.is_previewing
+    # the takes to judge, one or a batch's: they come before anything new
+    review = _review_items(context, arm, keyed) or _batch_review_items(context)
+    busy = s.is_generating or s.is_previewing or bool(review)
+    # several characters selected: Generate makes them all
+    from . import batch
+    chars = [] if posing or busy else batch.batch_selection(context)
     # a loop is one way to make it, not a setting: beside Generate
     model = mmcp_client.cached_model(s.model_id) or {}
     if model.get("supports_loop") and not posing:
         one = sum(1 for b in s.prompt_blocks if getattr(b, "enabled", True)) <= 1
         out.append(Item("loop", "loop", "animatica.toolbar_toggle", {"name": "loop"}, on=bool(s.loop),
                         enabled=(one or s.loop) and not s.is_generating, group=5))
-    review = _review_items(context, arm, keyed)
+    if chars and kind in ("sign_in", "ready", "blocked"):
+        # whose prompts they follow, beside the button that makes them
+        out.append(Item("batch_shared", "", "wm.context_toggle_enum",
+                        {"data_path": "scene.animatica.batch_direction", "value_1": 'OWN', "value_2": 'SHARED'},
+                        label="Shared", on=s.batch_direction == 'SHARED', group=5))
     if kind in ("offline", "connect") and not busy:
         out.append(_server_item(kind, text, op, group=5))
     elif kind == "model" and not busy:
@@ -309,6 +320,8 @@ def _bar_items(context, arm) -> list:
         words = (s.last_pose_prompt or "").strip()
         out.append(Item("generate_pose", "generate", "animatica.toolbar_pose_generate",
                         label="Generate Pose", primary=bool(words) and not why, enabled=not why, group=5))
+    elif chars:
+        out.append(_batch_generate_item(context, chars))
     else:
         # blocked: the button says what is missing (short enough to read), the tooltip the rest
         if kind == "blocked" and len(text) <= 24:
@@ -424,10 +437,89 @@ def _more_to_make(context, arm) -> bool:
 
 def _working(s):
     elapsed = float(getattr(s, "generation_elapsed", 0))
+    progress = 1.0 - math.exp(-elapsed / EXPECTED_SECONDS)
+    label = f"{int(elapsed)} s  ·  Cancel"
+    if s.batch_total:
+        # several characters: how many, then how many are back once some are (a model that
+        # takes batches answers them all at once, and "0 of 2" sat there the whole wait),
+        # and the fill never behind them
+        progress = max(progress, s.batch_done / s.batch_total)
+        head = f"{s.batch_done} of {s.batch_total}" if s.batch_done else f"{s.batch_total} characters"
+        label = f"{head}  ·  " + label
     # one button, the width Generate had: the time it has taken, filling, and
     # a click on it cancels -- a Cancel beside it made the bar jump
-    return Item("working", "cancel", "animatica.cancel", label=f"{int(elapsed)} s  ·  Cancel",
-                group=5, progress=1.0 - math.exp(-elapsed / EXPECTED_SECONDS))
+    return Item("working", "cancel", "animatica.cancel", label=label, group=5, progress=progress)
+
+
+#: the batch readiness the bar last asked for: by the characters and the direction, and for
+#: half a second at most (names only: an object kept here could be gone by the next draw)
+_batch_cache: dict = {"at": 0.0, "key": None, "ready": []}
+
+
+def batch_readiness(context, chars) -> list:
+    """``(name, why)`` for each selected character (batch.readiness), at most
+    twice a second, since the bar redraws often; at once when the selection
+    or the direction changes."""
+    from . import properties
+    s = context.scene.animatica
+    active = properties._live_armature(s.target_armature)
+    key = (tuple(a.name for a in chars), s.batch_direction, active.name if active is not None else "")
+    now = time.monotonic()
+    if _batch_cache["key"] != key or now - _batch_cache["at"] >= 0.5:
+        from . import batch
+        try:
+            ready = [(a.name, why) for a, why in batch.readiness(context, chars)]
+        except Exception:                       # noqa: BLE001 -- never break the bar
+            ready = [(a.name, "") for a in chars]
+        _batch_cache.update(at=now, key=key, ready=ready)
+    return _batch_cache["ready"]
+
+
+def _batch_generate_item(context, chars) -> Item:
+    """Generate, for every selected character: how many go, or what stops them all."""
+    ready = batch_readiness(context, chars)
+    go = sum(1 for _name, why in ready if not why)
+    n = len(chars)
+    if not go:
+        why = next((w for _name, w in ready if w), "")
+        why = "Type a prompt first" if why == "no prompt" else why
+        return Item("generate", "generate", "animatica.toolbar_generate",
+                    label=why if len(why) <= 24 else "Generate", enabled=False, group=5)
+    label = f"Generate {n} Characters" if go == n else f"Generate {go} of {n}"
+    return Item("generate", "generate", "animatica.toolbar_generate", label=label, primary=True, group=5)
+
+
+def _batch_review_items(context) -> list:
+    """A batch's takes waiting: Keep All, Redo All, their versions, Discard
+    All, for every character at once (the sidebar has a row a character, to
+    keep or redo one alone). Empty when there is none."""
+    from . import batch, properties, variations
+    s = context.scene.animatica
+    names, failed = batch.pending(s), batch.failures(s)
+    if s.is_generating or not (names or failed):
+        return []
+    arms = [a for a in (properties._live_armature(bpy.data.objects.get(n)) for n in names) if a is not None]
+    # the ones that failed go again with Redo, as the sidebar's retry does
+    retry = [n for n in dict.fromkeys(f.split(":")[0] for f in failed)
+             if n not in names and properties._live_armature(bpy.data.objects.get(n)) is not None]
+    out = []
+    if arms:
+        out.append(Item("keep_all", "accept", "animatica.accept_batch",
+                        label="Keep All" if len(arms) > 1 else "Keep", primary=True, group=5))
+    again = [a.name for a in arms] + retry
+    if again:
+        out.append(Item("redo_all", "redo", "animatica.generate_batch", {"characters": json.dumps(again)},
+                        label="Redo All" if len(again) > 1 else "Redo", group=6))
+    takes = [t for t in (variations.take_of(a) for a in arms) if t is not None]
+    count = max((t.count for t in takes), default=0)
+    if count > 1:
+        # one button a version, for every character: the crowd flips together
+        for i in range(min(count, 8)):
+            out.append(Item(f"var_{i}", "", "animatica.show_variation", {"index": i, "character": "*"},
+                            label=str(i + 1), on=i == takes[0].index, group=6))
+    out.append(Item("discard_all", "reject", "animatica.reject_batch",
+                    label="Discard All" if len(arms) > 1 else "Discard" if arms else "Dismiss", group=7))
+    return out
 
 
 def _setup_items(context) -> list:
@@ -583,7 +675,7 @@ def _shelf_lift(area, region) -> float:
 #: what goes first when even the compact bar does not fit, and where it is then:
 #: the Options popover beside Generate shows whatever was folded into it. The
 #: Autoposer's buttons say their own place on the same scale (Item.fold)
-FOLD = {"copy_paste": 0, "pin": 2, "waypoint": 3, "ghosts": 7.5, "model": 9, "auto_key": 10,
+FOLD = {"copy_paste": 0, "pin": 2, "waypoint": 3, "ghosts": 7.5, "batch_shared": 8, "model": 9, "auto_key": 10,
         "key_steps": 11, "set_key": 13}
 #: folded together: one without the other would be half a control
 _FOLD_TOGETHER = {"key_steps": ("key_prev", "key_next"), "copy_paste": ("copy_motion", "paste_motion")}
@@ -1040,6 +1132,10 @@ TIPS = {
     "copy_motion": ("Copy Motion", "Copy the selected keys of the selected character (one key for a pose, many for a stretch of motion), to paste onto another character. The rigs don't need to match: the motion is retargeted when it is pasted"),
     "paste_motion": ("Paste Motion", "Paste the copied keys onto the selected character, retargeted to its skeleton, the first one on the playhead. Its keys in that stretch are replaced, the rest of its animation is kept"),
     "keep": ("Key This Frame", "Keep the take's pose at this frame as a key pose. The next Redo passes through it, so the moment stays when you retry"),
+    "batch_shared": ("Shared Prompts", "When on, every selected character does the active character's prompts, each with its own seed and from where it stands: variations on one action, or a crowd. Waypoints and pins are left out. When off, each character follows its own prompts, key poses and waypoints"),
+    "keep_all": ("Keep All", "Keep every character's take. Each becomes that character's own action, and the blocks it made are locked, so a later Generate leaves them alone"),
+    "redo_all": ("Redo All", "Throw every character's take away and make new ones, from the same prompts and key poses. To redo one character alone, use its row in the sidebar (N)"),
+    "discard_all": ("Discard All", "Throw every character's take away and go back to what each had. Key poses and prompts stay"),
 }
 
 
@@ -1067,8 +1163,14 @@ def tip(context, it) -> str:
     elif it.id == "options":
         title, line = "Options", ("The next take (Loop, In Place, versions), the ghosts, and whether a "
                                   "described pose stands on the ground")
-    elif it.id in ("auto_key", "ghosts"):
+    elif it.id in ("auto_key", "ghosts", "batch_shared"):
         title += " (on)" if it.on else " (off)"
+    elif it.id == "generate" and _batch_tip(context):
+        title, line = it.label if it.enabled else "Generate", _batch_tip(context)
+    elif it.id == "working" and s.batch_total:
+        line = "Stop generating. The takes already made stay, to keep or discard"
+    elif it.id in ("keep_all", "redo_all", "discard_all"):
+        line = _batch_review_tip(context, it) or line
     elif it.id == "prompt":
         text = it.label
         line = (f"\u201c{text}\u201d. Click to change it. One action per block is followed more closely "
@@ -1121,6 +1223,9 @@ def tip(context, it) -> str:
         title = f"Version {int(it.id[4:]) + 1}" + (" (showing)" if it.on else "")
         line = ("Show this version of the take. All versions come from the same generation and keep your "
                 "key poses, so switching does not generate again. The one showing is the one you keep")
+        if it.props.get("character") == "*":
+            line = ("Show this version of every character's take. Switching does not generate again. "
+                    "To pick a version for one character alone, use its row in the sidebar (N)")
     elif it.id == "hint_close":
         title, line = "Hide this hint", "Hide it for the rest of the session. Turn hints on or off in Options"
     elif it.id == "model":
@@ -1136,6 +1241,61 @@ def tip(context, it) -> str:
     elif not it.enabled and it.id == "use_rig":
         line = "Select an armature (or a mesh bound to one) in the viewport first"
     return f"{title}\n{line}" if line else title
+
+
+def _names(names) -> str:
+    return ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+
+
+def _batch_tip(context) -> str:
+    """What Generate does with several characters selected: whom it makes,
+    from whose prompts, and who is left out and why. Empty when it makes one."""
+    from . import batch, properties
+    s = context.scene.animatica
+    chars = batch.batch_selection(context)
+    if not chars or gate(context)[0] not in ("ready", "blocked"):
+        return ""
+    ready = batch_readiness(context, chars)
+    go = [n for n, why in ready if not why]
+    left = [(n, why) for n, why in ready if why]
+    active = properties._live_armature(s.target_armature)
+    shared = s.batch_direction == 'SHARED'
+    if not go:
+        # one line: a click on the greyed button says it in the status bar
+        return "None of the selected characters can go yet: " + "; ".join(f"{n} ({why})" for n, why in left[:4])
+    if shared:
+        line = (f"Make a take for {_names(go)}, all from {active.name if active else 'the active character'}'s "
+                "prompts, each with its own seed and starting where it stands. Waypoints and pins are left out")
+    else:
+        line = f"Make a take for {_names(go)}, each from its own prompts, key poses and waypoints"
+    each = int(s.variations)
+    line += ". One generation each" + (f", {each} versions each" if each > 1 else "")
+    if left:
+        line += "\nLeft out: " + "; ".join(f"{n} ({why})" for n, why in left[:4])
+        if not shared and any(why == "no prompt" for _n, why in left) and active is not None \
+                and any((b.prompt or "").strip() for b in s.prompt_blocks):
+            line += f". Turn on Shared to give them {active.name}'s prompts"
+    return line
+
+
+def _batch_review_tip(context, it) -> str:
+    """Keep, Redo or Discard All: on whom, by name."""
+    from . import batch
+    s = context.scene.animatica
+    names = batch.pending(s)
+    if it.id == "keep_all" and names:
+        return (f"Keep the takes of {_names(names)}. Each becomes that character's own action, and the "
+                "blocks it made are locked, so a later Generate leaves them alone")
+    if it.id == "redo_all":
+        again = json.loads(it.props.get("characters") or "[]")
+        return (f"Make new takes for {_names(again)}, from the same prompts and key poses. To redo one "
+                "character alone, use its row in the sidebar (N)")
+    if it.id == "discard_all":
+        if not names:
+            return "Clear the failed characters from the review"
+        return (f"Throw away the takes of {_names(names)} and go back to what each had. Key poses and "
+                "prompts stay")
+    return ""
 
 
 def _clipboard_tip(context, it) -> str:
@@ -1279,10 +1439,17 @@ class ANIMATICA_OT_toolbar_generate(bpy.types.Operator):
 
     @classmethod
     def description(cls, context, properties):
+        said = _batch_tip(context)
+        if said:
+            return said
         why = blockers(context)
         return why[0] if why else "Make the take, motion from your prompts, key poses and waypoints"
 
     def invoke(self, context, event):
+        # several characters selected: one take each, together
+        from . import batch
+        if batch.batch_selection(context):
+            return bpy.ops.animatica.generate_batch('INVOKE_DEFAULT')
         # the take being judged is kept first: Generate makes the rest
         from .operators import keep_take
         keep_take(context)
