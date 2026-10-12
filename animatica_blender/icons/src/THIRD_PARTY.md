@@ -6,7 +6,12 @@ Most icons in this directory are drawn for Animatica. These are not:
 |---|---|---|
 | `add_character.svg` | Material Symbols `person_add` (rounded), Google | Apache License 2.0 |
 | `pin.svg` | Material Symbols `push_pin` (rounded), Google | Apache License 2.0 |
+| `loop.svg` | Phosphor Icons `infinity` (bold) | MIT License |
 
 Material Symbols: <https://github.com/google/material-design-icons>, licensed under the
 Apache License, Version 2.0: <https://www.apache.org/licenses/LICENSE-2.0>. Only the fill
+colour was changed, to the bar's white.
+
+Phosphor Icons: <https://github.com/phosphor-icons/core>, MIT License, Copyright (c) 2023
+Phosphor Icons: <https://github.com/phosphor-icons/core/blob/main/LICENSE>. Only the fill
 colour was changed, to the bar's white.
