@@ -24,13 +24,44 @@ Override: `make install BLENDER_ADDONS_DIR=/path/to/scripts/addons`
 
 Python package: `animatica_blender/` — operators in `operators.py`, UI in
 `panels.py`, request assembly in `request_builder.py`, animation bake in
-`gltf_to_blender.py`, updates in `updater.py`, example scenes in `examples.py`.
+`gltf_to_blender.py`, updates in `updater.py`, example scenes in `examples.py`,
+MMCP HTTP calls in `mmcp_client.py`, on top of the vendored `motionmcp` client
+in `vendor/motionmcp/`.
 Posing and editing by hand are Animatica Marionette, a separate add-on;
 `posing.py` is the one place this add-on reaches it, and every call there is a
 no-op without it (`tests/test_without_pro.py`).
 
-Tests: `tests/` holds scripts that run inside Blender without a server, one
-per behaviour they guard. Headless:
+## Bundled packages
+
+The addon talks MMCP through the public `motionmcp` package
+([`motionmcp-sdk`](https://pypi.org/project/motionmcp-sdk/) on PyPI), which
+is not kept in git. The build fetches the version pinned by the single
+`motionmcp-sdk==X.Y.Z` line in `requirements-bundle.txt` into
+`animatica_blender/vendor/motionmcp/` (git-ignored), the same way the
+MotionBuilder and 3ds Max plugins bundle their dependencies. `mmcp_client.py`
+calls into it for the MMCP wire format; the addon owns the offline gate, the
+cloud session and the error codes, plus the `POST /retarget` call, an extension
+route the package does not offer.
+
+After cloning, and after every change to the pin, fetch it once:
+
+```bash
+python scripts/vendor_motionmcp.py --write    # or: make deps
+```
+
+`make zip`, `make install` and CI run this step themselves. Without it the
+addon refuses to load with a message naming the command.
+
+To bump the pinned version: edit `requirements-bundle.txt`, run the fetch,
+run the tests, and restart Blender — a running Blender keeps the modules it
+already imported.
+
+`python scripts/vendor_motionmcp.py` with no flag only checks the fetched
+tree against the pin (exit 0: in sync, 1: drift, 2: could not tell).
+
+Tests: `python -m pytest tests/test_mmcp_client.py -q` runs without Blender
+(needs `numpy` and `pytest`). The other files in `tests/` are scripts that run
+inside Blender without a server, one per behaviour they guard. Headless:
 
 ```bash
 blender -b --factory-startup --python tests/test_bake_object_rotation.py

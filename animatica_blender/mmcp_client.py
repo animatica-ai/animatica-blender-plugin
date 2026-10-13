@@ -1,7 +1,11 @@
 """Minimal MMCP HTTP client.
 
-Stdlib-only — Blender ships its own Python interpreter and adding a third-party
-``requests`` dependency makes installation finicky. ``urllib`` is enough.
+No dependency installed with pip — Blender ships its own Python interpreter and
+a third-party ``requests`` makes installation finicky. This module and the
+vendored client it builds on use ``urllib`` only. The wire format (Accept, GLB, the ``202`` poll loop, the error envelope) is the
+vendored ``motionmcp.client``'s; this module owns the gate, the cloud session
+and the error codes the UI branches on. ``/retarget`` goes through its own
+code here, because the SDK does not offer that route.
 
 Public surface:
   * ``get_server_url()`` — read the configured base URL from addon prefs.
@@ -10,6 +14,8 @@ Public surface:
   * ``MmcpClient.generate(req)`` — synchronous ``POST /generate`` returning a
     parsed glTF JSON document. Handles the optional ``202 Accepted`` async
     poll loop transparently when the model declares ``supports_async``.
+  * ``MmcpClient.retarget(req)`` — ``POST /retarget``, an extension route
+    outside MMCP; answers ``retargeting_unsupported`` where it is not offered.
   * ``client_headers()`` — the ``X-Animatica-*`` attribution headers the API
     buckets generations by.
 
@@ -25,6 +31,9 @@ import sys
 import threading
 import time
 import traceback
+import types
+import urllib.error
+import urllib.request
 import uuid
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -32,6 +41,20 @@ from urllib.parse import urlsplit
 from urllib.request import Request
 
 import bpy
+
+try:
+    from .vendor.motionmcp.client import http as _http
+    from .vendor.motionmcp.client.http import MmcpError as SdkError
+except ImportError as _exc:
+    # The client is fetched at build time, not kept in git: a source checkout
+    # has to run the fetch once (docs/developing.md).
+    raise ImportError(
+        "the motionmcp client is not bundled in this checkout: run "
+        "`python scripts/vendor_motionmcp.py --write` (or `make deps`)"
+    ) from _exc
+# Bound at import on purpose: the helper is private to the SDK, so a bump
+# that renames it must fail here, at load, not inside sign_in later.
+_sdk_error_from_http = _http._error_from_http
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +464,8 @@ def sign_in(email: str, password: str) -> dict[str, Any]:
         with _open(req, timeout=30) as resp:
             data = json.loads(resp.read().decode())
     except HTTPError as exc:
-        raise MmcpError.from_response(exc.code, exc.read()) from exc
+        # The SDK's envelope parser, so a login error reads like any other.
+        raise MmcpError.from_sdk(_sdk_error_from_http(exc, "POST", req.full_url)) from exc
     except URLError as exc:
         if refused(exc):
             raise MmcpError(code="offline", message=OFFLINE_MESSAGE) from exc
@@ -817,6 +841,24 @@ class MmcpError(Exception):
                 status=status,
             )
 
+    @classmethod
+    def from_sdk(cls, exc: SdkError) -> "MmcpError":
+        """The SDK's error, in the codes the addon's UI branches on.
+
+        Envelope codes (``quota_exceeded``, ``unknown_model``, …) pass through.
+        The SDK's ``connection_failed`` is split: the gate refusing is
+        ``offline`` (the artist can fix that in Preferences), anything else is
+        ``model_unavailable``.
+        """
+        details = dict(exc.details or {})
+        code, message = exc.code, str(exc)
+        if code == "connection_failed":
+            if refused(exc.__cause__):
+                code, message = "offline", OFFLINE_MESSAGE
+            else:
+                code = "model_unavailable"
+        return cls(code=code, message=message, status=details.get("status"), details=details)
+
 
 # ---------------------------------------------------------------------------
 # Client
@@ -841,7 +883,10 @@ class MmcpClient:
 
     def capabilities(self, *, refresh: bool = False) -> dict[str, Any]:
         if self._caps is None or refresh:
-            self._caps = self._get_json("/capabilities")
+            _require_online(f"{self.base_url}/capabilities")
+            self._caps = self._call(lambda: _http.get_capabilities(
+                self.base_url, timeout=self.timeout, use_cache=not refresh,
+                access_token=self._token()))
         return self._caps
 
     def model(self, model_id: str) -> dict[str, Any]:
@@ -860,12 +905,17 @@ class MmcpClient:
     def generate(self, request_body: dict[str, Any]) -> dict[str, Any]:
         """POST a GenerateRequest. Returns the parsed glTF JSON document.
 
-        Handles both sync (200) and async (202 + Location) responses
-        transparently. Attaches an `Authorization: Bearer` header when a
-        cloud session token is set; on a 401 we attempt one silent token
-        refresh + retry before raising.
+        The SDK handles sync (200), async (202 + Location) and GLB answers;
+        every request it opens — the poll GETs included — passes the gate.
+        On the cloud's 401 we attempt one silent token refresh + retry.
         """
-        return self._post_for_gltf("/generate", request_body)
+        _require_online(f"{self.base_url}/generate")
+        # ``client_headers()``: this is the request that starts a generation —
+        # the one place the API wants attributed. The SDK sends them on the
+        # POST only, never on the polls.
+        return self._call(lambda: _http.generate(
+            self.base_url, request_body, timeout=self.timeout,
+            access_token=self._token(), headers=client_headers()))
 
     # --- Retargeting -------------------------------------------------------
 
@@ -891,6 +941,13 @@ class MmcpClient:
             raise
 
     def _post_for_gltf(self, path: str, request_body: dict[str, Any]) -> dict[str, Any]:
+        """POST to a route outside MMCP and return the glTF document it answers.
+
+        This is the addon's own HTTP path for routes the SDK does not offer
+        (today only ``/retarget``); ``/generate`` and ``/capabilities`` go
+        through the SDK. Handles a sync (200) or async (202 + Location) answer
+        and the cloud's 401 with one silent token refresh + retry.
+        """
         body = json.dumps(request_body).encode("utf-8")
         url = f"{self.base_url}{path}"
         _require_online(url)
@@ -903,8 +960,8 @@ class MmcpClient:
                 headers=_auth_headers(url, {
                     "Content-Type": "application/json; charset=utf-8",
                     "Accept":       "model/gltf+json",
-                    # This is the request that starts the work (a generation
-                    # or a retarget) — the one place the API wants attributed.
+                    # This is the request that starts the retarget — the one
+                    # place the API wants it attributed.
                     **client_headers(),
                 }),
             )
@@ -1010,41 +1067,64 @@ class MmcpClient:
 
     # --- Internal HTTP -----------------------------------------------------
 
-    def _get_json(self, path: str) -> dict[str, Any]:
-        url = f"{self.base_url}{path}"
-        _require_online(url)
-        cloud = is_cloud_url(url)
+    def _token(self) -> str | None:
+        """The Bearer for this server: the session on the cloud, nothing elsewhere.
 
-        def _get():
-            req = Request(url, headers=_auth_headers(url))
-            return _open(req, timeout=self.timeout)
+        Asked on every attempt, so the retry after a refresh carries the new one.
+        """
+        if not is_cloud_url(self.base_url):
+            return None
+        return get_access_token() or None
 
+    def _call(self, fn):
+        """Run one SDK call; map its errors, and own the cloud session on 401.
+
+        Only the cloud's 401 is about the cloud session: a self-hosted server
+        saying no must not sign anyone out. One refresh, one retry — a token
+        the server still rejects after that is expired, not retried forever.
+        A 401 met while polling resumes the same job instead of retrying.
+        """
         try:
-            try:
-                resp = _get()
-            except HTTPError as exc:
-                if exc.code != 401 or not cloud:
-                    raise
-                if refresh_access_token():
-                    try:
-                        resp = _get()
-                    except HTTPError as retry_exc:
-                        if retry_exc.code == 401:
-                            expire_session("your session expired. Sign in again")
-                        raise
-                else:
-                    expire_session("your session expired. Sign in again")
-                    raise
-            with resp:
-                if resp.status != 200:
-                    raise MmcpError.from_response(resp.status, resp.read())
-                return json.loads(resp.read())
-        except HTTPError as exc:
-            raise MmcpError.from_response(exc.code, exc.read()) from exc
-        except URLError as exc:
-            if refused(exc):
-                raise MmcpError(code="offline", message=OFFLINE_MESSAGE) from exc
-            raise MmcpError(
-                code="model_unavailable",
-                message=f"cannot reach MMCP server at {self.base_url}: {exc.reason}",
-            ) from exc
+            return fn()
+        except SdkError as exc:
+            if exc.code != "auth_required" or not is_cloud_url(self.base_url):
+                raise MmcpError.from_sdk(exc) from exc
+            if not refresh_access_token():
+                expire_session("your session expired. Sign in again")
+                raise MmcpError.from_sdk(exc) from exc
+            # A token that expired while a job was polling: the job is still
+            # running on the server, so resume polling it (``poll_job``) rather
+            # than re-run ``fn`` — a second POST would start, and be billed as,
+            # a second generation.
+            location = exc.details.get("location") if exc.details.get("phase") == "poll" else None
+        try:
+            if location:
+                return _http.poll_job(self.base_url, location, timeout=self.timeout,
+                                      access_token=self._token())
+            return fn()
+        except SdkError as exc:
+            if exc.code == "auth_required":
+                expire_session("your session expired. Sign in again")
+            raise MmcpError.from_sdk(exc) from exc
+
+
+# ---------------------------------------------------------------------------
+# The gate, inside the SDK
+#
+# ``motionmcp.client.http`` opens every request through its module attribute
+# ``urllib.request.urlopen``. Pointing that attribute — in the vendored copy
+# only, not the process-wide ``urllib`` — at our ``urlopen`` puts the SDK's
+# POST, poll GETs and ``/capabilities`` behind the same gate and the same
+# redirect handling as every other request of this addon. ``Request``,
+# ``HTTPError`` and ``URLError`` are the only other names it reads. Pinned to
+# the vendored 0.9.0; the tests check it is installed and that it works.
+# ---------------------------------------------------------------------------
+
+def _install_gate() -> None:
+    _http.urllib = types.SimpleNamespace(
+        request=types.SimpleNamespace(Request=urllib.request.Request, urlopen=urlopen),
+        error=urllib.error,
+    )
+
+
+_install_gate()

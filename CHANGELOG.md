@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [Unreleased]
+
+### Changed
+
+- The addon now talks to the server through the shared `motionmcp` client
+  0.9.0, the same one the MotionBuilder and 3ds Max plugins use. It accepts
+  GLB responses from the server, and a session that expires while a take is
+  still being generated no longer starts a second take. No change to the UI.
+
 ## [1.0.3] — 2026-10-13
 
 ### Added
@@ -861,7 +870,7 @@ make game-ready loops. The addon also updates itself.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/animatica-ai/animatica-blender-plugin/compare/v0.6.4...HEAD
+[Unreleased]: https://github.com/animatica-ai/animatica-blender-plugin/compare/v1.0.3...HEAD
 [0.6.4]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.4
 [0.6.3]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.3
 [0.6.2]: https://github.com/animatica-ai/animatica-blender-plugin/releases/tag/v0.6.2

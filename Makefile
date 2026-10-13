@@ -27,7 +27,12 @@ p.read_text(), count=1, flags=re.M))'
 # macOS default Blender 5.x addon path. Override on Linux/Windows.
 BLENDER_ADDONS_DIR ?= $(HOME)/Library/Application Support/Blender/5.0/scripts/addons
 
-.PHONY: zip clean install uninstall info icons
+.PHONY: deps zip clean install uninstall info icons
+
+# The MMCP client is not in git: fetch the pinned motionmcp wheel into
+# animatica_blender/vendor/motionmcp/ (see docs/developing.md).
+deps:
+	python3 scripts/vendor_motionmcp.py --write
 
 zip: $(ZIP)
 
@@ -42,7 +47,7 @@ icons:
 # Staged rather than zipped in place, so the build can stamp its own release
 # tag into the copy without touching the working tree. The updater compares
 # that tag, which is the only way preview2 can know it is newer than preview1.
-$(ZIP): $(shell find $(ADDON) -name '*.py' -not -path '*/__pycache__/*')
+$(ZIP): deps $(shell find $(ADDON) -name '*.py' -not -path '*/__pycache__/*')
 	@mkdir -p $(DIST)
 	@rm -rf $(DIST)/.stage && mkdir -p $(DIST)/.stage
 	@find $(ADDON) -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
@@ -53,7 +58,7 @@ $(ZIP): $(shell find $(ADDON) -name '*.py' -not -path '*/__pycache__/*')
 	@rm -rf $(DIST)/.stage
 	@echo "→ $(ZIP)"
 
-install:
+install: deps
 	@mkdir -p "$(BLENDER_ADDONS_DIR)"
 	@if [ -e "$(BLENDER_ADDONS_DIR)/$(ADDON)" ]; then \
 		echo "Removing existing $(BLENDER_ADDONS_DIR)/$(ADDON)"; \
