@@ -15,3 +15,4 @@ dist/
 
 # Test output (reports, screenshots)
 tests/out/
+plans/
