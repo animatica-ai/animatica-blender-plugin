@@ -660,8 +660,21 @@ def build_request_for_block(
         elif user_constraint is not None:
             constraints.append(user_constraint)
 
+    # Waypoints inside the block go out as on a full Generate: each is one
+    # frame, so it lands on the block's own frames (offset by its start), and
+    # Redo keeps the route. Left out, the block was made again with no idea
+    # where the character had to be.
+    if constraint_objects.get("waypoints"):
+        from . import waypoints
+
+        constraints.extend(waypoints.request_constraints(
+            scene, frame_range,
+            face_along_path=bool(getattr(settings, "waypoint_heading", False)),
+            marks=constraint_objects["waypoints"],
+        ))
+
     # Effector targets get the existing block-range filter automatically.
-    # Root paths are deliberately skipped — they describe whole-timeline
+    # Legacy root-path curves are deliberately skipped — they describe whole-timeline
     # trajectory and resampling onto a single block would compress the
     # entire curve into the block's duration, which is wrong. Boundary
     # ``pose_keyframe`` constraints already give the model enough start/end
