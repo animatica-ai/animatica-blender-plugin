@@ -1,15 +1,22 @@
 # Run on every push and PR: fetch the pinned motionmcp wheel the way the
-# build does, run the pytest suite, and byte-compile the addon and scripts.
+# build does, run the pytest suite (tests/test_mmcp_client.py only; the other
+# files in tests/ are Blender scripts run with `blender -b --python`), and
+# byte-compile the addon and scripts.
 # Python 3.13 is the interpreter Blender 5.2 ships.
 name: Tests
 
 on: [push, pull_request]
+
+permissions:
+  contents: read
 
 jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -20,10 +27,10 @@ jobs:
         run: python scripts/vendor_motionmcp.py --write
 
       - name: Install test dependencies
-        run: pip install numpy pytest
+        run: pip install numpy==2.5.3 pytest==9.1.1
 
       - name: Run pytest
-        run: python -m pytest tests -q
+        run: python -m pytest tests/test_mmcp_client.py -q
 
       - name: Compile check
         run: python -m compileall -q animatica_blender scripts
