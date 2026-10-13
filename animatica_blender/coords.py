@@ -55,3 +55,33 @@ def blender_quat_to_mmcp(q: Sequence[float]) -> Quat:
     """
     qx, qy, qz, qw = q[0], q[1], q[2], q[3]
     return (qx, qz, -qy, qw)
+
+
+# ---------------------------------------------------------------------------
+# The armature object's rotation
+# ---------------------------------------------------------------------------
+
+def split_world_yaw(matrix_world):
+    """Split an object's world rotation into ``(yaw, tilt)``: 3×3 matrices
+    with ``rotation == yaw @ tilt``, where ``yaw`` is the turn about world Z
+    and ``tilt`` is what remains (a Mixamo import's 90° about X, say).
+
+    The server does not see which way the rig was turned in object mode: it
+    generates in world space with its own heading, and the joint rotations
+    it returns are relative to the rig's rest pose as it stands at yaw 0.
+    So the bake conjugates rotations by ``tilt`` alone and undoes the yaw
+    once, on the root, and the outbound pose keyframes do the reverse. The
+    two must stay in sync (``gltf_to_blender._RotationBaker``,
+    ``constraints_ui._joint_rotation_to_mmcp``).
+    """
+    from mathutils import Quaternion  # noqa: PLC0415 — importable outside Blender
+
+    q = matrix_world.to_quaternion()
+    twist = Quaternion((q.w, 0.0, 0.0, q.z))
+    if twist.magnitude < 1e-9:
+        # Upside down (180° about a horizontal axis): no yaw to speak of.
+        twist = Quaternion((1.0, 0.0, 0.0, 0.0))
+    twist.normalize()
+    yaw = twist.to_matrix()
+    tilt = yaw.transposed() @ q.to_matrix()
+    return yaw, tilt

@@ -315,7 +315,7 @@ def _download_worker(entry: dict, retried: bool = False):
                         pass
                     _state["done"] = 0
                     return _download_worker(fresh, retried=True)
-            raise ValueError("the download did not match its checksum — try again")
+            raise ValueError("the download did not match its checksum. Try again")
         os.replace(tmp, dest)               # atomic: a half-written file is never "cached"
     except Exception as exc:                # noqa: BLE001
         _state["error"] = f"could not download {entry['title']}: {exc}"
@@ -465,8 +465,8 @@ def _redraw():
 class ANIMATICA_OT_open_example(bpy.types.Operator):
     bl_idname = "animatica.open_example"
     bl_label = "Open Example"
-    bl_description = ("Open a finished example scene: character, set and prompt, "
-                      "ready to generate. Downloads it the first time")
+    bl_description = ("Open an example scene with a character, a set and a prompt, "
+                      "ready to generate. It is downloaded the first time")
     bl_options = {'REGISTER'}
 
     example: bpy.props.StringProperty()
@@ -488,7 +488,7 @@ class ANIMATICA_OT_open_example(bpy.types.Operator):
             return {'CANCELLED'}
         # Opening replaces the session, and nothing about an example menu
         # says so: always ask, and say what closes. Unsaved work is named.
-        message = "It opens as a new file; your current scene closes."
+        message = "It opens as a new file and your current scene closes."
         if bpy.data.is_dirty:
             message += " Unsaved changes will be lost."
         return context.window_manager.invoke_confirm(
@@ -501,7 +501,7 @@ class ANIMATICA_OT_open_example(bpy.types.Operator):
     def execute(self, context):
         settings = getattr(context.scene, "animatica", None)
         if settings is not None and getattr(settings, "is_generating", False):
-            self.report({'ERROR'}, "a generation is running — let it finish first")
+            self.report({'ERROR'}, "wait for the running generation to finish first")
             return {'CANCELLED'}
         entry = find(self.example)
         if entry is None:

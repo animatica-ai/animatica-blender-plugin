@@ -11,7 +11,7 @@
 The tab has four panels, top to bottom:
 
 - **Animatica** — the shot: model, character, prompt, Generate, and the review
-- **Pose** — the character's pose: the Autoposer, Set Keyframe, fingers
+- **Pose** — the character's pose: Set Keyframe, fingers (and Marionette's handles, when it is installed)
 - **Constraints** — waypoints (where to stand, when) and pins (a hand or foot held in place)
 - **Settings** — set once and left alone, with **Viewport**, **Posing** and **Advanced** inside
 
@@ -122,9 +122,11 @@ A few things you can rely on:
 
 ### Several characters at once
 
-Select two or more characters and the panel offers **Generate N Characters**,
-with a line saying how many generations it will cost. Choose how they are
-directed:
+Select two or more characters and the floating bar's Generate becomes
+**Generate N Characters** (or **Generate 2 of 3** when one has no prompt; its
+tooltip says who is left out and why). The panel offers the same button, with
+a line saying how many generations it will cost. Choose how they are directed
+with **Shared**, beside the bar's Generate, or in the panel:
 
 - **Each Their Own** — every character uses its own prompts, key poses,
   waypoints and pins. For a scene with distinct actors.
@@ -132,47 +134,33 @@ directed:
   its own seed, starting from where it stands: variations on one action, for a
   crowd. Waypoints and pins are left out.
 
-They are sent together, in one request when the server takes batches. The
-review then has a row per character, with its own ✓ (keep), ✗ (throw away)
-and ↻ (generate that one again). **Accept All** and **Reject All** act on all
-of them, and **Regenerate All** makes every waiting take again. With
-**Variations** above 1, each row has its own arrows, and **All: next
-variation** flips the whole crowd. **In place** acts on every take waiting. A
-character that failed is listed with the reason and does not stop the rest.
+They are sent together, in one request when the server takes batches; the
+bar's working button says how many it is making. Then the bar has **Keep All**, **Redo
+All** (failed characters go again too), a button per version that flips every
+character, and **Discard All**. In the panel, the review has a row per
+character, with its own ✓ (keep), ✗ (throw away) and ↻ (generate that one
+again). **Keep All** and **Discard All** act on all of them, and **Redo All**
+makes every waiting take again. With **Variations** above 1, each row has its
+own arrows, and **All: next variation** flips the whole crowd. **In place**
+acts on every take waiting. A character that failed is listed with the reason
+and does not stop the rest.
 
 ## The Pose panel
 
-### Autoposer
+### Posing by hand
 
-The **Autoposer** lets you drag a hand, foot or the hips and have the body
-follow. It is optional and runs on your machine.
-
-- The first time, press **Download Autoposer** (about 225 MB, once). Nothing
-  downloads until you do. See [the Autoposer](configuration.md#the-autoposer).
-- Then **Start the Autoposer** gives your character its handles.
-- The handles are listed by name (**Hips**, **Chest**, **L hand**, **Head** and
-  so on): click one to switch it on or off, or **+** to add one.
-- **Slack** is how far a joint may stray from its handle. Low puts the joint
-  exactly where you put the handle; high lets the poser keep the body natural.
-  The icon next to it shows each handle's own settings.
-
-**Skeleton**, above **Start the Autoposer**, says how much of the body it found
-on your rig. It works out which bone is the hips, each knee, each hand and so on
-from the skeleton's shape, so Mixamo, Unreal and other humanoid rigs
-work without renaming anything, in T-pose or A-pose. If it picked the wrong
-bone, open **Skeleton** and choose the right one; the refresh button finds them
-all again.
-
-The handles follow the playhead, so scrub to any frame and grab one. With the
-record button next to **Set Keyframe** on (the default), posing with the
-handles keys the pose where you made it. Turn it off to try a pose out without
-keying it.
+Posing with handles is **Animatica Marionette**, a separate add-on: drag a
+hand, foot or the hips and the body follows. Installed alongside, its handles,
+handle picker and settings appear in this panel and on the floating bar, and
+its edits key into the take. Without it, pose the rig with Blender's own tools,
+or describe the pose in words (**Pose This Frame in Words** on the bar), then
+**Set Keyframe**.
 
 ### Set Keyframe
 
 **Set Keyframe** keys the pose you are looking at and marks it as yours, so
 the next take is asked to hit it. The line under it says how many key poses
-the next take will hit. It works with or without the Autoposer, and with no
+the next take will hit. It works with or without Marionette, and with no
 server connected.
 
 > **Use Set Keyframe rather than `I` on top of a generated take.** Blender
@@ -197,7 +185,7 @@ The model does not move fingers, so each hand gets a shape laid over every
 take: **Relaxed** (the default), **Gripping** (closed around a handle) or
 **Straight** (as generated). Set **Left Hand** and **Right Hand** separately.
 
-## See the plan — ghosts and the trail
+## See the plan — the ghosts
 
 Your key poses are the plan: each one is a full-body pose the motion has to
 pass through. **Settings → Viewport** controls what is drawn.
@@ -209,33 +197,21 @@ with its frame number. On the timeline, a diamond marks each pose in the
 viewport and red on the timeline; widen a prompt block, or move the pose, to
 bring it back.
 
-**The trail.** Running through them is the motion trail: the path the take
-actually follows, frame by frame, in the same colours. There is one dot per
-frame, so spacing is timing (bunched is slow, spread is fast). The large
-diamonds are your key poses and the white one is the playhead. It traces the
-**hips**, **head**, **hands** and **feet**; switch each on or off in
-**Settings → Viewport**.
-
-**Click a ghost to edit that pose.** The playhead goes to its frame and the
-rig goes into pose mode, with the Autoposer's handles on that pose if you use
-it. When you are happy, **Set Keyframe** writes it back onto that frame.
-
-**Drag the trail to repose the body.** Pull a point and that hand, foot or
-the hips moves at that frame; the playhead stays where it is. The other joints
-stay put and the Autoposer solves the body around the one you moved, with a
-yellow skeleton showing the pose. Let go and it is keyed there as one of your
-key poses. Dragging the hips shifts the weight over feet that stay planted.
-**Hold Shift to move the whole pose** instead. The label by the cursor names
-the frame you grabbed; **Esc** cancels. A click reaches for a key pose first;
-to bend the curve between keys, click exactly on the dot you want. A handle
-always wins the click over the trail.
+The **Ghosts** button on the bar switches them; **Options** sets their style
+(the mesh or the skeleton) and the frame numbers.
 
 **The root trajectory.** Tick **Root Trajectory** to draw the path the
 character travels along, on the floor, coloured by speed. It is what In place
-takes out. **Edit Root Trajectory** turns it into a curve you can edit: with
-In place off, the character follows the new path as you edit it; with In place
-on, the pose stays and the curve is the take's root motion. Press **Tab** to
-finish, and the reset button next to it to go back to the original.
+takes out.
+
+**Editing the motion** is Marionette's: the **onion skin** (the motion around
+the playhead, green before and blue after), the motion trail through the
+ghosts (drag it to repose the body, **Smooth** a wobble), the **zoetrope**
+(the onion skin spread out in space, each slice posable), **Lock in Place**
+(a hand or foot held on one spot for a stretch of frames), the reach of an
+edit through the frames around it, clicking a ghost to edit its pose, and
+**Edit Root Trajectory**. Installed alongside, these appear on the bar and in
+these panels.
 
 ## The Constraints panel
 
@@ -265,17 +241,16 @@ converts it.
 | Setting | What it does |
 |---|---|
 | **Ghosts** | Draw the body at each pose you keyed |
-| **Trail** | Trace the path the motion takes; **Hips**, **Head**, **Hands** and **Feet** pick the joints |
-| **Root Trajectory** | Draw the travel path on the floor, with **Edit Root Trajectory** |
+| **Root Trajectory** | Draw the travel path on the floor (Marionette adds **Edit Root Trajectory**, and the motion trail's switches) |
 | **Frame Numbers** | Label each pose with its frame |
 | **X-Ray** | Draw poses through the character instead of behind it |
 | **Ghost Style** | *Auto* uses the skinned character if the rig has one, the skeleton otherwise; force *Mesh* or *Bones* |
 | **Auto Refresh** | Re-read the plan when you key a pose or move the rig. Turn off on a heavy character and use **Refresh Ghosts** |
 | **Rig In Front** / **Hide Skeleton** | How the rig itself is drawn |
 
-**Posing:** **Solid Floor** stops the Autoposer putting any joint below the
-floor; **Rest Pose** clears the pose back to the rest pose and re-seats the
-handles.
+**Posing** (Marionette's settings, when it is installed): **Solid Floor**
+stops the handles putting any joint below the floor; **Rest Pose** clears the
+pose back to the rest pose and re-seats the handles.
 
 **Advanced:** **Guidance** with its **Text Weight** (how literally the motion
 follows the prompt) and **Constraint Weight** (how tightly it sticks to your

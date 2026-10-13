@@ -39,6 +39,54 @@ _MMCP_TO_BLENDER = Matrix((
 ))
 
 
+def _gltf_root_joints(nodes: list[dict[str, Any]]) -> set[str]:
+    """Names of the nodes no other node lists as a child: the skeleton's root."""
+    children = {c for n in nodes for c in (n.get("children") or ())}
+    return {n.get("name", "") for i, n in enumerate(nodes) if i not in children}
+
+
+class _RotationBaker:
+    """Turns the response's joint rotations into pose-bone quaternions.
+
+    Each channel carries the joint's rotation relative to its parent, in the
+    MMCP Y-up frame, relative to the rig's rest pose *as it stands at yaw 0*
+    (see ``coords.split_world_yaw``). Per joint:
+
+        MMCP Y-up → Blender world → armature-local → bone-local rest
+
+    where armature-local undoes only the object's tilt. The object's yaw is
+    undone once, on the root, so the take lands in the world where the
+    server put it whichever way the armature object is turned; folding the
+    yaw into every bone turned the whole body by it (a rig at 180° walked
+    backwards, its knees bending the wrong way). The outbound side
+    (``constraints_ui._joint_rotation_to_mmcp``) is the exact inverse and
+    must stay in sync.
+    """
+
+    def __init__(self, armature_obj: bpy.types.Object, nodes: list[dict[str, Any]]) -> None:
+        yaw, tilt = coords.split_world_yaw(armature_obj.matrix_world)
+        self._yaw_t = yaw.transposed()
+        self._tilt = tilt
+        self._tilt_t = tilt.transposed()
+        self._roots = _gltf_root_joints(nodes)
+        self._rest: dict[str, tuple[Matrix, Matrix]] = {}
+
+    def bone_quaternion(self, joint_name: str, bone, q_mmcp) -> Quaternion:
+        rest = self._rest.get(bone.name)
+        if rest is None:
+            ML = bone.bone.matrix_local.to_3x3()
+            rest = self._rest[bone.name] = (ML, ML.transposed())   # orthogonal → inverse = transpose
+        ML, ML_inv = rest
+        qx, qy, qz, qw = q_mmcp
+        R_mmcp          = Quaternion((qw, qx, qy, qz)).to_matrix()
+        R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
+        if joint_name in self._roots:
+            R_blender_world = self._yaw_t @ R_blender_world
+        R_blender_arm   = self._tilt_t @ R_blender_world @ self._tilt
+        R_bone          = ML_inv @ R_blender_arm @ ML
+        return R_bone.to_quaternion()
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -207,12 +255,7 @@ def bake_gltf_to_armature(
     new_action = bpy.data.actions.new(name=action_name)
     armature_obj.animation_data.action = new_action
 
-    # Armature's world-rotation basis. The outbound side
-    # (``armature_to_skeleton`` / ``sample_pose_keyframes``) lifts offsets
-    # and rotations into Blender world frame, so we undo that here when
-    # baking. No-op when ``matrix_world`` is identity.
-    mw_rot = armature_obj.matrix_world.to_quaternion().to_matrix()
-    mw_rot_t = mw_rot.transposed()
+    rotations = _RotationBaker(armature_obj, nodes)
 
     skipped: list[str] = []
 
@@ -234,18 +277,8 @@ def bake_gltf_to_armature(
         timestamps  = _input_for(sampler_idx)
         quats       = _quats_for(sampler_idx)
 
-        # Inverse of the outbound chain in ``sample_pose_keyframes``:
-        #   MMCP Y-up → Blender world → armature-local → bone-local rest.
-        ML     = bone.bone.matrix_local.to_3x3()
-        ML_inv = ML.transposed()   # ML is orthogonal → inverse = transpose
-
         for ts, q_mmcp in zip(timestamps, quats):
-            qx, qy, qz, qw = q_mmcp
-            R_mmcp          = Quaternion((qw, qx, qy, qz)).to_matrix()
-            R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
-            R_blender_arm   = mw_rot_t @ R_blender_world @ mw_rot
-            R_bone          = ML_inv @ R_blender_arm @ ML
-            bone.rotation_quaternion = R_bone.to_quaternion()
+            bone.rotation_quaternion = rotations.bone_quaternion(joint_name, bone, q_mmcp)
             bone.keyframe_insert(
                 data_path="rotation_quaternion",
                 frame=_frame_from_time(ts, gltf, start_frame),
@@ -426,8 +459,7 @@ def splice_gltf_into_action(
     for pb in pose.bones:
         pb.rotation_mode = 'QUATERNION'
 
-    mw_rot   = armature_obj.matrix_world.to_quaternion().to_matrix()
-    mw_rot_t = mw_rot.transposed()
+    rotations = _RotationBaker(armature_obj, nodes)
     arm_world_inv = armature_obj.matrix_world.inverted()
 
     # Step 1a — snapshot user-authored keys (kp.type != 'GENERATED') sitting
@@ -495,19 +527,11 @@ def splice_gltf_into_action(
         timestamps  = _input_for(sampler_idx)
         quats       = _quats_for(sampler_idx)
 
-        ML     = bone.bone.matrix_local.to_3x3()
-        ML_inv = ML.transposed()
-
         for ts, q_mmcp in zip(timestamps, quats):
             frame = _frame_from_time(ts, gltf, request_start_frame)
             if not (fs_target <= frame <= fe_target):
                 continue
-            qx, qy, qz, qw = q_mmcp
-            R_mmcp          = Quaternion((qw, qx, qy, qz)).to_matrix()
-            R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
-            R_blender_arm   = mw_rot_t @ R_blender_world @ mw_rot
-            R_bone          = ML_inv @ R_blender_arm @ ML
-            bone.rotation_quaternion = R_bone.to_quaternion()
+            bone.rotation_quaternion = rotations.bone_quaternion(joint_name, bone, q_mmcp)
             bone.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
     for ch in channels:
@@ -713,8 +737,7 @@ def bake_gltf_to_actions_per_block(
     if armature_obj.animation_data is None:
         armature_obj.animation_data_create()
 
-    mw_rot   = armature_obj.matrix_world.to_quaternion().to_matrix()
-    mw_rot_t = mw_rot.transposed()
+    rotations = _RotationBaker(armature_obj, nodes)
     arm_world_inv = armature_obj.matrix_world.inverted()
 
     skipped: list[str] = []
@@ -787,9 +810,6 @@ def bake_gltf_to_actions_per_block(
             timestamps = _input_for(ch["sampler"])
             quats      = _quats_for(ch["sampler"])
 
-            ML     = bone.bone.matrix_local.to_3x3()
-            ML_inv = ML.transposed()
-
             data_path = f'pose.bones["{bone.name}"].rotation_quaternion'
             buf_w: list[float] = []
             buf_x: list[float] = []
@@ -801,12 +821,7 @@ def bake_gltf_to_actions_per_block(
                 frame = _frame_from_time(ts, gltf, request_start_frame)
                 if not (fs <= frame <= fe):
                     continue
-                qx, qy, qz, qw = q_mmcp
-                R_mmcp          = Quaternion((qw, qx, qy, qz)).to_matrix()
-                R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
-                R_blender_arm   = mw_rot_t @ R_blender_world @ mw_rot
-                R_bone          = ML_inv @ R_blender_arm @ ML
-                qb              = R_bone.to_quaternion()
+                qb = rotations.bone_quaternion(joint_name, bone, q_mmcp)
                 buf_f.append(frame)
                 buf_w.append(qb.w)
                 buf_x.append(qb.x)
@@ -1141,6 +1156,15 @@ def _bake_via_metarig_detour(
 
     bone_names = {pb.name for pb in metarig_obj.pose.bones}
 
+    # The retarget copies world-space transforms from the metarig's bones
+    # onto the rig's controls, and its helpers sit at the rig's rest bones
+    # by armature-local matrices, so the two objects must stand in the same
+    # place (``rigify_bake``). The metarig is usually left where it was
+    # generated while the rig is moved and turned, so it stands in for the
+    # duration of the bake exactly where the rig stands.
+    saved_meta_matrix = metarig_obj.matrix_world.copy()
+    metarig_obj.matrix_world = rig_obj.matrix_world.copy()
+
     # Save + clear the metarig's existing action so we don't compose with it.
     saved_meta_action = None
     if metarig_obj.animation_data and metarig_obj.animation_data.action:
@@ -1193,7 +1217,9 @@ def _bake_via_metarig_detour(
         import traceback
         traceback.print_exc()
     finally:
-        # Restore the metarig to whatever it was animating before.
+        # Restore the metarig to whatever it was animating before, and to
+        # where it stood.
+        metarig_obj.matrix_world = saved_meta_matrix
         if metarig_obj.animation_data:
             metarig_obj.animation_data.action = saved_meta_action
         try:
@@ -1874,16 +1900,18 @@ def bake_single_pose(
     for pb in pose.bones:
         pb.rotation_mode = 'QUATERNION'
 
-    # Undo the armature's ``matrix_world`` rotation on the way in; matches
-    # the outbound conversion in ``sample_pose_keyframes``. No-op when
-    # matrix_world is identity.
-    mw_rot = armature_obj.matrix_world.to_quaternion().to_matrix()
-    mw_rot_t = mw_rot.transposed()
+    rotations = _RotationBaker(armature_obj, nodes)
 
-    if root_translation not in ("skip", "height_only", "full"):
+    if root_translation not in ("skip", "height_only", "on_ground", "full"):
         raise ValueError(
-            f"root_translation must be 'skip', 'height_only', or 'full', got {root_translation!r}"
+            "root_translation must be 'skip', 'height_only', 'on_ground' or 'full', "
+            f"got {root_translation!r}"
         )
+    # On the ground: placed as height_only, then moved so the pose's lowest
+    # point touches the ground. The model's own height is not to be trusted
+    # for that: asked for "a person running down stairs" it stood the pose
+    # 0.8 m up, on steps only it could see.
+    seated = None          # (root pose bone, its ML, the ground) once placed
 
     written = 0
     for ch in channels:
@@ -1912,12 +1940,8 @@ def bake_single_pose(
             quats = _read_floats(gltf, sampler["output"], "VEC4")
             if source_frame * 4 + 4 > len(quats):
                 continue
-            qx, qy, qz, qw = quats[source_frame * 4:(source_frame + 1) * 4]
-            R_mmcp = Quaternion((qw, qx, qy, qz)).to_matrix()
-            R_blender_world = _MMCP_TO_BLENDER @ R_mmcp @ _MMCP_TO_BLENDER.transposed()
-            R_blender_arm = mw_rot_t @ R_blender_world @ mw_rot
-            R_bone = ML.transposed() @ R_blender_arm @ ML
-            bone.rotation_quaternion = R_bone.to_quaternion()
+            q_mmcp = quats[source_frame * 4:(source_frame + 1) * 4]
+            bone.rotation_quaternion = rotations.bone_quaternion(joint_name, bone, q_mmcp)
             bone.keyframe_insert(data_path="rotation_quaternion", frame=target_frame)
         else:
             vec3s = _read_floats(gltf, sampler["output"], "VEC3")
@@ -1926,14 +1950,18 @@ def bake_single_pose(
             p_mmcp = tuple(vec3s[source_frame * 3:(source_frame + 1) * 3])
             pose_world = Vector(coords.mmcp_pos_to_blender(p_mmcp))
 
-            if root_translation == "height_only":
+            if root_translation in ("height_only", "on_ground"):
                 # Keep the bone's current world xy (whatever the user has
                 # placed the rig at, including any prior keyframe at this
                 # frame) and only override world z with the generated pose's
                 # height. Lets a "crouching" pose drop toward the floor
                 # without yanking the character to the canonical origin in xy.
+                # The height is over the ground under the character, not
+                # over world Z=0: on a roof below 0 the pose came out lifted
+                # to 0, standing on air (see _ground_under).
                 current_world = armature_obj.matrix_world @ bone.head
-                target_world = Vector((current_world.x, current_world.y, pose_world.z))
+                floor = _ground_under(armature_obj, current_world)
+                target_world = Vector((current_world.x, current_world.y, floor + pose_world.z))
             else:  # "full"
                 target_world = pose_world
 
@@ -1941,8 +1969,13 @@ def bake_single_pose(
             delta = arm_local - bone.bone.head_local
             bone.location = ML.transposed() @ delta
             bone.keyframe_insert(data_path="location", frame=target_frame)
+            if root_translation == "on_ground":
+                seated = (bone, ML, floor)
 
         written += 1
+
+    if seated is not None:
+        _stand_on_ground(armature_obj, *seated, target_frame)
 
     if written:
         if request_builder.is_control_rig(armature_obj):
@@ -1963,6 +1996,45 @@ def bake_single_pose(
         )
 
     return written
+
+
+def _stand_on_ground(armature_obj, bone, ML, floor: float, frame: int) -> None:
+    """Move the keyed pose up or down so its lowest point is on ``floor``.
+
+    The pose is evaluated as keyed (the scene goes to ``frame`` for it) and
+    the lowest joint -- a heel, a toe, a knee for a kneel -- is measured; the
+    root's location key takes the difference."""
+    scene = bpy.context.scene
+    was = scene.frame_current
+    if was != frame:
+        scene.frame_set(frame)
+    else:
+        bpy.context.view_layer.update()
+    mw = armature_obj.matrix_world
+    low = min(min((mw @ pb.head).z, (mw @ pb.tail).z) for pb in armature_obj.pose.bones
+              if pb.bone.use_deform)
+    dz = floor - low
+    if abs(dz) > 1e-4:
+        shift = mw.inverted().to_3x3() @ Vector((0.0, 0.0, dz))
+        bone.location = bone.location + ML.transposed() @ shift
+        bone.keyframe_insert(data_path="location", frame=frame)
+    if was != frame:
+        scene.frame_set(was)
+
+
+def _ground_under(armature_obj, at: Vector) -> float:
+    """World height of the ground under ``at`` (the root, where it stands):
+    the scene's surfaces, as the Autoposer and the waypoints read them, from
+    just above it and past the character's own meshes. With nothing there,
+    the armature's base plane, which is where the model's floor sits."""
+    from . import ground
+
+    try:
+        z = ground.surface_below(bpy.context.scene, at.x, at.y, at.z + ground.RAY_HEADROOM,
+                                 arm=armature_obj)
+    except Exception:                       # noqa: BLE001 -- a pose still lands
+        z = None
+    return float(z) if z is not None else float(armature_obj.matrix_world.translation.z)
 
 
 # ---------------------------------------------------------------------------

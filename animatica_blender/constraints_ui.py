@@ -390,8 +390,8 @@ class ANIMATICA_OT_add_root_path(Operator):
     bl_label = "Add Root Path"
     bl_description = (
         "Create a Bezier curve on the floor plane that the character will follow. "
-        "Sample density and 'follow direction' (heading) are editable on the curve "
-        "object's properties"
+        "You can change the sampling and Follow Direction later in the "
+        "curve object's properties"
     )
     # Note: no ``UNDO`` flag. With UNDO enabled on a slotted-action scene,
     # Blender's undo snapshot diff was observed to drop unreferenced fcurves
@@ -402,12 +402,12 @@ class ANIMATICA_OT_add_root_path(Operator):
 
     match_direction: bpy.props.BoolProperty(
         name="Follow Direction",
-        description="Derive heading_radians from the curve tangent so the character faces along the path",
+        description="Turn the character to face along the curve as it walks the path",
         default=True,
     )
     sample_density: bpy.props.IntProperty(
         name="Sample Every N Frames",
-        description="One root_path constraint frame per N timeline frames",
+        description="Send one point of the path for every N frames of the timeline",
         default=10, min=1, max=60,
     )
 
@@ -716,8 +716,8 @@ class ANIMATICA_OT_add_effector_target(Operator):
     bl_idname = "animatica.add_effector_target"
     bl_label = "Add Effector Pin"
     bl_description = (
-        "Pin a named joint to a moving Blender Empty. Each location keyframe "
-        "on the empty becomes one effector_target constraint frame"
+        "Pin a joint to a moving Blender Empty. The joint is asked to reach the "
+        "Empty at each of the Empty's location keyframes"
     )
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -727,8 +727,8 @@ class ANIMATICA_OT_add_effector_target(Operator):
             ('EFFECTOR', "End effector",
              "The hand or foot joints the solver is meant to pin"),
             ('BONE', "Any bone",
-             "Pick a bone yourself — for rigs whose naming the addon cannot "
-             "match, or to pin something other than a limb tip"),
+             "Pick a bone yourself. Use this when the addon cannot match your "
+             "rig's bone names, or to pin something other than a hand or foot"),
         ],
         default='EFFECTOR',
     )
@@ -740,7 +740,7 @@ class ANIMATICA_OT_add_effector_target(Operator):
 
     bone: bpy.props.StringProperty(
         name="Bone",
-        description="Bone this pin constrains. Must be one the request sends",
+        description="The bone to pin. It must be a bone the addon sends to the server",
     )
 
     def invoke(self, context, event):
@@ -758,8 +758,8 @@ class ANIMATICA_OT_add_effector_target(Operator):
             # Say up front which bones are legal, rather than letting the
             # user pick a control bone and meet a build error later.
             if self.bone and self.bone not in _request_joint_names(arm):
-                col.label(text="Not sent in the request — see below", icon='ERROR')
-                col.label(text="control bones are not part of the skeleton")
+                col.label(text="This bone is not sent to the server", icon='ERROR')
+                col.label(text="Control bones are not part of the skeleton")
         else:
             col.prop(self, "joint")
 
@@ -782,8 +782,8 @@ class ANIMATICA_OT_add_effector_target(Operator):
                     {'ERROR'},
                     f"{chosen!r} is not part of the skeleton this rig sends, so "
                     f"the server would never see the pin"
-                    + (f" — try {hint!r}" if hint else
-                       " (control and helper bones are excluded; pin a deform bone)"),
+                    + (f". Try {hint!r}" if hint else
+                       ". Control and helper bones are left out, so pin a deform bone"),
                 )
                 return {'CANCELLED'}
             joint_name = chosen
@@ -838,7 +838,7 @@ class ANIMATICA_OT_add_effector_target(Operator):
 class ANIMATICA_OT_remove_constraint_object(Operator):
     bl_idname = "animatica.remove_constraint_object"
     bl_label = "Remove Constraint Object"
-    bl_description = "Delete the named constraint object from the scene"
+    bl_description = "Delete this constraint object from the scene"
     bl_options = {'REGISTER', 'UNDO'}
 
     name: bpy.props.StringProperty()
@@ -856,7 +856,7 @@ class ANIMATICA_OT_remove_constraint_object(Operator):
 class ANIMATICA_OT_focus_constraint_object(Operator):
     bl_idname = "animatica.focus_constraint_object"
     bl_label = "Focus Constraint Object"
-    bl_description = "Select and view-frame the named constraint object"
+    bl_description = "Select the constraint object and frame it in the view"
     bl_options = {'REGISTER', 'UNDO'}
 
     name: bpy.props.StringProperty()
@@ -1055,6 +1055,51 @@ def _evaluated_local_basis(pb: bpy.types.PoseBone) -> 'Matrix':
     return parent_offset @ pb.parent.matrix.inverted() @ pb.matrix
 
 
+def _request_root_pose_bone(arm: bpy.types.Object) -> bpy.types.PoseBone | None:
+    """The pose bone the request serializes as the skeleton's root.
+
+    On a control rig that is the *deform* skeleton's root, chosen by
+    ``request_builder._build_deform_parent_map``, not the armature's outer
+    root pose bone. The response's root joint is the same bone, and
+    ``gltf_to_blender._RotationBaker`` undoes the object's yaw on it, so the
+    outbound side must put the yaw on exactly this one.
+    """
+    from . import request_builder
+    root = next((j["name"] for j in request_builder.armature_to_skeleton(arm)["joints"]
+                 if j["parent"] is None), None)
+    return arm.pose.bones.get(root) if root else None
+
+
+def _joint_rotation_to_mmcp(pb: bpy.types.PoseBone, *, is_root: bool, yaw, tilt) -> list[float]:
+    """One pose bone's rotation the way the server expects it: relative to
+    its parent, in the MMCP Y-up frame, relative to the rig's rest pose as
+    it stands at yaw 0 (``x, y, z, w``).
+
+      1. ``ML @ R_basis @ ML.T``  — bone-local rest → armature-local
+      2. ``tilt @ _ @ tilt.T``    — armature-local → Blender world, less the
+                                    object's yaw (no-op at identity; a Mixamo
+                                    import's 90° + 0.01 ``matrix_world`` is
+                                    the common tilt)
+      3. ``yaw @ _``              — the root alone carries the object's yaw,
+                                    so the server sees the heading the user
+                                    sees; the other joints are relative to it
+      4. ``S_inv @ _ @ S``        — Blender Z-up → MMCP Y-up
+
+    ``yaw``/``tilt`` come from ``coords.split_world_yaw``. The inverse of
+    this chain lives in ``gltf_to_blender._RotationBaker`` on the bake path
+    and must stay in sync.
+    """
+    R_basis = _evaluated_local_basis(pb).to_3x3()
+    ML      = pb.bone.matrix_local.to_3x3()
+    R_blender_arm   = ML @ R_basis @ ML.transposed()
+    R_blender_world = tilt @ R_blender_arm @ tilt.transposed()
+    if is_root:
+        R_blender_world = yaw @ R_blender_world
+    R_mmcp = _MMCP_TO_BLENDER.transposed() @ R_blender_world @ _MMCP_TO_BLENDER
+    w, x, y, z = R_mmcp.to_quaternion()
+    return [x, y, z, w]
+
+
 def authored_pose_frames(
     source_action: bpy.types.Action | None,
     *,
@@ -1101,6 +1146,36 @@ def authored_pose_frames(
     return sorted(frames), keyed_bones
 
 
+def mmcp_joint_rotation(pb: bpy.types.PoseBone, mw_rot: 'Matrix', mw_rot_t: 'Matrix') -> list[float]:
+    """``pb``'s evaluated pose as an MMCP local rotation, ``[x, y, z, w]``.
+
+    The per-bone rotation delta, converted to the MMCP world frame in three steps:
+
+      1. ``ML @ R_basis @ ML.T``   — bone-local-rest → armature-local
+      2. ``mw_rot @ _ @ mw_rot.T`` — armature-local → Blender world (no-op when the
+                                     armature is at identity; required for rigs like
+                                     Mixamo that carry a 90° + 0.01 ``matrix_world``)
+      3. ``S_inv @ _ @ S``         — Blender Z-up → MMCP Y-up
+
+    For a whole clip (retarget.py): every joint carries the object's full world turn,
+    which is what ``POST /retarget`` reads (the pose-keyframe samplers, through
+    ``_joint_rotation_to_mmcp``, put the yaw on the root alone, as ``/generate`` reads
+    it). ``mw_rot`` / ``mw_rot_t`` are the armature's world rotation and
+    its transpose, passed in so a caller sampling many bones computes them once. The
+    inverse of this chain lives in ``gltf_to_blender.bake_gltf_to_armature`` and must
+    stay in sync.
+    """
+    S = _MMCP_TO_BLENDER
+    R_basis = _evaluated_local_basis(pb).to_3x3()
+    ML = pb.bone.matrix_local.to_3x3()
+    R_blender_arm = ML @ R_basis @ ML.transposed()
+    R_blender_world = mw_rot @ R_blender_arm @ mw_rot_t
+    R_mmcp = S.transposed() @ R_blender_world @ S
+    w, x, y, z = R_mmcp.to_quaternion()
+    return [x, y, z, w]
+
+
+
 def sample_pose_keyframes(
     armature_obj: bpy.types.Object,
     *,
@@ -1127,11 +1202,6 @@ def sample_pose_keyframes(
     # Lazy-import to avoid request_builder ↔ constraints_ui circular at
     # module load — both modules are pulled into __init__'s register flow.
     from . import request_builder
-
-    root_pb = next(
-        (pb for pb in armature_obj.pose.bones if pb.parent is None),
-        None,
-    )
 
     # Use the same filtered deform set as :func:`armature_to_skeleton` —
     # face / tweak-half bones we strip out of the request must not appear
@@ -1171,19 +1241,14 @@ def sample_pose_keyframes(
     scene = bpy.context.scene
     original = scene.frame_current
 
-    # Per-bone rotation delta, converted to MMCP world frame in three steps:
-    #   1. ``ML @ R_basis @ ML.T``   — bone-local-rest → armature-local
-    #   2. ``mw_rot @ _ @ mw_rot.T`` — armature-local → Blender world
-    #                                  (no-op when armature is at identity;
-    #                                   required for rigs like Mixamo that
-    #                                   carry a 90° + 0.01 matrix_world).
-    #   3. ``S_inv @ _ @ S``         — Blender Z-up → MMCP Y-up
-    # The inverse of this chain lives in ``gltf_to_blender.py`` on the bake
-    # path and must stay in sync.
-    S        = _MMCP_TO_BLENDER
-    S_inv    = S.transposed()
-    mw_rot   = armature_obj.matrix_world.to_quaternion().to_matrix()
-    mw_rot_t = mw_rot.transposed()
+    yaw, tilt = coords.split_world_yaw(armature_obj.matrix_world)
+
+    # The root the server will see. On a control rig that is the *deform*
+    # skeleton's root, not the armature's outer root pose bone: its rotation
+    # carries the object's yaw, and its evaluated head is the world root
+    # position.
+    sample_root = _request_root_pose_bone(armature_obj)
+    root_name = sample_root.name if sample_root is not None else None
 
     # Heuristic: if the user keyed bones that live outside Kimodo's
     # end-effector chains (spine, neck, shoulders, arms, etc.), they clearly
@@ -1208,13 +1273,8 @@ def sample_pose_keyframes(
             bpy.context.view_layer.update()
             joint_rotations: dict[str, list[float]] = {}
             for pb in sampled_pbs:
-                R_basis = _evaluated_local_basis(pb).to_3x3()
-                ML      = pb.bone.matrix_local.to_3x3()
-                R_blender_arm = ML @ R_basis @ ML.transposed()
-                R_blender_world = mw_rot @ R_blender_arm @ mw_rot_t
-                R_mmcp = S_inv @ R_blender_world @ S
-                w, x, y, z = R_mmcp.to_quaternion()
-                joint_rotations[pb.name] = [x, y, z, w]
+                joint_rotations[pb.name] = _joint_rotation_to_mmcp(
+                    pb, is_root=(pb.name == root_name), yaw=yaw, tilt=tilt)
 
             if not joint_rotations:
                 continue
@@ -1236,20 +1296,6 @@ def sample_pose_keyframes(
             #     around in object mode),
             #   * the root bone's pose matrix (user keyframes location in
             #     pose mode).
-            #
-            # When the rig is a control rig, the *deform* root bone is what
-            # the server will see — pull its evaluated head world position,
-            # not the armature's outer root pose bone.
-            sample_root = root_pb
-            if is_control_rig and root_pb is not None and root_pb.name not in deform_bones:
-                # Find the topmost deform bone; that's the deform skeleton's root.
-                for pb in armature_obj.pose.bones:
-                    if pb.name in deform_bones:
-                        cur = pb
-                        while cur.parent is not None and cur.parent.name in deform_bones:
-                            cur = cur.parent
-                        sample_root = cur
-                        break
             if sample_root is not None:
                 root_world = (armature_obj.matrix_world @ sample_root.matrix).translation
                 root_mmcp = coords.blender_pos_to_mmcp(root_world)
@@ -1303,8 +1349,6 @@ def sample_pose_at_frame(
     # rig's control handles into joint_rotations the moment one existed, and
     # the server rejects a constraint naming a joint it was never given.
     sample_bone_names = set(request_builder.request_joint_set(armature_obj))
-    deform_bones = request_builder.emitted_deform_bones(armature_obj)
-    is_control_rig = request_builder.is_control_rig(armature_obj)
     if bone_names is not None:
         sample_bone_names = sample_bone_names & bone_names
     if not sample_bone_names:
@@ -1318,40 +1362,21 @@ def sample_pose_at_frame(
     scene = bpy.context.scene
     original = scene.frame_current
 
-    S = _MMCP_TO_BLENDER
-    S_inv = S.transposed()
-    mw_rot = armature_obj.matrix_world.to_quaternion().to_matrix()
-    mw_rot_t = mw_rot.transposed()
+    yaw, tilt = coords.split_world_yaw(armature_obj.matrix_world)
 
-    root_pb = next(
-        (pb for pb in armature_obj.pose.bones if pb.parent is None),
-        None,
-    )
-    sample_root = root_pb
-    if is_control_rig and root_pb is not None and root_pb.name not in deform_bones:
-        for pb in armature_obj.pose.bones:
-            if pb.name in deform_bones:
-                cur = pb
-                while cur.parent is not None and cur.parent.name in deform_bones:
-                    cur = cur.parent
-                sample_root = cur
-                break
+    sample_root = _request_root_pose_bone(armature_obj)
 
     try:
         scene.frame_set(sample_frame)
         bpy.context.view_layer.update()
 
+        root_name = sample_root.name if sample_root is not None else None
         joint_rotations: dict[str, list[float]] = {}
         for pb in armature_obj.pose.bones:
             if pb.name not in sample_bone_names:
                 continue
-            R_basis = _evaluated_local_basis(pb).to_3x3()
-            ML = pb.bone.matrix_local.to_3x3()
-            R_blender_arm = ML @ R_basis @ ML.transposed()
-            R_blender_world = mw_rot @ R_blender_arm @ mw_rot_t
-            R_mmcp = S_inv @ R_blender_world @ S
-            w, x, y, z = R_mmcp.to_quaternion()
-            joint_rotations[pb.name] = [x, y, z, w]
+            joint_rotations[pb.name] = _joint_rotation_to_mmcp(
+                pb, is_root=(pb.name == root_name), yaw=yaw, tilt=tilt)
 
         if not joint_rotations:
             return None

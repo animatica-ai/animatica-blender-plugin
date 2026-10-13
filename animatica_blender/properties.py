@@ -18,8 +18,6 @@ from bpy.props import (
 )
 from bpy.types import AddonPreferences, PropertyGroup
 
-from . import autoposer
-from .autoposer import prefs as autoposer_prefs
 from .hand_pose import STYLES as _hand_pose_items
 
 # Whether this build is a preview (the zip stamps VERSION_TAG, e.g. v0.6.0-preview7).
@@ -62,6 +60,7 @@ def _serialize_blocks(blocks) -> str:
             "color": list(b.color),
             "seed": int(getattr(b, "seed", 0)),
             "last_used_seed": int(getattr(b, "last_used_seed", 0)),
+            "locked": bool(getattr(b, "locked", False)),
         }
         for b in blocks
     ])
@@ -108,6 +107,7 @@ def load_blocks_from_armature(arm_obj, settings):
             # ``last_used_seed`` records the concrete seed of the last generation
             # (added with client-side seed recording); older scenes default to 0.
             b.last_used_seed = int(item.get("last_used_seed", 0))
+            b.locked = bool(item.get("locked", False))
         settings.active_block_index = int(arm_obj.get(_ACTIVE_KEY, 0))
         return
 
@@ -269,16 +269,16 @@ def reset_target_armature_state(settings) -> None:
 def mirror_autoposer_rig(settings) -> None:
     """Point the Autoposer at the armature Animatica generates for.
 
-    One character, chosen once. The Autoposer's own ``ap_armature`` stays as
+    One character, chosen once. The Autoposer's own ``autoposer_armature`` stays as
     the mirror the ported module reads, rather than being torn out of it.
     """
     scene = getattr(settings, "id_data", None)
-    if scene is None or not hasattr(scene, "ap_armature"):
+    if scene is None or not hasattr(scene, "autoposer_armature"):
         return
     arm = _live_armature(settings.target_armature)
     name = arm.name if arm is not None else ""
-    if scene.ap_armature != name:
-        scene.ap_armature = name
+    if scene.autoposer_armature != name:
+        scene.autoposer_armature = name
 
 
 def _target_armature_update(self, context):
@@ -414,25 +414,6 @@ def _key_poses_rebake_update(self, context):
     key_poses.on_rebake_setting(self)
 
 
-def _tightness_update(self, context):
-    """Push one number onto every control's own tolerance.
-
-    The poser reads a tolerance per control — metres of slack, and the IK
-    weight. Seven identical fields reading 0.005 is not seven decisions; it is
-    one, asked seven times. This is that one, and the per-control values stay
-    underneath for anyone who wants them from the bone properties.
-    """
-    from . import properties  # noqa: PLC0415 — self, for _live_armature
-    from .autoposer import poser  # noqa: PLC0415 — lazy to avoid circular import
-
-    arm = properties._live_armature(self.target_armature)
-    if arm is None:
-        return
-    for b in poser._controls(arm):
-        b.ap_tol_m = float(self.pose_tightness)
-        b.ap_rot_tol_m = float(self.pose_tightness)
-
-
 def _key_poses_redraw_update(self, context):
     from . import key_poses  # noqa: PLC0415 — lazy to avoid circular import
 
@@ -449,7 +430,7 @@ class PromptBlock(PropertyGroup):
 
     prompt: StringProperty(
         name="Prompt",
-        description="Text prompt driving generation for this time window",
+        description="What the character does in this stretch of the timeline, in words",
         default="",
     )
     frame_start: IntProperty(
@@ -467,9 +448,22 @@ class PromptBlock(PropertyGroup):
         description="Include this block when generating",
         default=True,
     )
+    selected: BoolProperty(
+        name="Selected", default=False, options={'SKIP_SAVE'},
+        description="Selected on the Timeline. Selected blocks are moved, deleted and edited together",
+    )
+    locked: BoolProperty(
+        name="Locked",
+        description=(
+            "Keep this block's motion as it is. Its keys are yours to edit, and "
+            "Generate and Redo leave it alone. The blocks next to it are "
+            "generated to run into it"
+        ),
+        default=False,
+    )
     color: FloatVectorProperty(
         name="Color",
-        description="Display color for this strip (0,0,0,0 = auto palette)",
+        description="Color of this block on the Timeline. Leave at 0,0,0,0 to pick one automatically",
         subtype="COLOR",
         size=4,
         min=0.0, max=1.0,
@@ -478,21 +472,20 @@ class PromptBlock(PropertyGroup):
     seed: IntProperty(
         name="Seed",
         description=(
-            "Per-block seed override. 0 = inherit the global Seed, so setting "
-            "the global Seed reproduces the whole clip. Set a positive value to "
-            "give this block its own seed — when the connected model advertises "
-            "per-segment seeds, full-timeline Generate honours it so this block "
-            "re-rolls independently of the others"
+            "This block's own seed. At 0 it uses the main Seed, so setting that "
+            "one reproduces the whole clip. A positive value gives this block its "
+            "own seed, so it varies independently of the others when you Generate "
+            "the whole timeline. This needs a model that supports a seed per block"
         ),
         default=0, min=0, max=999999,
     )
     last_used_seed: IntProperty(
         name="Last Used Seed",
         description=(
-            "The concrete seed this block was last generated with (0 = not "
-            "generated yet). When Seed is 0, the addon rolls a real seed at "
-            "generation time and records it here so the result is reproducible "
-            "— right-click the strip and choose 'Reuse seed' to lock it in"
+            "The seed this block was last generated with (0 if it hasn't been "
+            "generated yet). When Seed is 0, a new seed is picked for each "
+            "generation and recorded here so you can repeat the result. "
+            "Right-click the strip and choose 'Reuse seed' to keep it"
         ),
         default=0, min=0, max=999999,
     )
@@ -542,15 +535,15 @@ class AnimaticaAddonPreferences(AddonPreferences):
         name="Self-hosted",
         default=False,
         description=(
-            "Tick when running an MMCP server on your own machine or LAN "
-            "(e.g. motionmcp-kimodo on localhost). Untick to use Animatica "
-            "Cloud at api.animatica.ai (default; requires sign-in)."
+            "Use an MMCP server on your own machine or network, such as "
+            "motionmcp-kimodo on localhost. Off (the default) uses Animatica "
+            "Cloud at api.animatica.ai, which needs you to sign in"
         ),
     )
     server_url: StringProperty(
         name="Server URL",
         default="http://localhost:8000",
-        description="Base URL of your self-hosted MMCP server",
+        description="Base URL of your own MMCP server",
     )
 
     # --- Updates ----------------------------------------------------------
@@ -560,7 +553,7 @@ class AnimaticaAddonPreferences(AddonPreferences):
         name="Check for updates",
         default=True,
         description=(
-            "Ask GitHub once a day whether a newer build has been released. "
+            "Check GitHub once a day for a newer release. "
             "Nothing is downloaded or installed until you press Update"
         ),
     )
@@ -579,24 +572,24 @@ class AnimaticaAddonPreferences(AddonPreferences):
     access_token: StringProperty(
         name="Access Token",
         default="",
-        description="Animatica session token; valid for ~1 hour, then auto-refreshed",
+        description="Your Animatica session token. It lasts about an hour and is renewed automatically",
         subtype='PASSWORD',
     )
     refresh_token: StringProperty(
         name="Refresh Token",
         default="",
-        description="Long-lived refresh token used to renew the session",
+        description="Long-lived token used to renew your session",
         subtype='PASSWORD',
     )
     email: StringProperty(
         name="Email",
         default="",
-        description="Email of the signed-in Animatica user",
+        description="Email address of the signed-in Animatica account",
     )
     tier: StringProperty(
         name="Tier",
         default="",
-        description="Animatica plan tier (free / pro / team / admin)",
+        description="Your Animatica plan (free, pro, team or admin)",
     )
 
     # The Autoposer's own settings — model source, token, cache, threads —
@@ -627,7 +620,7 @@ class AnimaticaAddonPreferences(AddonPreferences):
         layout.label(text="Account", icon='USER')
         box = layout.box()
         if self.self_hosted:
-            box.label(text="Self-hosted — no sign-in needed", icon='INFO')
+            box.label(text="Self-hosted: no sign-in needed", icon='INFO')
         elif self.access_token:
             # Split rather than a plain row: an even share would give signing
             # out half the width, and it is not half the point of the row.
@@ -690,23 +683,14 @@ class AnimaticaAddonPreferences(AddonPreferences):
             if body is not None:
                 _draw_model_details(body, caps)
 
-        # --- The poser --------------------------------------------------------
+        # --- Posing: a product of its own --------------------------------------
+        from . import posing
         layout.separator()
-        layout.label(text="Poser", icon='ARMATURE_DATA')
-        clash = autoposer.superseded_addons()
-        if clash:
-            warn = layout.row()
-            warn.alert = True
-            warn.label(text=f"disable the standalone {', '.join(clash)} addon",
-                       icon='ERROR')
-        autoposer_prefs.draw(layout, self, context)
-
-
-# Merged after the class body: annotations are read at registration, so adding
-# them here gives the Autoposer's fields to Animatica's preferences without
-# restating them in two places.
-for _name, _prop in autoposer_prefs.PROPERTIES.items():
-    AnimaticaAddonPreferences.__annotations__[_name] = _prop
+        row = layout.row()
+        row.active = False
+        row.label(text=(f"Posing: {posing.PRO_NAME} is installed (its settings are its own)"
+                        if posing.present() else f"Posing with handles comes with {posing.PRO_NAME}"),
+                  icon='ARMATURE_DATA')
 
 
 def _model_id_items(self, context):
@@ -715,13 +699,30 @@ def _model_id_items(self, context):
     return mmcp_client.cached_model_items()
 
 
+def _bar_mode_update(self, context):
+    """Pose or Motion picked: the viewport draws what that mode is about."""
+    from . import key_poses
+    key_poses.on_toggle(self)
+    _redraw_3d_views()
+
+
+def _redraw_3d_views() -> None:
+    try:
+        for win in bpy.context.window_manager.windows:
+            for area in win.screen.areas:
+                if area.type == 'VIEW_3D':
+                    area.tag_redraw()
+    except (AttributeError, ReferenceError):
+        pass
+
+
 class AnimaticaSettings(PropertyGroup):
     """Scene-level addon state."""
 
     # -- MMCP server connection --
     model_id: EnumProperty(
         name="Model",
-        description="Motion-generation model exposed by the connected MMCP server",
+        description="The motion model to use, from those the connected server offers",
         items=_model_id_items,
     )
 
@@ -732,9 +733,9 @@ class AnimaticaSettings(PropertyGroup):
             ('OWN', "Each Their Own",
              "Every character uses its own prompts, key poses, waypoints and pins"),
             ('SHARED', "Shared",
-             "Every character uses the active character's prompts, each with its "
-             "own seed, starting from where it stands: variations on one action, "
-             "a crowd. Waypoints and pins are left out"),
+             "Every character uses the active character's prompts with its own "
+             "seed, starting from where it stands. Good for variations on one "
+             "action, or a crowd. Waypoints and pins are left out"),
         ],
         default='OWN',
     )
@@ -747,16 +748,17 @@ class AnimaticaSettings(PropertyGroup):
     follow_active: BoolProperty(
         name="Follow Selection",
         description=(
-            "Animate whichever character you select: making an armature, or a "
-            "mesh skinned to one, the active object makes it Animatica's "
-            "character. Not while a take is being made or reviewed"
+            "Animate whichever character you select. When an armature, or a mesh "
+            "skinned to one, becomes the active object, it becomes Animatica's "
+            "character. Paused while a take (the generated motion) is being made "
+            "or reviewed"
         ),
         default=True,
     )
     target_armature: PointerProperty(
         name="Target Armature",
         type=bpy.types.Object,
-        description="Armature with keyframed animation to generate from",
+        description="The armature to animate. Motion is generated from its keyframes",
         poll=lambda self, obj: obj.type == 'ARMATURE',
         update=_target_armature_update,
     )
@@ -771,7 +773,7 @@ class AnimaticaSettings(PropertyGroup):
     prompt_blocks: CollectionProperty(
         type=PromptBlock,
         name="Prompt Blocks",
-        description="Per-window prompts drawn as strips on the timeline",
+        description="Prompt blocks: stretches of the timeline, each with its own prompt, drawn as strips",
     )
     active_block_index: IntProperty(
         name="Active Block",
@@ -782,19 +784,19 @@ class AnimaticaSettings(PropertyGroup):
     seed: IntProperty(
         name="Seed",
         description=(
-            "Clip seed used for every block that doesn't pin its own. 0 (the "
-            "default) makes every run a new take, and the seed it used is shown "
-            "so you can lock a take you like. The same seed with the same inputs "
-            "reproduces the same motion"
+            "Seed for every block that doesn't set its own. At 0 (the default) "
+            "every run makes a new take, and the seed it used is shown so you can "
+            "keep a take you like. The same seed with the same inputs gives the "
+            "same motion"
         ),
         default=0, min=0, max=999999,
     )
     last_used_seed: IntProperty(
         name="Last Used Seed",
         description=(
-            "The concrete clip seed the last generation actually ran with "
-            "(0 = none yet). Set when Seed is 0 and a fresh seed was rolled; "
-            "click the lock to copy it into Seed and reproduce the run"
+            "The seed the last generation actually used (0 if there hasn't been "
+            "one yet). It is set when Seed is 0 and a new seed was picked. Click "
+            "the lock to copy it into Seed and repeat the run"
         ),
         default=0, min=0, max=999999,
     )
@@ -802,10 +804,10 @@ class AnimaticaSettings(PropertyGroup):
     quality_preset: EnumProperty(
         name="Quality",
         items=[
-            ("STANDARD", "Best", "The finest motion (50 denoising steps)"),
+            ("STANDARD", "Best", "Best-quality motion (50 denoising steps)"),
             ("HALF", "Faster", "About twice as fast, a little rougher (25 steps)"),
             ("QUARTER", "Draft", "Quick drafts for blocking out (12 steps)"),
-            ("CUSTOM", "Custom", "Custom step count"),
+            ("CUSTOM", "Custom", "Set the number of steps yourself"),
         ],
         default="STANDARD",
     )
@@ -816,27 +818,27 @@ class AnimaticaSettings(PropertyGroup):
     cfg_enabled: BoolProperty(
         name="Guidance",
         description=(
-            "Enable classifier-free guidance. When on, generation is pushed "
-            "to follow your prompt and constraints more closely; turn it off "
-            "for the model's looser, unguided output"
+            "Use classifier-free guidance, which makes the motion follow your "
+            "prompt and constraints more closely. Turn it off for the model's "
+            "looser, unguided output"
         ),
         default=True,
     )
     cfg_text: FloatProperty(
         name="Text Weight",
         description=(
-            "How strongly the motion follows the text prompt. Higher is more "
-            "literal to the words but can look stiff; lower is more natural "
-            "but looser. Typical range 1–3"
+            "How closely the motion follows the text prompt. Higher follows the "
+            "words more literally but can look stiff. Lower looks more natural "
+            "but is looser. Usually between 1 and 3"
         ),
         default=2.0, min=0.0, max=5.0, step=10,
     )
     cfg_constraint: FloatProperty(
         name="Constraint Weight",
         description=(
-            "How strongly the motion honors your constraints — root paths, "
-            "effector pins, and pose keyframes. Higher sticks tighter to the "
-            "poses and paths you authored. Typical range 1–3"
+            "How closely the motion keeps to your root paths, pins and key "
+            "poses. Higher keeps closer to the poses and paths you set. "
+            "Usually between 1 and 3"
         ),
         default=2.0, min=0.0, max=5.0, step=10,
     )
@@ -844,8 +846,8 @@ class AnimaticaSettings(PropertyGroup):
     hand_pose_left: EnumProperty(
         name="Left hand",
         description=(
-            "The left hand's fingers, laid over every generation — the model "
-            "has none of its own and leaves them dead straight"
+            "Finger pose for the left hand, applied to every generation. The "
+            "model doesn't animate fingers and leaves them straight"
         ),
         items=_hand_pose_items,
         default='RELAXED',
@@ -854,8 +856,8 @@ class AnimaticaSettings(PropertyGroup):
     hand_pose_right: EnumProperty(
         name="Right hand",
         description=(
-            "The right hand's fingers, laid over every generation — the model "
-            "has none of its own and leaves them dead straight"
+            "Finger pose for the right hand, applied to every generation. The "
+            "model doesn't animate fingers and leaves them straight"
         ),
         items=_hand_pose_items,
         default='RELAXED',
@@ -865,7 +867,7 @@ class AnimaticaSettings(PropertyGroup):
     post_processing: BoolProperty(
         name="Motion Cleanup",
         description=(
-            "Clean the motion up after it is generated: feet stop sliding, "
+            "Clean up the motion after it is generated, so feet stop sliding "
             "and key poses and pins are hit more exactly. Adds a second or two"
         ),
         default=True,
@@ -873,12 +875,12 @@ class AnimaticaSettings(PropertyGroup):
     inplace: BoolProperty(
         name="In place",
         description=(
-            "Keep the character on the spot: the path it travels along is "
-            "taken out (a straight line, an arc, or one of those eased), and "
-            "everything else stays: the body's sway and bounce, jumps and "
+            "Keep the character on the spot. The path it travels along (a "
+            "straight line, an arc, or either with easing) is taken out, and the "
+            "rest stays, including the body's sway and bounce, jumps and "
             "crouches. Set it before generating, or switch it on a preview "
-            "without regenerating -- switching back restores the travel. For "
-            "game cycles, where a controller moves the character"
+            "without generating again. Switching it off brings the travel back. "
+            "Meant for game cycles, where a controller moves the character"
         ),
         default=False,
         update=_inplace_update,
@@ -886,11 +888,11 @@ class AnimaticaSettings(PropertyGroup):
     loop: BoolProperty(
         name="Loop",
         description=(
-            "Generate the block as a seamless cycle: the model samples it so "
-            "its last frame runs straight into its first, and it repeats past "
-            "its end. Turns In place on, so the cycle plays on the spot. "
-            "Needs a single prompt block; walk and run cycles work best at "
-            "two to four seconds. Offered only when the model supports it"
+            "Generate the block as a seamless cycle: its last frame runs "
+            "straight into its first, and it repeats past its end. Turns In "
+            "place on, so the cycle plays on the spot. Needs a single prompt "
+            "block. Walk and run cycles work best at two to four seconds. "
+            "Offered only when the model supports it"
         ),
         default=False,
         update=_loop_update,
@@ -899,26 +901,26 @@ class AnimaticaSettings(PropertyGroup):
         name="Variations",
         description=(
             "How many versions of the take to make at once: the same prompt and "
-            "poses, performed differently. Flip between them on the preview and "
-            "Accept the one you want. One generation, whatever the number"
+            "poses, performed differently. Flip between them with the arrows on "
+            "the bar; the one showing is the one you keep. They all come from one generation, however "
+            "many you ask for"
         ),
         default=1, min=1, max=8,
     )
     loop_set_inplace: BoolProperty(
-        description="Loop turned In place on, and turns it off again with itself",
+        description="Set when Loop turned In place on, so turning Loop off turns In place off too",
         default=False,
         options={'HIDDEN', 'SKIP_SAVE'},
     )
     preview_path_snap: BoolProperty(
         name="Snap to Path",
         description=(
-            "Bake each root_path curve control point into one keyframe on "
-            "the target armature's root bone. Turning this on syncs "
-            "immediately from the current curve; leaving it on keeps the "
-            "keyframes in sync as you edit the curve in the viewport. "
-            "While a generation is running or a preview bake is active, "
-            "sync is paused so the returned root trajectory is not replaced "
-            "by sparse path keys (which looks like snapping and foot sliding)"
+            "Key each control point of the root_path curve onto the armature's "
+            "root bone. Turning this on syncs from the current curve straight "
+            "away, and leaving it on keeps the keys in step as you edit the "
+            "curve in the viewport. Syncing pauses while a generation runs or a "
+            "preview is shown, so the generated root motion isn't replaced by "
+            "sparse path keys, which would look like snapping and foot sliding"
         ),
         default=True,
         update=_preview_path_snap_update,
@@ -926,9 +928,8 @@ class AnimaticaSettings(PropertyGroup):
     num_transition_frames: IntProperty(
         name="Transition Frames",
         description=(
-            "Frames blended between adjacent prompt blocks so segments flow "
-            "smoothly into one another instead of snapping at the boundary. "
-            "0 = hard cut between blocks"
+            "Frames blended between neighboring prompt blocks, so one runs into "
+            "the next instead of snapping at the boundary. 0 makes a hard cut"
         ),
         default=5, min=0, max=30,
     )
@@ -942,12 +943,56 @@ class AnimaticaSettings(PropertyGroup):
     # One switch for the whole overlay, so it can go away in a click instead
     # of three. It sits with the toggles it governs — the same switch in the
     # Pose panel's *header* read as switching posing off, which it never did.
+    bar_mode: EnumProperty(
+        name="Bar Mode",
+        description="What the floating bar works on: a pose at the playhead, or the motion",
+        items=(
+            ('POSE', "Pose", "Pose this frame with the handles or in words and key it. "
+                             "The key poses on either side show as onion skins"),
+            ('MOTION', "Motion", "Work on the motion between key poses: the trail, waypoints, "
+                                 "pins and the take that passes through your key poses"),
+        ),
+        default='POSE',
+        update=lambda self, context: _bar_mode_update(self, context),
+    )
+    show_hints: BoolProperty(
+        name="Next-Step Hints",
+        description="Show a line above the floating bar suggesting the next step to improve the take, and why",
+        default=True,
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    field_pose: BoolProperty(
+        name="Pose in Words",
+        description=(
+            "When on, the bar's field describes the pose at this frame, and Generate Pose makes it "
+            "and keys it at the playhead. When off, the field describes what happens in the block, "
+            "and Generate makes the take"
+        ),
+        default=False, options={'SKIP_SAVE'},
+        update=lambda self, context: _redraw_3d_views(),
+    )
+    pose_on_ground: BoolProperty(
+        name="Stand on the Ground",
+        description=("Put the lowest point of a pose made from words on the ground. Turn it "
+                     "off to keep the height the model gave it, for a pose in the air like a jump"),
+        default=True,
+    )
+    show_toolbar: BoolProperty(
+        name="Toolbar",
+        description=(
+            "Show the floating bar at the bottom of the viewport. It holds the prompt, "
+            "Generate, Redo and Discard, posing and keying, the key poses, waypoints and pins, "
+            "and the take's switches, so you don't need the N panel"
+        ),
+        default=True,
+        update=lambda self, context: _redraw_3d_views(),
+    )
     key_pose_overlay: BoolProperty(
         name="Show Plan",
         description=(
-            "Draw the motion plan in the viewport at all. Off hides the "
-            "ghosts, the trail and the frame numbers in one go, and remembers "
-            "which of them were on for when you switch it back"
+            "Draw the motion plan in the viewport. Turning it off hides the "
+            "ghosts, the trail and the frame numbers together, and remembers "
+            "which of them were on for when you turn it back on"
         ),
         default=True,
         update=_key_poses_toggle_update,
@@ -955,8 +1000,8 @@ class AnimaticaSettings(PropertyGroup):
     key_pose_ghosts: BoolProperty(
         name="Ghosts",
         description=(
-            "Draw the body at each pose you keyed. Independent of the motion "
-            "trail — either can be shown on its own"
+            "Draw the body at each pose you keyed. This is separate from the "
+            "motion trail, so either can be shown on its own"
         ),
         default=True,
         update=_key_poses_toggle_update,
@@ -967,7 +1012,7 @@ class AnimaticaSettings(PropertyGroup):
         items=[
             ("AUTO", "Auto", "Skinned mesh if the rig has one, bones otherwise"),
             ("MESH", "Mesh", "Meshes deformed by the rig, as a translucent body"),
-            ("BONES", "Bones", "The skeleton as sticks — clearer on a dense character"),
+            ("BONES", "Bones", "The skeleton as sticks, which is clearer on a dense character"),
         ],
         default="AUTO",
         update=_key_poses_rebake_update,
@@ -978,41 +1023,15 @@ class AnimaticaSettings(PropertyGroup):
         default=True,
         update=_key_poses_redraw_update,
     )
-    key_pose_trail: BoolProperty(
-        name="Motion Trail",
-        description=(
-            "Trace the path the motion actually takes, frame by frame, "
-            "coloured by the prompt block driving each stretch and marked at "
-            "every pose you keyed. Follows the joints the model is steered "
-            "by: the hands and feet, the root, and the head"
-        ),
-        default=True,
-        update=_key_poses_toggle_update,
-    )
-    # Which joints the motion trail shows: one toggle each, so a click turns
-    # that one on or off and leaves the others be.
-    key_pose_trail_hips: BoolProperty(
-        name="Hips", description="Trail the hips: where the body goes, sway and all",
-        default=True, update=_key_poses_redraw_update,
-    )
-    key_pose_trail_head: BoolProperty(
-        name="Head", description="Trail the head", default=True, update=_key_poses_redraw_update,
-    )
-    key_pose_trail_hands: BoolProperty(
-        name="Hands", description="Trail both hands", default=True, update=_key_poses_redraw_update,
-    )
-    key_pose_trail_feet: BoolProperty(
-        name="Feet", description="Trail both feet", default=True, update=_key_poses_redraw_update,
-    )
     key_pose_root_path: BoolProperty(
         name="Root Trajectory",
         description=(
-            "Draw the take's root trajectory on the floor, in amber: the path "
-            "the character travels along without the sway of its steps -- a "
-            "line, an arc, or one of those eased. It is what In place takes "
-            "out, so with In place on it shows what was removed. Coloured by "
-            "speed, green (slow) to red (fast), and labelled with what it is "
-            "(\"line · 1.05 m/s\"). Edit it with Edit Root Trajectory"
+            "Draw the take's root trajectory on the floor in amber. This is the "
+            "path the character travels along without the sway of its steps: a "
+            "line, an arc, or either with easing. In place takes it out, so with "
+            "In place on it shows what was removed. Coloured by speed from green "
+            "(slow) to red (fast), and labelled with its shape and speed "
+            "(\"line · 1.05 m/s\"). Marionette edits it"
         ),
         default=False,
         update=_key_poses_toggle_update,
@@ -1023,56 +1042,28 @@ class AnimaticaSettings(PropertyGroup):
         default=False,
         update=_key_poses_redraw_update,
     )
-    editing_key_pose_frame: IntProperty(
-        name="Editing Key Pose",
-        description=(
-            "Frame of the key pose currently being edited, or -1. Set by "
-            "clicking a ghost; cleared by Apply or Cancel"
-        ),
-        default=-1,
-        options={"SKIP_SAVE"},
-    )
-    pose_tightness: FloatProperty(
-        name="Slack",
-        description=(
-            "How far a joint may stray from its handle, in metres. Low puts "
-            "the joint where you put the handle; high makes it a hint the "
-            "poser may overrule to keep the body natural"
-        ),
-        default=0.005, min=0.001, max=0.2, precision=3, step=1,
-        update=_tightness_update,
-    )
     auto_key_pose: BoolProperty(
         name="Auto Key",
         description=(
-            "Write a keyframe whenever you pose with the Autoposer handles. "
-            "Off: posing still works and still shows, but nothing is recorded "
-            "until you press Set Keyframe — the way to try a pose out without "
-            "it landing in the action"
+            "No longer used. Blender's own Auto Keying (the record button in the "
+            "Timeline) replaces it, and the Autoposer and the bar follow that"
         ),
-        default=True,
-    )
+        default=False,       # off, as Blender's own auto-key starts
+    )   # no longer read: the record button is Blender's own (tool_settings.use_keyframe_insert_auto)
     waypoint_heading: BoolProperty(
         name="Face along the path",
         description=(
-            "Also tell the model which way to face at each waypoint — toward "
-            "the next one. Off by default: pinning a facing at every waypoint "
-            "over-constrains turns, and the model faces the way it walks"
-        ),
-        default=False,
-    )
-    pose_details: BoolProperty(
-        name="Per-Handle Settings",
-        description=(
-            "Show each handle's own tightness and whether it sends its "
-            "rotation, instead of the compact row of on/off toggles"
+            "Also tell the model to face toward the next waypoint at each "
+            "waypoint. Off by default, because fixing the facing at every "
+            "waypoint restricts turns too much, and the model already faces the "
+            "way it walks"
         ),
         default=False,
     )
     key_pose_auto_refresh: BoolProperty(
         name="Auto Refresh",
         description=(
-            "Re-bake the ghosts when you key a pose or move the rig. Turn off "
+            "Rebuild the ghosts when you key a pose or move the rig. Turn it off "
             "on a heavy character and refresh by hand instead"
         ),
         default=True,
@@ -1081,16 +1072,16 @@ class AnimaticaSettings(PropertyGroup):
     default_prompt: StringProperty(
         name="Prompt",
         default="a person moves naturally",
-        description="Text prompt for motion generation",
+        description="What the character does, in words. Used to generate the motion",
     )
 
     last_pose_prompt: StringProperty(
         name="Last pose prompt",
         default="",
         description=(
-            "Most-recent prompt used in the Generate Pose dialog. "
-            "Pre-fills the dialog the next time it opens so the user "
-            "can iterate on a phrasing without retyping"
+            "The last prompt used in the Generate Pose dialog. It fills "
+            "the dialog the next time it opens, so you can adjust the "
+            "wording without retyping it"
         ),
     )
 
@@ -1111,7 +1102,7 @@ class AnimaticaSettings(PropertyGroup):
     cancel_requested: BoolProperty(
         name="Cancel Requested",
         default=False,
-        description="Flipped by the Cancel button; the running modal op picks it up and exits",
+        description="Set by the Cancel button. The running generation sees it and stops",
         options={"SKIP_SAVE"},
     )
 
@@ -1122,12 +1113,12 @@ class AnimaticaSettings(PropertyGroup):
     quota_exceeded_message: StringProperty(
         name="Quota Message",
         default="",
-        description="Human-readable quota error message from the cloud",
+        description="The quota message from Animatica Cloud",
     )
     quota_upgrade_url: StringProperty(
         name="Upgrade URL",
         default="",
-        description="URL to open in the user's browser to upgrade the plan",
+        description="Web page to open in your browser to upgrade your plan",
     )
 
     # -- Preview state: name of the user's source action while a
@@ -1138,17 +1129,15 @@ class AnimaticaSettings(PropertyGroup):
     source_action_name: StringProperty(
         name="Source Action",
         default="",
-        description="Original action name preserved while previewing a generated motion",
+        description="Name of your original action, kept while a generated motion is previewed",
     )
     is_previewing: BoolProperty(
         name="Previewing",
         default=False,
         description=(
-            "Set true while a Animatica-generated motion is being "
-            "reviewed (Push to NLA / Reject visible). Independent of "
-            "source_action_name so free-form generations — where "
-            "there's no prior action to restore — also surface the "
-            "preview UI"
+            "On while a generated motion is being reviewed, with Push to "
+            "NLA and Reject shown. Also on for a generation that had no "
+            "earlier action to go back to"
         ),
     )
 
