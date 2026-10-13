@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [1.0.2] — 2026-10-13
+
+### Changed
+
+- **The floating bar's icons keep their shape at the bar's size** (18 px on a
+  30 px button). Add a Character is a figure with a plus, Pin a Hand or Foot
+  an upright pushpin, Add Waypoint a filled flag on its pole, Ghosts a filled
+  ghost, Loop an infinity sign, Redo a plain circular arrow, and Auto Keying a
+  smaller record dot that stays round. The thin hand-drawn ones lost their
+  shape. Add a Character and Pin come from Material Symbols and Loop from
+  Phosphor Icons, credited in `icons/src/THIRD_PARTY.md`.
+
+### Removed
+
+- **The unused T-pose arm helpers** `is_t_pose_arm_bone` and `t_pose_q_matrix`
+  in `request_builder.py`. Nothing has called them since the arm flattening was
+  taken out of the request (the 0.4.0 entry describes the old behaviour):
+  an A-posed rig goes out as it is, and the server normalises the rest pose
+  itself.
+
 ## [1.0.1] — 2026-10-12
 
 ### Added
