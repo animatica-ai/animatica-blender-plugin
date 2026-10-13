@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [Unreleased]
+
+### Fixed
+
+- **Redo of one block keeps the waypoints.** The block was made again without
+  the waypoints inside it, so the character no longer went where the route
+  said; only a full Generate (or Shift+Redo) sent them. They now go out with
+  the block, on its own frames.
+
 ## [1.0.2] — 2026-10-13
 
 ### Changed
