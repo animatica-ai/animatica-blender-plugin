@@ -18,6 +18,14 @@ Proscenium, and keep the identifiers those releases actually shipped.
   Delete or Backspace with the cursor over the lane removes everything
   selected there, blocks and waypoints; Ctrl+Z brings them back.
 
+- **Delete key poses from the Timeline lane.** A click on a key pose's
+  diamond selects it (Shift, Ctrl or Cmd adds), the rectangle catches key
+  poses too, and Delete or Backspace removes them with the rest of the lane's
+  selection. Right-click a diamond to delete it, or a block for **Delete Key
+  Poses in Block**. A diamond with a count, where keys sit too close to draw
+  apart, stands for all of them. Only the keys you set go; a take's own
+  samples stay.
+
 ### Fixed
 
 - **Delete after clicking a waypoint flag no longer removes a block that was

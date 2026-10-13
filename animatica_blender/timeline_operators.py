@@ -27,6 +27,7 @@ from .timeline_overlay import (
     hit_test_lane_resize,
     hit_test_waypoint_pin,
     hit_test_key_pose,
+    key_pose_group_at,
     pixel_to_frame,
     find_neighbors,
     find_gap,
@@ -87,7 +88,7 @@ def _timeline_poll(context):
 # The mouse on the lane, as in the other DCC integrations:
 #   left-drag empty ........ scrub the playhead (a click clears the selection)
 #   near the playhead ...... scrub: the playhead wins over the pins on its line
-#   drag empty ............. rubber-band: blocks and waypoint pins;
+#   drag empty ............. rubber-band: blocks, key poses and waypoint pins;
 #                            Shift/Ctrl/Cmd adds to the selection
 #   click block ............ select it; Shift/Ctrl/Cmd+click adds or drops it
 #   drag block(s) .......... move the selection, snapping to edges, the
@@ -98,8 +99,13 @@ def _timeline_poll(context):
 #                            pins inside with it
 #   click / drag a pin ..... select it (and its viewport marker) / move it;
 #                            Shift/Ctrl/Cmd+click a pin adds or drops it
+#   click / drag a key pose  go to it and select it (a crowded stretch drawn as
+#                            one diamond: all of it) / move it; Shift/Ctrl/Cmd
+#                            +click adds or drops it
 #   double-click ........... edit the prompt; on empty, a new block
-#   Delete/Backspace ....... removes the lane's selection: blocks and pins
+#   Delete/Backspace ....... removes the lane's selection: blocks, key poses
+#                            and waypoints
+#   right-click ............ a block's menu; on a key pose, deleting it
 
 #: within this many px (x UI scale), a dragged edge snaps
 SNAP_PX = 8
@@ -122,11 +128,17 @@ def _select_none(props):
 
 
 def _deselect_waypoints(scene):
-    # one selection on the lane: a plain click on a block drops the pins
+    # one selection on the lane: a plain click on a block drops the pins,
+    # the waypoints' and the key poses'
     from . import waypoints
     for obj in waypoints.waypoints(scene):
         obj.select_set(False)
+    interaction["key_sel"].clear()
     waypoints.tag_redraw()
+
+
+def _parse_frames(text):
+    return [int(f) for f in text.split(",") if f.strip().lstrip("-").isdigit()]
 
 
 def _snap_targets(context, exclude):
@@ -206,6 +218,8 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
                 self._state = "DRAGGING_KEY_POSE"
                 self._key_from = int(key)
                 self._key_moved = False
+                self._key_group = key_pose_group_at(context, mx, my) or [int(key)]
+                self._toggle_key = event.shift or event.ctrl or event.oskey
                 interaction["key_drag"] = (self._key_from, self._key_from)
                 context.window.cursor_set("MOVE_X")
                 return self._start(context)
@@ -376,6 +390,7 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
                 _select_none(props)
                 for obj in waypoints.waypoints(context.scene):
                     obj.select_set(False)
+                interaction["key_sel"].clear()
             if not self._moved:
                 return {"FINISHED"}
             first = None
@@ -388,6 +403,11 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
                         first = j if first is None else first
             if first is not None:
                 props.active_block_index = first
+            if by0 <= g.k1 and by1 >= g.k0:              # ...the key-pose row
+                from . import key_poses
+                for f, _r in key_poses.timeline_ticks(context.scene)[0]:
+                    if bx0 <= v2d.view_to_region(f, 0, clip=False)[0] <= bx1:
+                        interaction["key_sel"].add(int(f))
             if by0 <= g.wp1 and by1 >= g.wp0:            # ...and the waypoint row
                 for obj in waypoints.waypoints(context.scene):
                     x = v2d.view_to_region(obj.animatica_waypoint_frame, 0, clip=False)[0]
@@ -597,7 +617,21 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
         if self._released(event):
             src, dst = interaction.get("key_drag") or (self._key_from, self._key_from)
             if not self._key_moved:
-                context.scene.frame_set(src)            # a click: go to it
+                # a click: go to it, and pick it (the whole mark, when a crowded
+                # stretch is drawn as one); Shift/Ctrl/Cmd adds or drops it
+                group = set(self._key_group)
+                picked = interaction["key_sel"]
+                if self._toggle_key:
+                    if group <= picked:
+                        picked -= group
+                    else:
+                        picked |= group
+                else:
+                    _select_none(context.scene.animatica)
+                    _deselect_waypoints(context.scene)
+                    picked |= group
+                context.scene.frame_set(src)
+                context.area.tag_redraw()
                 return {"CANCELLED"}                    # (nothing to undo)
             if dst != src and key_poses.move_key_pose(context.scene, src, dst):
                 context.scene.frame_set(dst)
@@ -635,6 +669,7 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
                     for other in waypoints.waypoints(context.scene):
                         other.select_set(other == obj)
                     _select_none(context.scene.animatica)
+                    interaction["key_sel"].clear()
                     context.area.tag_redraw()
                 waypoints.tag_redraw()
             return {"FINISHED"}
@@ -928,21 +963,26 @@ class ANIMATICA_OT_add_strip_between_keyframes(bpy.types.Operator):
 # Delete strip (Backspace / Delete key)
 # ---------------------------------------------------------------------------
 
-def delete_lane_selection(scene, *, fallback_block=None, fallback_pin=None):
-    """Delete what is selected on the lane: blocks and the current character's
-    waypoint pins. With nothing selected, *fallback_pin* (a marker object),
-    else *fallback_block* (an index). Nothing off the lane is touched.
+def delete_lane_selection(scene, *, fallback_block=None, fallback_pin=None, fallback_keys=None):
+    """Delete what is selected on the lane: blocks, the current character's key
+    poses and waypoint pins. With nothing selected, *fallback_pin* (a marker
+    object), else *fallback_keys* (the frames of the key-pose mark under the
+    mouse), else *fallback_block* (an index). Nothing off the lane is touched.
 
-    Returns the deleted blocks' names and the number of deleted pins.
+    Returns the deleted blocks' names, the number of deleted pins and the
+    frames of the deleted key poses.
     """
-    from . import waypoints
+    from . import key_poses, waypoints
 
     props = scene.animatica
     blocks = _selected(props.prompt_blocks)
     pins = [o for o in waypoints.waypoints(scene) if o.select_get()]
-    if not blocks and not pins:
+    keys = sorted(interaction["key_sel"])
+    if not blocks and not pins and not keys:
         if fallback_pin is not None:
             pins = [fallback_pin]
+        elif fallback_keys:
+            keys = list(fallback_keys)
         elif fallback_block is not None and 0 <= fallback_block < len(props.prompt_blocks):
             blocks = [fallback_block]
 
@@ -963,27 +1003,45 @@ def delete_lane_selection(scene, *, fallback_block=None, fallback_pin=None):
         bpy.data.objects.remove(obj, do_unlink=True)
     if pins:
         waypoints.tag_redraw()
-    return names, len(pins)
+    gone_keys = key_poses.delete_key_poses(scene, keys) if keys else []
+    interaction["key_sel"].clear()
+    return names, len(pins), gone_keys
+
+
+def _deleted_message(names, n_pins, keys) -> str:
+    parts = []
+    if names:
+        parts.append(f"{len(names)} block{'s' if len(names) != 1 else ''}")
+    if keys:
+        parts.append(f"{len(keys)} key pose{'s' if len(keys) != 1 else ''}")
+    if n_pins:
+        parts.append(f"{n_pins} waypoint{'s' if n_pins != 1 else ''}")
+    msg = "Deleted " + ", ".join(parts[:-1]) + (" and " if len(parts) > 1 else "") + parts[-1]
+    if names:
+        msg += ": " + ", ".join(names)[:80]
+    return msg
 
 
 class ANIMATICA_OT_timeline_strip_delete(bpy.types.Operator):
-    """Delete the lane's selection: prompt blocks and waypoints (Backspace/Delete).
+    """Delete the lane's selection: prompt blocks, key poses and waypoints
+    (Backspace/Delete).
 
-    With nothing selected, deletes the waypoint or block under the mouse, else
-    the active block, when the mouse is in the Animatica lane. Outside the
-    lane, the keys delete keyframes as usual.
+    With nothing selected, deletes the waypoint, key pose or block under the
+    mouse, else the active block, when the mouse is in the Animatica lane.
+    Outside the lane, the keys delete keyframes as usual.
     """
 
     bl_idname = "animatica.timeline_strip_delete"
-    bl_label = "Delete Animatica Blocks and Waypoints"
+    bl_label = "Delete Animatica Blocks, Key Poses and Waypoints"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
     def poll(cls, context):
         if not _timeline_poll(context):
             return False
-        from . import waypoints
-        return len(context.scene.animatica.prompt_blocks) > 0 or bool(waypoints.waypoints(context.scene))
+        from . import key_poses, waypoints
+        return (len(context.scene.animatica.prompt_blocks) > 0 or bool(waypoints.waypoints(context.scene))
+                or bool(key_poses.timeline_ticks(context.scene)[0]))
 
     def invoke(self, context, event):
         # Only intercept if the mouse is hovering over the strip lane
@@ -992,26 +1050,45 @@ class ANIMATICA_OT_timeline_strip_delete(bpy.types.Operator):
 
         props = context.scene.animatica
         mx, my = event.mouse_region_x, event.mouse_region_y
-        # the selection, as a whole; else the pin under the mouse, the block under it, the active one
+        # the selection, as a whole; else the pin or key pose under the mouse,
+        # the block under it, the active one
         pin = hit_test_waypoint_pin(context, mx, my)
+        keys = key_pose_group_at(context, mx, my)
         hit = hit_test_strips(context, mx, my)
         idx = hit["index"] if hit["index"] is not None else props.active_block_index
-        names, n_pins = delete_lane_selection(context.scene, fallback_block=idx, fallback_pin=pin)
-        if not names and not n_pins:
+        names, n_pins, gone = delete_lane_selection(
+            context.scene, fallback_block=idx, fallback_pin=pin, fallback_keys=keys)
+        if not names and not n_pins and not gone:
             return {"PASS_THROUGH"}
-
-        parts = []
-        if names:
-            parts.append(f"{len(names)} block{'s' if len(names) != 1 else ''}")
-        if n_pins:
-            parts.append(f"{n_pins} waypoint{'s' if n_pins != 1 else ''}")
-        msg = "Deleted " + " and ".join(parts)
-        if names:
-            msg += ": " + ", ".join(names)[:80]
-        self.report({"INFO"}, msg)
+        self.report({"INFO"}, _deleted_message(names, n_pins, gone))
 
         context.area.tag_redraw()
         return {"FINISHED"}
+
+
+class ANIMATICA_OT_delete_key_poses(bpy.types.Operator):
+    """Delete these key poses: every key you set on their frames. The take's own samples stay"""
+
+    bl_idname = "animatica.delete_key_poses"
+    bl_label = "Delete Key Poses"
+    bl_options = {"REGISTER", "UNDO"}
+
+    frames: StringProperty(default="", options={"HIDDEN", "SKIP_SAVE"})
+
+    def execute(self, context):
+        from . import key_poses
+        gone = key_poses.delete_key_poses(context.scene, _parse_frames(self.frames))
+        if not gone:
+            return {"CANCELLED"}
+        interaction["key_sel"].difference_update(gone)
+        self.report({"INFO"}, _deleted_message([], 0, gone))
+        if context.area is not None:
+            context.area.tag_redraw()
+        return {"FINISHED"}
+
+
+def _frames_text(frames) -> str:
+    return ",".join(str(int(f)) for f in frames)
 
 
 # ---------------------------------------------------------------------------
@@ -1033,6 +1110,13 @@ class ANIMATICA_OT_timeline_strip_context_menu(bpy.types.Operator):
         if not is_in_lane(context, event.mouse_region_y):
             return {"PASS_THROUGH"}
 
+        # a key pose (or a crowded stretch of them drawn as one): its own menu
+        self._keys = key_pose_group_at(context, event.mouse_region_x, event.mouse_region_y)
+        if self._keys:
+            title = "Key Pose" if len(self._keys) == 1 else f"{len(self._keys)} Key Poses"
+            context.window_manager.popup_menu(self._draw_key_menu, title=title)
+            return {"FINISHED"}
+
         # Check if right-click hit a strip
         hit = hit_test_strips(context, event.mouse_region_x, event.mouse_region_y)
 
@@ -1047,6 +1131,21 @@ class ANIMATICA_OT_timeline_strip_context_menu(bpy.types.Operator):
         wm = context.window_manager
         wm.popup_menu(self._draw_menu, title="Animatica Strip")
         return {"FINISHED"}
+
+    def _draw_key_menu(self, menu, context):
+        layout = menu.layout
+        keys = self._keys
+        n = len(keys)
+        if n > 1:
+            layout.label(text=f"Frames {keys[0]}\u2013{keys[-1]}")
+        op = layout.operator("animatica.delete_key_poses",
+                             text="Delete Key Pose" if n == 1 else f"Delete {n} Key Poses", icon="TRASH")
+        op.frames = _frames_text(keys)
+        picked = sorted(interaction["key_sel"] - set(keys))
+        if picked:
+            op = layout.operator("animatica.delete_key_poses",
+                                 text=f"Delete Selected Key Poses ({len(picked) + n})", icon="TRASH")
+            op.frames = _frames_text(picked + keys)
 
     def _draw_menu(self, menu, context):
         layout = menu.layout
@@ -1125,6 +1224,14 @@ class ANIMATICA_OT_timeline_strip_context_menu(bpy.types.Operator):
                 text="Delete Strip",
                 icon="TRASH",
             )
+            from . import key_poses
+            inside = [f for f, _r in key_poses.timeline_ticks(context.scene)[0]
+                      if fr.frame_start <= f <= fr.frame_end]
+            row = layout.row()
+            row.enabled = bool(inside)
+            op = row.operator("animatica.delete_key_poses",
+                              text=f"Delete Key Poses in Block ({len(inside)})", icon="KEYFRAME")
+            op.frames = _frames_text(inside)
 
             layout.separator()
 
@@ -2100,6 +2207,7 @@ _classes = (
     ANIMATICA_OT_timeline_strip_add_click,
     ANIMATICA_OT_add_strip_between_keyframes,
     ANIMATICA_OT_timeline_strip_delete,
+    ANIMATICA_OT_delete_key_poses,
     ANIMATICA_OT_timeline_strip_context_menu,
     ANIMATICA_OT_timeline_strip_toggle_enabled,
     ANIMATICA_OT_reuse_block_seed,

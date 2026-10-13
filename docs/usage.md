@@ -278,9 +278,15 @@ Prompt blocks live on Blender's **Timeline** as coloured strips in the
 - **Drag** across an empty part of the lane to select blocks and flags with a
   rectangle; hold **Shift** / **Ctrl** / **Cmd** to add to the selection
 - **Drag** a flag to change its frame
+- **Click** a key pose's diamond (the row above the blocks) to go to it and
+  select it; **Shift** / **Ctrl** / **Cmd** + **click** adds it or takes it off.
+  Where keys sit too close to draw apart, one diamond with a count stands for
+  them all, and a click selects them all
 - **Delete** / **Backspace** with the cursor over the lane removes what is
-  selected on it (blocks and waypoints); with nothing selected, the block or
-  waypoint under the cursor. **Ctrl+Z** undoes it
+  selected on it (blocks, key poses and waypoints); with nothing selected, the
+  block, key pose or waypoint under the cursor. **Ctrl+Z** undoes it
+- **Right-click** a key pose to delete it (or every key pose its diamond
+  stands for); a block's menu has **Delete Key Poses in Block**
 - The **+ / −** buttons in the Timeline header add and remove blocks too
 
 **Right-click** a block for its menu: **Edit Prompt**, **Enable** / **Disable**,
