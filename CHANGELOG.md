@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [Unreleased]
+
+### Added
+
+- **Waypoints can be dragged in the viewport by the rim of their circle,
+  in pose mode too.** The rim lights up white under the cursor; only the rim
+  counts, not the inside, so foot bones keep their clicks. A click selects
+  the waypoint (and deselects the character's others), Shift+click adds it
+  to the selection or takes it off. Dragging moves the waypoint along the
+  ground under the cursor, or all the selected ones if the grabbed one is
+  selected; the header shows the offset, Esc or the right mouse button
+  cancels, and one drag is one Ctrl+Z. The active object stays as it is.
+  Shown only with overlays and Show Gizmo on.
+
+### Changed
+
+- **Add Waypoint in pose mode keeps the character active.** The new waypoint
+  is selected, but no longer becomes the active object, which used to throw
+  you out of pose mode. In Object Mode it works as before.
+
 ## [1.0.1] — 2026-10-12
 
 ### Added

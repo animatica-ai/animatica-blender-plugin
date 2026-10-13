@@ -217,7 +217,13 @@ these panels.
 
 - **Waypoint at N** — pins where the character stands at the current frame.
   Drag the circle to where it should be; the route between waypoints is the
-  model's to plan. Each waypoint is a row: its frame (edit it in place), its
+  model's to plan. Grab it by its rim (it lights up white when the cursor is
+  on it; the inside of the circle is left to the foot bones), in any mode,
+  pose mode included, without leaving it. A click selects that waypoint;
+  **Shift**-click adds it to the selection or takes it off. Dragging a
+  selected waypoint moves all the selected ones; **Esc** or the right mouse
+  button cancels the drag. The rim shows only with overlays and **Show
+  Gizmo** on. Each waypoint is a row: its frame (edit it in place), its
   **Facing** (**Along path**, or **Set** with an angle), a button to go to it,
   and one to remove it. **Face along the path** also tells the model to face
   the next waypoint at each one; it is off by default, since the model faces
