@@ -10,12 +10,33 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ## [Unreleased]
 
+### Added
+
+- **Select several waypoint flags on the Timeline lane.** Shift, Ctrl or Cmd
+  + click a flag adds it to the selection or takes it off, and dragging a
+  rectangle over an empty part of the lane selects the blocks and flags in it.
+  Delete or Backspace with the cursor over the lane removes everything
+  selected there, blocks and waypoints; Ctrl+Z brings them back.
+
+- **Delete key poses from the Timeline lane.** A click on a key pose's
+  diamond selects it (Shift, Ctrl or Cmd adds), the rectangle catches key
+  poses too, and Delete or Backspace removes them with the rest of the lane's
+  selection. Right-click a diamond to delete it, or a block for **Delete Key
+  Poses in Block**. A diamond with a count, where keys sit too close to draw
+  apart, stands for all of them. Only the keys you set go; a take's own
+  samples stay.
+
 ### Fixed
 
 - **Redo of one block keeps the waypoints.** The block was made again without
   the waypoints inside it, so the character no longer went where the route
   said; only a full Generate (or Shift+Redo) sent them. They now go out with
   the block, on its own frames.
+- **Delete after clicking a waypoint flag no longer removes a block that was
+  selected earlier.** Clicking a flag now deselects the blocks, and Delete
+  also works on waypoints and when the lane has no blocks.
+- **A selected waypoint flag stands out.** It is white on a highlighted chip;
+  before, its tint was nearly the unselected flag's own orange.
 
 ## [1.0.2] — 2026-10-13
 

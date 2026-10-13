@@ -437,6 +437,35 @@ def move_key_pose(scene, src: int, dst: int) -> bool:
     return True
 
 
+def delete_key_poses(scene, frames) -> list[int]:
+    """Delete the key poses on ``frames``: every key the artist set on each
+    (any channel; the take's GENERATED samples stay, as `move_key_pose` leaves
+    them). Returns the frames that held a key pose and lost it."""
+    from . import constraints_ui
+
+    settings = _settings(scene)
+    arm = _target(settings) if settings is not None else None
+    action = _action(arm)
+    if action is None:
+        return []
+    authored = set(constraints_ui.authored_pose_frames(action)[0])
+    doomed = {int(f) for f in frames} & authored
+    if not doomed:
+        return []
+    for fc in constraints_ui.iter_action_fcurves(action):
+        kps = fc.keyframe_points
+        gone = [i for i, k in enumerate(kps) if int(round(k.co.x)) in doomed and k.type != 'GENERATED']
+        if not gone:
+            continue
+        for i in reversed(gone):
+            kps.remove(kps[i], fast=True)
+        fc.update()
+    invalidate_plan()
+    clear()                                 # the ghosts re-bake without them
+    tag_redraw()
+    return sorted(doomed)
+
+
 def dropped_frames(scene=None) -> list[int]:
     """Key poses the request will silently leave out."""
     p = plan(scene)
