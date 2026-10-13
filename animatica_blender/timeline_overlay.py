@@ -114,6 +114,7 @@ interaction = {
     "key": None,         # key-pose frame under the mouse
     "key_drag": None,    # (from frame, to frame) while a key pose is dragged
     "band": None,        # (x0, y0, x1, y1) while a rubber band is drawn
+    "key_sel": set(),    # frames of the key poses selected on the lane
 }
 
 #: The frames the last generation asked for (the take under review is that one).
@@ -354,6 +355,30 @@ def hit_test_key_pose(context, mouse_x, mouse_y):
         if dx < best_dx:
             best, best_dx = frame, dx
     return best
+
+
+def key_pose_group_at(context, mouse_x, mouse_y) -> list[int]:
+    """The frames of the key-pose mark under the mouse: one diamond, or every
+    key pose a crowded stretch draws as one (with its count). Empty when none."""
+    g = Lane(context)
+    if not (g.k0 - 2 * g.u <= mouse_y <= g.k1 + 2 * g.u):
+        return []
+    from . import key_poses
+    ticks, _window = key_poses.timeline_ticks(context.scene)
+    view2d = context.region.view2d
+    W, s = context.region.width, DIAMOND * g.u
+
+    def fx(f):
+        return view2d.view_to_region(f, 0, clip=False)[0]
+
+    marks = [(fx(f), f) for f, _r in ticks]
+    grab = 6 * g.u
+    best, best_dx = [], grab + 1
+    for x, group in _clusters([m for m in marks if -s <= m[0] <= W + s], CLUSTER * g.u):
+        dx = abs(mouse_x - x)
+        if dx < best_dx:
+            best, best_dx = group, dx
+    return sorted(best)
 
 
 def hit_test_lane_resize(context, mouse_x, mouse_y):
@@ -850,6 +875,10 @@ def _draw_key_pose_rail(g, W, fx, ticks):
             st.lines(list(zip(diamond(x, 1), diamond(x, 1)[1:] + diamond(x, 1)[:1])),
                      max(1.0, u * 0.75), (1, 1, 1, 0.35))
             continue
+        if frames & interaction["key_sel"]:
+            # picked: a chip behind it, as the waypoint flags have
+            st.rounded((x - 1.9 * s, cy - 1.9 * s, x + 1.9 * s, cy + 1.9 * s), 3 * u,
+                       st.with_alpha(st.SOFT_ORANGE, 0.45))
         if any(r for _f, r in group):
             big = hot in frames and drag is None
             st.polygon(diamond(x, 1.35 if big else 1), st.WHITE if big else (1, 1, 1, 0.92))
@@ -891,11 +920,16 @@ def _draw_waypoint_rail(g, W, fx, frames):
         hot_frame = getattr(obj, "animatica_waypoint_frame", None)
     picked = {int(o.animatica_waypoint_frame) for o in waypoints.waypoints(bpy.context.scene)
               if o.select_get()}
+    size = g.wp1 - g.wp0
     for x, group in _clusters([(fx(f), f) for f in frames if -8 * u <= fx(f) <= W + 8 * u], CLUSTER * u):
-        color = (st.WHITE if hot_frame in group
-                 else st.SOFT_ORANGE if picked & set(group) else WAYPOINT_COLOR)
+        selected = bool(picked & set(group))
+        if selected:
+            # picked: a chip behind it, as a pressed button; a tint alone was the flag's own orange
+            h = size / 2 + 2 * u
+            st.rounded((x - h, g.wp0 - 2 * u, x + h, g.wp1 + 2 * u), 3 * u,
+                       st.with_alpha(st.SOFT_ORANGE, 0.45))
+        color = st.WHITE if selected or hot_frame in group else WAYPOINT_COLOR
         # the floating bar's Waypoint icon, so the two read as one thing
-        size = g.wp1 - g.wp0
         st.icon("waypoint", x, (g.wp0 + g.wp1) / 2, size, color)
         if len(group) > 1:
             _font(8 * u)

@@ -11,7 +11,7 @@ import random
 from typing import Any, Iterable
 
 import bpy
-from mathutils import Matrix, Vector
+from mathutils import Vector
 
 from . import constraints_ui, coords
 
@@ -660,8 +660,21 @@ def build_request_for_block(
         elif user_constraint is not None:
             constraints.append(user_constraint)
 
+    # Waypoints inside the block go out as on a full Generate: each is one
+    # frame, so it lands on the block's own frames (offset by its start), and
+    # Redo keeps the route. Left out, the block was made again with no idea
+    # where the character had to be.
+    if constraint_objects.get("waypoints"):
+        from . import waypoints
+
+        constraints.extend(waypoints.request_constraints(
+            scene, frame_range,
+            face_along_path=bool(getattr(settings, "waypoint_heading", False)),
+            marks=constraint_objects["waypoints"],
+        ))
+
     # Effector targets get the existing block-range filter automatically.
-    # Root paths are deliberately skipped — they describe whole-timeline
+    # Legacy root-path curves are deliberately skipped — they describe whole-timeline
     # trajectory and resampling onto a single block would compress the
     # entire curve into the block's duration, which is wrong. Boundary
     # ``pose_keyframe`` constraints already give the model enough start/end
@@ -823,58 +836,6 @@ def emitted_deform_bones(armature_obj: bpy.types.Object) -> set[str]:
     deform = deform - face_drop
     deform = deform - {n for n in deform if _is_tweak_half(n)}
     return deform
-
-
-# Arm-chain bones we rewrite to T-pose layout in the outgoing skeleton.
-# Rigify's default human metarig has the upper arm at ~28° below
-# horizontal — an A-pose that the bone classifier was not trained on and
-# that warps how the reverse retarget maps SOMA77 onto the rig. We send
-# horizontal arms instead, then pre-multiply the returned rotation keys
-# by the bone's actual rest rotation to compensate (see
-# :func:`t_pose_correction_quat` in ``gltf_to_blender``).
-_T_POSE_ARM_TOKENS: frozenset[str] = frozenset({"upper_arm", "forearm", "hand"})
-
-
-def is_t_pose_arm_bone(name: str) -> bool:
-    """True if ``name`` is an arm-chain bone subject to T-pose rewriting."""
-    bare = name[4:] if name.startswith("DEF-") else name
-    return bare.split(".", 1)[0].lower() in _T_POSE_ARM_TOKENS
-
-
-_IDENTITY_3X3 = Matrix.Identity(3)
-
-
-def t_pose_q_matrix(armature_obj: bpy.types.Object, bone_name: str | None):
-    """``Q[bone]`` — rotation taking the **request-layout** rest direction
-    of ``bone_name`` (horizontal T-pose for arm-chain bones) to the
-    **actual armature** rest direction (the metarig's A-pose, baked into
-    ``matrix_local``).
-
-    Used on *both* sides of the wire:
-
-    * **Outbound** (``constraints_ui.sample_pose_keyframes``): convert the
-      user-keyed pose, sampled in A-pose-relative basis, into a
-      T-pose-relative rotation the server expects from the lied skeleton.
-      Formula: ``R_T = Q[parent].T · R_A · Q[child]``.
-    * **Inbound** (``gltf_to_blender.bake_gltf_to_armature``): convert the
-      server's T-pose-relative rotation back to A-pose-relative so it
-      lands correctly on the actual A-pose ``matrix_local``.
-      Formula: ``R_A = Q[parent] · R_T · Q[child].T``.
-
-    Mirrors the ``RestPoseAugmentor`` reference at
-    ``animatica/retarget/augment.py`` — same per-bone change-of-rest math.
-    Returns identity for any bone whose request layout matches the actual
-    armature (everything outside the arm chain).
-    """
-    if not bone_name or not is_t_pose_arm_bone(bone_name):
-        return _IDENTITY_3X3
-    pb = armature_obj.pose.bones.get(bone_name)
-    if pb is None:
-        return _IDENTITY_3X3
-    sign  = -1.0 if (".R" in bone_name) else 1.0
-    t_dir = Vector((sign, 0.0, 0.0))                       # request rest dir
-    a_dir = Vector(pb.bone.matrix_local.to_3x3().col[1])   # actual rest dir
-    return t_dir.rotation_difference(a_dir).to_matrix()
 
 
 def will_splice(armature_obj, frame_range) -> bool:

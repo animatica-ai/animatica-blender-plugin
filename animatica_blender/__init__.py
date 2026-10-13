@@ -16,7 +16,7 @@ add-on's bar and panels and key into the take (posing.py is where the two meet).
 bl_info = {
     "name": "Animatica Choreographer",
     "author": "Animatica",
-    "version": (1, 0, 1),
+    "version": (1, 0, 3),
     "blender": (5, 0, 0),
     "location": "3D Viewport > the floating bar, and Sidebar > Animatica",
     "description": "Generate a character's motion from prompts and key poses, on any rig",
@@ -28,7 +28,7 @@ bl_info = {
 #: comparing two builds that both call themselves 0.6.0 would never offer the
 #: newer one. The zip target rewrites this line; a source checkout is the
 #: final release of its number, which is the conservative reading.
-VERSION_TAG = "v1.0.1"
+VERSION_TAG = "v1.0.3"
 
 import bpy
 from bpy.app.handlers import persistent
@@ -48,6 +48,7 @@ from . import timeline_operators
 from . import updater
 from . import examples
 from . import waypoints
+from . import waypoint_gizmo
 from . import batch
 from . import variations
 from . import toolbar
@@ -213,6 +214,7 @@ def register():
     updater.register()
     examples.register()
     waypoints.register()
+    waypoint_gizmo.register()
     batch.register()
     variations.register()
     guidance.register()
@@ -254,6 +256,7 @@ def unregister():
     guidance.unregister()
     variations.unregister()
     batch.unregister()
+    waypoint_gizmo.unregister()
     waypoints.unregister()
     examples.unregister()
     updater.unregister()
