@@ -231,3 +231,56 @@ def test_cloud_401_while_polling_resumes_the_job(fake_server, monkeypatch):
         ("GET", "/jobs/abc", "Bearer old-token"),
         ("GET", "/jobs/abc", "Bearer new-token"),
     ]
+
+
+def test_retarget_404_is_retargeting_unsupported(fake_server):
+    fake_server.enqueue_error(404, "not_found", "no such route")
+
+    with pytest.raises(mmcp_client.MmcpError) as exc:
+        _client(fake_server.url).retarget(REQUEST)
+
+    assert exc.value.code == "retargeting_unsupported"
+    assert exc.value.status == 404
+    [post] = _posts(fake_server)
+    assert post.path == "/retarget"
+
+
+def test_retarget_offline_sends_nothing(fake_server, bpy_app, monkeypatch):
+    opened = []
+    monkeypatch.setattr(mmcp_client, "_open", lambda req, timeout: opened.append(req))
+    monkeypatch.setattr(bpy_app, "online_access", False)
+
+    with pytest.raises(mmcp_client.MmcpError) as exc:
+        _client(NOT_LOOPBACK_URL, timeout=0.5).retarget(REQUEST)
+
+    assert exc.value.code == "offline"
+    assert opened == []
+    assert fake_server.requests == []
+
+
+def test_retarget_cloud_401_refreshes_once_and_retries(fake_server, monkeypatch):
+    monkeypatch.setattr(mmcp_client, "is_cloud_url", lambda url: True)
+    token = {"access": "old-token"}
+    monkeypatch.setattr(mmcp_client, "get_access_token", lambda: token["access"])
+    monkeypatch.setattr(mmcp_client, "get_refresh_token", lambda: "refresh-token")
+    refreshes, expiries = [], []
+
+    def fake_refresh():
+        refreshes.append(1)
+        token["access"] = "new-token"
+        return True
+
+    monkeypatch.setattr(mmcp_client, "refresh_access_token", fake_refresh)
+    monkeypatch.setattr(mmcp_client, "expire_session",
+                        lambda *a, **k: expiries.append((a, k)))
+
+    fake_server.enqueue_error(401, "unauthorized", "token expired")
+    fake_server.enqueue_gltf()
+
+    assert _client(fake_server.url).retarget(REQUEST) == GLTF_DOC
+    assert len(refreshes) == 1 and expiries == []
+    wire = [(r.method, r.path, r.header("Authorization")) for r in fake_server.requests]
+    assert wire == [
+        ("POST", "/retarget", "Bearer old-token"),
+        ("POST", "/retarget", "Bearer new-token"),
+    ]

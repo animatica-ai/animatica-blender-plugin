@@ -1,15 +1,13 @@
 """Headless rig for ``animatica_blender.mmcp_client`` — no Blender, no network
 beyond 127.0.0.1.
 
-``animatica_blender/__init__.py`` and ``autoposer/__init__.py`` import ``bpy``
-and register Blender classes; ``autoposer_runtime/__init__.py`` pulls in
-numpy/onnxruntime inference code. None of that is under test. So the parent
-packages are synthesised here: empty module objects whose ``__path__`` points
-at the REAL directories, so ``import animatica_blender.mmcp_client`` and
-``from .autoposer.vendor.autoposer_runtime import bundle`` load the real
-files without running any of those ``__init__``s. ``bundle`` is stdlib-only,
-so ``mmcp_client._opener()`` builds the real gate — asserted below, because a
-stand-in there would make the offline tests prove nothing.
+``animatica_blender/__init__.py`` imports ``bpy`` and registers Blender
+classes; none of that is under test. So the parent package is synthesised
+here: an empty module object whose ``__path__`` points at the REAL directory,
+so ``import animatica_blender.mmcp_client`` and its ``from . import http_gate``
+load the real files without running that ``__init__``. ``http_gate`` is
+stdlib-only, so ``mmcp_client._opener()`` builds the real gate — asserted
+below, because a stand-in there would make the offline tests prove nothing.
 
 ``bpy`` is a narrow, explicit stub: only the attributes ``mmcp_client`` reads
 on the paths these tests exercise. Anything else raises ``AttributeError``
@@ -54,10 +52,6 @@ def _synthetic_package(name: str, directory: Path) -> None:
 
 
 _synthetic_package("animatica_blender", ADDON_DIR)
-_synthetic_package("animatica_blender.autoposer", ADDON_DIR / "autoposer")
-_synthetic_package("animatica_blender.autoposer.vendor", ADDON_DIR / "autoposer" / "vendor")
-_synthetic_package("animatica_blender.autoposer.vendor.autoposer_runtime",
-                   ADDON_DIR / "autoposer" / "vendor" / "autoposer_runtime")
 
 _bpy = types.ModuleType("bpy")
 _bpy.app = types.SimpleNamespace(online_access=True, version=(5, 0, 0))
@@ -67,11 +61,10 @@ _properties = types.ModuleType("animatica_blender.properties")
 _properties.CLOUD_API_URL = "https://api.animatica.ai"
 sys.modules["animatica_blender.properties"] = _properties
 
-from animatica_blender.autoposer.vendor.autoposer_runtime import bundle as _bundle  # noqa: E402
+from animatica_blender import http_gate as _http_gate  # noqa: E402
 
-assert Path(_bundle.__file__).resolve() == (
-    ADDON_DIR / "autoposer" / "vendor" / "autoposer_runtime" / "bundle.py"
-), f"the gate must be the addon's real bundle.py, got {_bundle.__file__}"
+assert Path(_http_gate.__file__).resolve() == ADDON_DIR / "http_gate.py", (
+    f"the gate must be the addon's real http_gate.py, got {_http_gate.__file__}")
 
 
 @pytest.fixture
