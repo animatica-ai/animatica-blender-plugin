@@ -270,7 +270,17 @@ Prompt blocks live on Blender's **Timeline** as coloured strips in the
 - **Drag** the top edge of the lane to make the strips taller
 - **Double-click** an empty part of the lane to add a block
 - **Double-click** a block to type its prompt
-- **Delete** / **Backspace** removes the block under the cursor
+- **Click** a waypoint flag (the row under the blocks) to select it and its
+  marker in the viewport; **Shift** / **Ctrl** / **Cmd** + **click** adds it to
+  the selection or takes it off
+- **Shift** / **Ctrl** / **Cmd** + **click** a block adds or removes the block;
+  a plain click on a block deselects the flags
+- **Drag** across an empty part of the lane to select blocks and flags with a
+  rectangle; hold **Shift** / **Ctrl** / **Cmd** to add to the selection
+- **Drag** a flag to change its frame
+- **Delete** / **Backspace** with the cursor over the lane removes what is
+  selected on it (blocks and waypoints); with nothing selected, the block or
+  waypoint under the cursor. **Ctrl+Z** undoes it
 - The **+ / −** buttons in the Timeline header add and remove blocks too
 
 **Right-click** a block for its menu: **Edit Prompt**, **Enable** / **Disable**,

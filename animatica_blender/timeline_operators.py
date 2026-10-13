@@ -7,7 +7,7 @@ Provides:
 - ANIMATICA_OT_timeline_strip_action: click/drag on strips (keymap-driven)
 - ANIMATICA_OT_timeline_strip_add_click: double-click empty area to add strip
 - ANIMATICA_OT_timeline_strip_context_menu: right-click context menu
-- ANIMATICA_OT_timeline_strip_delete: Delete/Backspace to remove active strip
+- ANIMATICA_OT_timeline_strip_delete: Delete/Backspace to remove the lane's selection
 - ANIMATICA_OT_edit_strip_prompt: popup dialog for editing a strip's prompt
 - draw_timeline_header(): appended to DOPESHEET_HT_header for + / - buttons
 - register_keymaps() / unregister_keymaps()
@@ -87,16 +87,19 @@ def _timeline_poll(context):
 # The mouse on the lane, as in the other DCC integrations:
 #   left-drag empty ........ scrub the playhead (a click clears the selection)
 #   near the playhead ...... scrub: the playhead wins over the pins on its line
-#   Ctrl+drag empty ........ rubber-band: blocks and waypoint pins
-#   click block ............ select it; Ctrl+click adds or drops it
+#   drag empty ............. rubber-band: blocks and waypoint pins;
+#                            Shift/Ctrl/Cmd adds to the selection
+#   click block ............ select it; Shift/Ctrl/Cmd+click adds or drops it
 #   drag block(s) .......... move the selection, snapping to edges, the
 #                            playhead and pins; Shift: no snapping
 #   Alt+drag block ......... jump past a neighbour, into the nearest free gap
 #                            on the drop side
 #   drag block edge ........ resize; Alt pushes the neighbour, Ctrl scales the
 #                            pins inside with it
-#   click / drag a pin ..... select it (and its viewport marker) / move it
+#   click / drag a pin ..... select it (and its viewport marker) / move it;
+#                            Shift/Ctrl/Cmd+click a pin adds or drops it
 #   double-click ........... edit the prompt; on empty, a new block
+#   Delete/Backspace ....... removes the lane's selection: blocks and pins
 
 #: within this many px (x UI scale), a dragged edge snaps
 SNAP_PX = 8
@@ -116,6 +119,14 @@ def _select_none(props):
     # the active block stays (the sidebar's prompt field shows it); none is picked
     for b in props.prompt_blocks:
         b.selected = False
+
+
+def _deselect_waypoints(scene):
+    # one selection on the lane: a plain click on a block drops the pins
+    from . import waypoints
+    for obj in waypoints.waypoints(scene):
+        obj.select_set(False)
+    waypoints.tag_redraw()
 
 
 def _snap_targets(context, exclude):
@@ -203,7 +214,7 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
                 self._state = "DRAGGING_WAYPOINT"
                 self._waypoint_name = pin.name
                 self._original_frame = int(pin.animatica_waypoint_frame)
-                self._ctrl = event.ctrl
+                self._toggle_pin = event.shift or event.ctrl or event.oskey
                 context.window.cursor_set("MOVE_X")
                 return self._start(context)
 
@@ -249,9 +260,12 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
                 self._toggle = "added"
         elif not fr.selected:
             _select_only(props, idx)
+            _deselect_waypoints(context.scene)
         props.active_block_index = idx
         if fr.locked:
             # set in stone: its motion is where it is, so its frames stay too
+            if not self._toggle:
+                _deselect_waypoints(context.scene)  # never reaches the release
             context.area.tag_redraw()
             return {"FINISHED"}
 
@@ -419,8 +433,10 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
                     rest = _selected(props.prompt_blocks)
                     if rest and props.active_block_index == self._idx:
                         props.active_block_index = rest[0]
-                elif len(self._group) > 1:
-                    _select_only(props, self._idx)   # a plain click on one of several: that one
+                else:
+                    if len(self._group) > 1:
+                        _select_only(props, self._idx)   # a plain click on one of several: that one
+                    _deselect_waypoints(context.scene)
             return {"FINISHED"}
         return {"RUNNING_MODAL"}
 
@@ -611,12 +627,15 @@ class ANIMATICA_OT_timeline_strip_action(bpy.types.Operator):
             return {"RUNNING_MODAL"}
         if self._released(event):
             if not self._moved:
-                # a click: the pin, and its marker in the viewport; Ctrl toggles it
-                if self._ctrl:
+                # a click: the pin, and its marker in the viewport; Shift/Ctrl/Cmd
+                # toggles it, a plain click drops the blocks too
+                if self._toggle_pin:
                     obj.select_set(not obj.select_get())
                 else:
                     for other in waypoints.waypoints(context.scene):
                         other.select_set(other == obj)
+                    _select_none(context.scene.animatica)
+                    context.area.tag_redraw()
                 waypoints.tag_redraw()
             return {"FINISHED"}
         return {"RUNNING_MODAL"}
@@ -909,46 +928,28 @@ class ANIMATICA_OT_add_strip_between_keyframes(bpy.types.Operator):
 # Delete strip (Backspace / Delete key)
 # ---------------------------------------------------------------------------
 
-class ANIMATICA_OT_timeline_strip_delete(bpy.types.Operator):
-    """Delete an Animatica prompt block (Backspace/Delete).
+def delete_lane_selection(scene, *, fallback_block=None, fallback_pin=None):
+    """Delete what is selected on the lane: blocks and the current character's
+    waypoint pins. With nothing selected, *fallback_pin* (a marker object),
+    else *fallback_block* (an index). Nothing off the lane is touched.
 
-    Deletes the block under the mouse, or the active block when the mouse is
-    in the Animatica lane. Outside the lane, the keys delete keyframes as
-    usual.
+    Returns the deleted blocks' names and the number of deleted pins.
     """
+    from . import waypoints
 
-    bl_idname = "animatica.timeline_strip_delete"
-    bl_label = "Delete Animatica Strip"
-    bl_options = {"REGISTER", "UNDO"}
+    props = scene.animatica
+    blocks = _selected(props.prompt_blocks)
+    pins = [o for o in waypoints.waypoints(scene) if o.select_get()]
+    if not blocks and not pins:
+        if fallback_pin is not None:
+            pins = [fallback_pin]
+        elif fallback_block is not None and 0 <= fallback_block < len(props.prompt_blocks):
+            blocks = [fallback_block]
 
-    @classmethod
-    def poll(cls, context):
-        return (
-            _timeline_poll(context)
-            and len(context.scene.animatica.prompt_blocks) > 0
-        )
-
-    def invoke(self, context, event):
-        # Only intercept if the mouse is hovering over the strip lane
-        if not is_in_lane(context, event.mouse_region_y):
-            return {"PASS_THROUGH"}
-
-        props = context.scene.animatica
-        # the selection, as a whole; else the block under the mouse, else the active one
-        doomed = _selected(props.prompt_blocks)
-        if not doomed:
-            hit = hit_test_strips(context, event.mouse_region_x, event.mouse_region_y)
-            idx = hit["index"] if hit["index"] is not None else props.active_block_index
-            if not (0 <= idx < len(props.prompt_blocks)):
-                return {"PASS_THROUGH"}
-            doomed = [idx]
-        names = [props.prompt_blocks[i].prompt or "(no prompt)" for i in doomed]
-        for i in sorted(doomed, reverse=True):
+    names = [props.prompt_blocks[i].prompt or "(no prompt)" for i in blocks]
+    if blocks:
+        for i in sorted(blocks, reverse=True):
             props.prompt_blocks.remove(i)
-        self.report({"INFO"}, f"Deleted {len(doomed)} block{'s' if len(doomed) != 1 else ''}: "
-                              + ", ".join(names)[:80])
-
-        # Adjust active index
         if len(props.prompt_blocks) == 0:
             props.active_block_index = 0
         elif props.active_block_index >= len(props.prompt_blocks):
@@ -957,6 +958,57 @@ class ANIMATICA_OT_timeline_strip_delete(bpy.types.Operator):
         from .properties import save_blocks_to_armature
 
         save_blocks_to_armature(props.target_armature, props)
+
+    for obj in pins:
+        bpy.data.objects.remove(obj, do_unlink=True)
+    if pins:
+        waypoints.tag_redraw()
+    return names, len(pins)
+
+
+class ANIMATICA_OT_timeline_strip_delete(bpy.types.Operator):
+    """Delete the lane's selection: prompt blocks and waypoints (Backspace/Delete).
+
+    With nothing selected, deletes the waypoint or block under the mouse, else
+    the active block, when the mouse is in the Animatica lane. Outside the
+    lane, the keys delete keyframes as usual.
+    """
+
+    bl_idname = "animatica.timeline_strip_delete"
+    bl_label = "Delete Animatica Blocks and Waypoints"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        if not _timeline_poll(context):
+            return False
+        from . import waypoints
+        return len(context.scene.animatica.prompt_blocks) > 0 or bool(waypoints.waypoints(context.scene))
+
+    def invoke(self, context, event):
+        # Only intercept if the mouse is hovering over the strip lane
+        if not is_in_lane(context, event.mouse_region_y):
+            return {"PASS_THROUGH"}
+
+        props = context.scene.animatica
+        mx, my = event.mouse_region_x, event.mouse_region_y
+        # the selection, as a whole; else the pin under the mouse, the block under it, the active one
+        pin = hit_test_waypoint_pin(context, mx, my)
+        hit = hit_test_strips(context, mx, my)
+        idx = hit["index"] if hit["index"] is not None else props.active_block_index
+        names, n_pins = delete_lane_selection(context.scene, fallback_block=idx, fallback_pin=pin)
+        if not names and not n_pins:
+            return {"PASS_THROUGH"}
+
+        parts = []
+        if names:
+            parts.append(f"{len(names)} block{'s' if len(names) != 1 else ''}")
+        if n_pins:
+            parts.append(f"{n_pins} waypoint{'s' if n_pins != 1 else ''}")
+        msg = "Deleted " + " and ".join(parts)
+        if names:
+            msg += ": " + ", ".join(names)[:80]
+        self.report({"INFO"}, msg)
 
         context.area.tag_redraw()
         return {"FINISHED"}
@@ -2013,7 +2065,7 @@ def register_keymaps():
     )
     _addon_keymaps.append((km, kmi))
 
-    # Delete key — remove active strip
+    # Delete key — remove the lane's selection
     kmi = km.keymap_items.new(
         "animatica.timeline_strip_delete",
         type="DEL",
@@ -2021,7 +2073,7 @@ def register_keymaps():
     )
     _addon_keymaps.append((km, kmi))
 
-    # Backspace — remove active strip
+    # Backspace — remove the lane's selection
     kmi = km.keymap_items.new(
         "animatica.timeline_strip_delete",
         type="BACK_SPACE",

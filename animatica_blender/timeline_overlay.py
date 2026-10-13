@@ -891,11 +891,16 @@ def _draw_waypoint_rail(g, W, fx, frames):
         hot_frame = getattr(obj, "animatica_waypoint_frame", None)
     picked = {int(o.animatica_waypoint_frame) for o in waypoints.waypoints(bpy.context.scene)
               if o.select_get()}
+    size = g.wp1 - g.wp0
     for x, group in _clusters([(fx(f), f) for f in frames if -8 * u <= fx(f) <= W + 8 * u], CLUSTER * u):
-        color = (st.WHITE if hot_frame in group
-                 else st.SOFT_ORANGE if picked & set(group) else WAYPOINT_COLOR)
+        selected = bool(picked & set(group))
+        if selected:
+            # picked: a chip behind it, as a pressed button; a tint alone was the flag's own orange
+            h = size / 2 + 2 * u
+            st.rounded((x - h, g.wp0 - 2 * u, x + h, g.wp1 + 2 * u), 3 * u,
+                       st.with_alpha(st.SOFT_ORANGE, 0.45))
+        color = st.WHITE if selected or hot_frame in group else WAYPOINT_COLOR
         # the floating bar's Waypoint icon, so the two read as one thing
-        size = g.wp1 - g.wp0
         st.icon("waypoint", x, (g.wp0 + g.wp1) / 2, size, color)
         if len(group) > 1:
             _font(8 * u)

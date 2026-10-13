@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [Unreleased]
+
+### Added
+
+- **Select several waypoint flags on the Timeline lane.** Shift, Ctrl or Cmd
+  + click a flag adds it to the selection or takes it off, and dragging a
+  rectangle over an empty part of the lane selects the blocks and flags in it.
+  Delete or Backspace with the cursor over the lane removes everything
+  selected there, blocks and waypoints; Ctrl+Z brings them back.
+
+### Fixed
+
+- **Delete after clicking a waypoint flag no longer removes a block that was
+  selected earlier.** Clicking a flag now deselects the blocks, and Delete
+  also works on waypoints and when the lane has no blocks.
+- **A selected waypoint flag stands out.** It is white on a highlighted chip;
+  before, its tint was nearly the unselected flag's own orange.
+
 ## [1.0.1] — 2026-10-12
 
 ### Added
