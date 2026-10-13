@@ -328,10 +328,17 @@ class ANIMATICA_OT_add_waypoint(bpy.types.Operator):
             bpy.data.objects.remove(old, do_unlink=True)
         obj = create_marker(scene, frame, xy, owner=arm, z=ground_z(scene, xy, arm))
 
-        for o in context.selected_objects:
-            o.select_set(False)
-        obj.select_set(True)
-        context.view_layer.objects.active = obj
+        if context.mode == 'POSE':
+            # Posing: the rig stays active and in pose mode; only the route's
+            # selection moves to the new marker.
+            for o in waypoints(scene):
+                o.select_set(False)
+            obj.select_set(True)
+        else:
+            for o in context.selected_objects:
+                o.select_set(False)
+            obj.select_set(True)
+            context.view_layer.objects.active = obj
         tag_redraw()
         self.report({'INFO'}, f"waypoint at frame {frame}. Drag it to where the character should be")
         return {'FINISHED'}

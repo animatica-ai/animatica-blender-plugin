@@ -48,6 +48,7 @@ from . import timeline_operators
 from . import updater
 from . import examples
 from . import waypoints
+from . import waypoint_gizmo
 from . import batch
 from . import variations
 from . import toolbar
@@ -213,6 +214,7 @@ def register():
     updater.register()
     examples.register()
     waypoints.register()
+    waypoint_gizmo.register()
     batch.register()
     variations.register()
     guidance.register()
@@ -254,6 +256,7 @@ def unregister():
     guidance.unregister()
     variations.unregister()
     batch.unregister()
+    waypoint_gizmo.unregister()
     waypoints.unregister()
     examples.unregister()
     updater.unregister()

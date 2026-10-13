@@ -26,6 +26,22 @@ Proscenium, and keep the identifiers those releases actually shipped.
   apart, stands for all of them. Only the keys you set go; a take's own
   samples stay.
 
+- **Waypoints can be dragged in the viewport by the rim of their circle,
+  in pose mode too.** The rim lights up white under the cursor; only the rim
+  counts, not the inside, so foot bones keep their clicks. A click selects
+  the waypoint (and deselects the character's others), Shift+click adds it
+  to the selection or takes it off. Dragging moves the waypoint along the
+  ground under the cursor, or all the selected ones if the grabbed one is
+  selected; the header shows the offset, Esc or the right mouse button
+  cancels, and one drag is one Ctrl+Z. The active object stays as it is.
+  Shown only with overlays and Show Gizmo on.
+
+### Changed
+
+- **Add Waypoint in pose mode keeps the character active.** The new waypoint
+  is selected, but no longer becomes the active object, which used to throw
+  you out of pose mode. In Object Mode it works as before.
+
 ### Fixed
 
 - **Redo of one block keeps the waypoints.** The block was made again without
