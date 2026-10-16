@@ -1447,9 +1447,16 @@ class ANIMATICA_OT_bar_click(bpy.types.Operator):
             result = getattr(getattr(bpy.ops, group), name)('INVOKE_DEFAULT', **it.props)
         except RuntimeError as exc:
             # the button's own error report, raised by bpy.ops: shown as what it
-            # says, not as a Python traceback in the status bar
-            text = str(exc).strip().splitlines()[-1]
-            self.report({'ERROR'}, text.removeprefix("Error: ").strip() or "That didn't work")
+            # says, not as a Python traceback in the status bar. Blender ends the
+            # message with a "Location: file:line" line; the report is the line
+            # before it (a button that calls another operator nests one more
+            # "RuntimeError: Error:" in front)
+            lines = [ln for ln in str(exc).strip().splitlines()
+                     if ln.strip() and not ln.startswith("Location:")]
+            text = lines[-1].strip() if lines else ""
+            for prefix in ("RuntimeError: ", "Error: "):
+                text = text.removeprefix(prefix)
+            self.report({'ERROR'}, text.strip() or "That didn't work")
             return {'CANCELLED'}
         if _note["kind"]:
             self.report({_note["kind"]}, _note["text"])
