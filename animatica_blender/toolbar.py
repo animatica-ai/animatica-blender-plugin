@@ -55,6 +55,8 @@ FILL_COLOR = st.with_alpha(st.SOFT_ORANGE, 0.55)   # progress inside the working
 HOVER_OUTLINE = st.OUTLINE_HOVER
 
 BUTTON = 30          # px at 1x, square
+CLOSE = 22           # the bar's close button: slimmer than a button
+TAB_W, TAB_H = 48, 20  # the tab a closed bar folds down to
 ICON = 18            # the glyph inside it
 PAD = 5
 GAP = 1              # inside a group: a hairline, the buttons a segmented strip
@@ -203,15 +205,25 @@ def items(context, mode: str | None = None) -> list[Item]:
     from . import mmcp_client, properties
 
     s = context.scene.animatica
+    if s.toolbar_collapsed:
+        # closed: a tab where it was, to open it again
+        return [Item("open_bar", "", "animatica.toolbar_open", width="tab")]
     arm = properties._live_armature(s.target_armature)
     if arm is None:
-        return _setup_items(context)
+        return _setup_items(context) + [_close_item()]
     out = _bar_items(context, arm)
     # what makes it: the model, at the far end -- set up once, changed rarely
     if s.model_id not in ("", "NONE") and mmcp_client.cached_model(s.model_id) is not None:
         out.append(Item("model", "model", "animatica.toolbar_model", label=_short(s.model_id),
                         enabled=not s.is_generating, group=10))
+    out.append(_close_item())
     return out + _hint_items(context)
+
+
+def _close_item() -> Item:
+    """Closing the bar (down to its tab), at its very end. It never folds away: a bar you can't
+    close is the reason to want to."""
+    return Item("close_bar", "", "animatica.toolbar_close", width="close", group=11)
 
 
 def _hint_items(context) -> list:
@@ -628,6 +640,8 @@ def _take_width(u: float, size: float) -> float:
 def _width(it: Item, u: float, size: float) -> float:
     if it.width == "field":
         return FIELD * u
+    if it.width == "close":
+        return CLOSE * u
     if it.width == "tile":
         return (it.tile_w or 96) * u
     if it.width == "field_btn":
@@ -700,6 +714,13 @@ def layout(context, area, region):
     its = items(context)
     if not its:
         return (), [], []
+    if its[0].width == "tab":
+        # closed: the tab, centred where the bar was, on the same bottom edge
+        u = _ui()
+        x0, x1 = _visible_span(area, region)
+        w, h, y = TAB_W * u, TAB_H * u, BOTTOM * u + _shelf_lift(area, region)
+        rect = ((x0 + x1 - w) / 2, y, (x0 + x1 + w) / 2, y + h)
+        return rect, [(its[0], rect)], []
     hint = [it for it in its if it.width in ("hint", "hint_close")]
     its = [it for it in its if it.width not in ("hint", "hint_close")]
     u = _ui()
@@ -828,6 +849,14 @@ def shown(context) -> bool:
     return bool(s is not None and getattr(s, "show_toolbar", True))
 
 
+def closed(scene) -> bool:
+    """The bar folded to its tab, or switched off: then the viewport shows none of what the bar
+    switches on -- the ghosts, the root path, Marionette's trail, onion skin and zoetrope. Each
+    keeps its switch, so the bar opened again brings back what was there."""
+    s = getattr(scene, "animatica", None)
+    return bool(s is not None and (getattr(s, "toolbar_collapsed", False) or not getattr(s, "show_toolbar", True)))
+
+
 # ---------------------------------------------------------------------------
 # Drawing
 # ---------------------------------------------------------------------------
@@ -859,6 +888,10 @@ def draw_bar(context, highlighted: bool = True) -> None:
     live = None
     shader = gpu.shader.from_builtin('UNIFORM_COLOR')
     gpu.state.blend_set('ALPHA')
+    if rects and rects[0][0].width == "tab":
+        _draw_tab(rects[0][1], u, _hot(live, rects[0][0]))
+        gpu.state.blend_set('NONE')
+        return
     _rounded(shader, bar, (RADIUS + 3) * u, BAR_COLOR)
     size = TEXT_SIZE * u
     side = BUTTON * u
@@ -876,6 +909,9 @@ def draw_bar(context, highlighted: bool = True) -> None:
             cx, cy, c = (rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2, 4 * u
             st.lines([((cx - c, cy - c), (cx + c, cy + c)), ((cx - c, cy + c), (cx + c, cy - c))],
                      max(1.0, 1.3 * u), (1, 1, 1, 0.85 if hot else 0.5))
+            continue
+        if it.width == "close":
+            _draw_close(rect, u, _hot(live, it))
             continue
         if not it.icon and not it.op:          # a plain label, e.g. "2/4"
             _rounded(shader, rect, RADIUS * u, BUTTON_COLOR, left=first, right=last)
@@ -953,6 +989,25 @@ def draw_bar(context, highlighted: bool = True) -> None:
             blf.position(0, x0 + side - 2 * u, (y0 + y1) / 2 - size * 0.36, 0)
             blf.draw(0, it.label)
     gpu.state.blend_set('NONE')
+
+
+def _draw_close(rect, u, hot):
+    """The bar's close button: a quiet cross on the bar's own ground, a tile only under the
+    mouse -- not a button like Discard's, the take's cross with its word."""
+    if hot:
+        st.rounded(rect, RADIUS * u, st.TILE_HOVER)
+    cx, cy, c = (rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2, 4 * u
+    st.lines([((cx - c, cy - c), (cx + c, cy + c)), ((cx - c, cy + c), (cx + c, cy - c))],
+             max(1.0, 1.3 * u), (1, 1, 1, 0.85 if hot else 0.45))
+
+
+def _draw_tab(rect, u, hot):
+    """A closed bar: a small tab on the bar's ground with a chevron pointing up, the way it
+    opens."""
+    st.rounded(rect, (rect[3] - rect[1]) / 2, st.TILE_HOVER if hot else BAR_COLOR)
+    cx, cy, c = (rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2, 4.5 * u
+    st.lines([((cx - c, cy - c / 2), (cx, cy + c / 2)), ((cx, cy + c / 2), (cx + c, cy - c / 2))],
+             max(1.0, 1.5 * u), (1, 1, 1, 0.95 if hot else 0.7))
 
 
 def _draw_hint(it, rect, u, size, hot):
@@ -1135,6 +1190,8 @@ TIPS = {
     "batch_shared": ("Shared Prompts", "When on, every selected character does the active character's prompts, each with its own seed and from where it stands: variations on one action, or a crowd. Waypoints and pins are left out. When off, each character follows its own prompts, key poses and waypoints"),
     "keep_all": ("Keep All", "Keep every character's take. Each becomes that character's own action, and the blocks it made are locked, so a later Generate leaves them alone"),
     "redo_all": ("Redo All", "Throw every character's take away and make new ones, from the same prompts and key poses. To redo one character alone, use its row in the sidebar (N)"),
+    "close_bar": ("Close the Bar", "Fold this bar down to a small tab. Click the tab to open it again. To hide it completely, untick View \u2192 Animatica Bar"),
+    "open_bar": ("Open the Bar", "Bring the floating bar back. To hide it completely, tab and all, untick View \u2192 Animatica Bar"),
     "discard_all": ("Discard All", "Throw every character's take away and go back to what each had. Key poses and prompts stay"),
 }
 
@@ -1430,6 +1487,40 @@ class ANIMATICA_OT_toolbar_toggle(bpy.types.Operator):
             return {'CANCELLED'}
         setattr(s, self.name, not getattr(s, self.name))
         return {'FINISHED'}
+
+
+class ANIMATICA_OT_toolbar_close(bpy.types.Operator):
+    """Fold the floating bar down to a small tab; the tab opens it again"""
+    bl_idname = "animatica.toolbar_close"
+    bl_label = "Close the Bar"
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context):
+        context.scene.animatica.toolbar_collapsed = True
+        if context.area is not None:
+            _hover.pop(context.area.as_pointer(), None)
+        return {'FINISHED'}
+
+
+class ANIMATICA_OT_toolbar_open(bpy.types.Operator):
+    """Open the floating bar again from its tab"""
+    bl_idname = "animatica.toolbar_open"
+    bl_label = "Open the Bar"
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context):
+        context.scene.animatica.toolbar_collapsed = False
+        if context.area is not None:
+            _hover.pop(context.area.as_pointer(), None)
+        return {'FINISHED'}
+
+
+def _view_menu(self, context):
+    """The viewport's View menu, beside Blender's own Toolbar and Sidebar: the bar on or off
+    altogether (its tab too)."""
+    s = getattr(context.scene, "animatica", None)
+    if s is not None:
+        self.layout.prop(s, "show_toolbar", text="Animatica Bar")
 
 
 class ANIMATICA_OT_toolbar_generate(bpy.types.Operator):
@@ -1960,7 +2051,8 @@ class ANIMATICA_PT_overlay(bpy.types.Panel):
 # Registration
 # ---------------------------------------------------------------------------
 
-_classes = (ANIMATICA_OT_toolbar_toggle, ANIMATICA_OT_toolbar_generate, ANIMATICA_OT_toolbar_redo,
+_classes = (ANIMATICA_OT_toolbar_toggle, ANIMATICA_OT_toolbar_close, ANIMATICA_OT_toolbar_open,
+            ANIMATICA_OT_toolbar_generate, ANIMATICA_OT_toolbar_redo,
             ANIMATICA_OT_toolbar_pose_prompt,
 ANIMATICA_OT_toolbar_autokey, ANIMATICA_OT_toolbar_overlay, ANIMATICA_PT_overlay,
             ANIMATICA_OT_toolbar_pose_generate, ANIMATICA_OT_toolbar_field_pose, ANIMATICA_PT_options,
@@ -1995,6 +2087,7 @@ def register():
             pass
     if not bpy.app.timers.is_registered(_tick):
         bpy.app.timers.register(_tick, first_interval=1.0, persistent=True)
+    bpy.types.VIEW3D_MT_view.prepend(_view_menu)
 
 
 _keymaps: list = []
@@ -2009,6 +2102,10 @@ def unregister():
     _keymaps.clear()
     if bpy.app.timers.is_registered(_tick):
         bpy.app.timers.unregister(_tick)
+    try:
+        bpy.types.VIEW3D_MT_view.remove(_view_menu)
+    except (ValueError, RuntimeError):
+        pass
     _live.clear()
     st.clear()
     for cls in reversed(_classes):

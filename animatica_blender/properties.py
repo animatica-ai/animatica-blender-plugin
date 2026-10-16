@@ -706,6 +706,13 @@ def _bar_mode_update(self, context):
     _redraw_3d_views()
 
 
+def _show_toolbar(settings) -> None:
+    """Switched on (the View menu, the sidebar): the bar comes back open, not as its tab."""
+    if settings.show_toolbar and settings.toolbar_collapsed:
+        settings.toolbar_collapsed = False
+    _redraw_3d_views()
+
+
 def _redraw_3d_views() -> None:
     try:
         for win in bpy.context.window_manager.windows:
@@ -978,13 +985,20 @@ class AnimaticaSettings(PropertyGroup):
         default=True,
     )
     show_toolbar: BoolProperty(
-        name="Toolbar",
+        name="Animatica Bar",
         description=(
             "Show the floating bar at the bottom of the viewport. It holds the prompt, "
             "Generate, Redo and Discard, posing and keying, the key poses, waypoints and pins, "
-            "and the take's switches, so you don't need the N panel"
+            "and the take's switches, so you don't need the N panel. Its cross folds it to a "
+            "tab; switched off, not even the tab shows"
         ),
         default=True,
+        update=lambda self, context: _show_toolbar(self),
+    )
+    toolbar_collapsed: BoolProperty(
+        name="Bar Folded",
+        description="The floating bar is folded down to a tab: click the tab to open it",
+        default=False,
         update=lambda self, context: _redraw_3d_views(),
     )
     key_pose_overlay: BoolProperty(

@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [Unreleased]
+
+### Added
+
+- **Close the floating bar, and open it again.** A quiet cross at the bar's right end folds it
+  down to a small tab where it was; a click on the tab opens it again. While it is closed the
+  viewport is clean: the key-pose ghosts, their frame numbers and the root path (and, with
+  Marionette, its onion skin, zoetrope and trail) are not drawn. Each keeps its switch, so opening
+  the bar brings back what was there. Closing is one undo step, so Ctrl+Z opens it too. To hide
+  the bar altogether, tab and all, untick **Animatica Bar**: the first entry of the viewport's
+  View menu (also in the sidebar, as Floating Toolbar). Ticking it brings the bar back open.
+
 ## [1.0.3] — 2026-10-13
 
 ### Added

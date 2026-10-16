@@ -1318,6 +1318,9 @@ def _overlay_gate(context):
         return None
     if not space.overlay.show_overlays:
         return None
+    from . import toolbar
+    if toolbar.closed(context.scene):
+        return None                    # the bar closed: a clean viewport (the ghosts stay baked)
     settings = _settings(context.scene)
     if not overlay_on(settings):
         return None
