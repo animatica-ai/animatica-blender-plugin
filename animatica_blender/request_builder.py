@@ -1576,9 +1576,21 @@ def _validate_constraint_count(constraints: list[dict[str, Any]], model_caps: di
     limits = model_caps.get("limits") or {}
     cap = int(limits.get("max_constraints_per_request") or 0)
     if cap and len(constraints) > cap:
+        # said in what the user sees in the scene, not in protocol terms
+        kinds = [c.get("type") for c in constraints]
+        poses, pins = kinds.count("pose_keyframe"), kinds.count("effector_target")
+        route = kinds.count("root_path")
+        other = len(kinds) - poses - pins - route
+        parts = [f"{n} {word}" for n, word in (
+            (poses, "key pose" if poses == 1 else "key poses"),
+            (pins, "pin" if pins == 1 else "pins"),
+            (route, "for the route"),
+            (other, "other"),
+        ) if n]
         raise BuildError(
-            f"{len(constraints)} constraints exceeds the model's max of {cap} "
-            f"(disable some keyframes / drop an effector pin)"
+            f"Too much for the model to follow: {len(constraints)} key poses, pins and "
+            f"waypoints ({', '.join(parts)}), and it takes at most {cap}. "
+            f"Remove some key poses or pins, then Generate again"
         )
 
 
