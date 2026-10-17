@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [1.0.5] — 2026-10-18
+
+### Fixed
+
+- **The floating bar is drawn without seams.** Its rounded tiles and buttons showed faint streaks
+  along the bar's long edges and an X through each button, where the triangles they were drawn
+  from met. Each is now one smooth shape, its outline softened by a pixel, in the same colours.
+
 ## [1.0.4] — 2026-10-16
 
 ### Added
