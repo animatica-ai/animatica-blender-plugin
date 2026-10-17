@@ -112,62 +112,88 @@ def _uniform():
     return _shader
 
 
+# The rounded rectangle is one triangle round it, and its shader cuts the
+# shape out with a distance field. Built from a fan of triangles, it showed its
+# seams on the floating bar: a gizmo is drawn with polygon smoothing on, which
+# softens every triangle's edges, the inner ones too, and the fan's long thin
+# triangles streaked the bar. One triangle has no inner edge, and the shader
+# softens the outline itself, by a pixel, wherever it is drawn.
+_ROUNDED_VERT = """
+void main() {
+  uv_px = pos * 2.0 * (size + 4.0) - 2.0;
+  gl_Position = ModelViewProjectionMatrix * vec4(uv_px, 0.0, 1.0);
+}
+"""
+_ROUNDED_FRAG = """
+void main() {
+  vec2 h = size * 0.5;
+  vec2 p = uv_px - h;
+  float r = (p.x > 0.0) ? radii.y : radii.x;
+  vec2 q = abs(p) - h + r;
+  float d = min(max(q.x, q.y), 0.0) + length(max(q, vec2(0.0))) - r;
+  float a = clamp(0.5 - d, 0.0, 1.0);
+  if (radii.z > 0.0) {
+    a *= clamp(0.5 + d + radii.z, 0.0, 1.0);
+  }
+  vec3 c = color.rgb;
+  if (srgbTarget) {
+    c = mix(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, step(c, vec3(0.04045)));
+  }
+  fragColor = vec4(c, color.a * a);
+}
+"""
+_rounded_shader = None
+_rounded_batch = None
+
+
+def _rounded_draw(rect, r, width, color, left=True, right=True) -> None:
+    global _rounded_shader, _rounded_batch
+    x0, y0, x1, y1 = rect
+    if x1 <= x0 or y1 <= y0:
+        return
+    w, h = x1 - x0, y1 - y0
+    r = max(0.0, min(r, w / 2, h / 2))
+    if _rounded_shader is None:
+        info = gpu.types.GPUShaderCreateInfo()
+        info.push_constant('MAT4', "ModelViewProjectionMatrix")
+        info.push_constant('VEC2', "size")
+        info.push_constant('VEC4', "radii")              # left, right, ring width
+        info.push_constant('VEC4', "color")
+        info.push_constant('BOOL', "srgbTarget")         # set by Blender, as for its own shaders
+        iface = gpu.types.GPUStageInterfaceInfo("animatica_rounded")
+        iface.smooth('VEC2', "uv_px")
+        info.vertex_in(0, 'VEC2', "pos")
+        info.vertex_out(iface)
+        info.fragment_out(0, 'VEC4', "fragColor")
+        info.vertex_source(_ROUNDED_VERT)
+        info.fragment_source(_ROUNDED_FRAG)
+        _rounded_shader = gpu.shader.create_from_info(info)
+        _rounded_batch = batch_for_shader(_rounded_shader, 'TRIS', {"pos": [(0, 0), (1, 0), (0, 1)]})
+    sh = _rounded_shader
+    gpu.state.blend_set('ALPHA')
+    sh.bind()
+    sh.uniform_float("size", (w, h))
+    sh.uniform_float("radii", (r if left else 0.0, r if right else 0.0, width, 0.0))
+    sh.uniform_float("color", color)
+    gpu.matrix.push()
+    gpu.matrix.translate((x0, y0))
+    _rounded_batch.draw(sh)
+    gpu.matrix.pop()
+
+
 def rounded(rect, r, color, *, left: bool = True, right: bool = True) -> None:
     """A filled rounded rectangle ``(x0, y0, x1, y1)`` in region pixels.
 
     ``left`` / ``right`` False square that side's corners: the buttons of a
     segmented group sit flush, and only the group's ends are rounded."""
-    x0, y0, x1, y1 = rect
-    if x1 <= x0 or y1 <= y0:
-        return
-    w, h = round((x1 - x0) * _Q) / _Q, round((y1 - y0) * _Q) / _Q
-    r = max(0.0, min(r, w / 2, h / 2))
-    rq = round(r * _Q) / _Q
-
-    def build():
-        rr, rl = (rq if right else 0.0), (rq if left else 0.0)
-        pts = []
-        for cx, cy, a0, rc in ((w - rr, h - rr, 0, rr), (rl, h - rl, 90, rl),
-                               (rl, rl, 180, rl), (w - rr, rr, 270, rr)):
-            for k in range(7):
-                a = math.radians(a0 + 15 * k)
-                pts.append((cx + rc * math.cos(a), cy + rc * math.sin(a)))
-        verts = [(w / 2, h / 2)] + pts
-        tris = [(0, i, i % len(pts) + 1) for i in range(1, len(pts) + 1)]
-        return verts, tris
-    _draw(_batch(("rounded", w, h, rq, left, right), build), x0, y0, color)
+    _rounded_draw(rect, r, 0.0, color, left, right)
 
 
 def outline(rect, r, width, color) -> None:
     """A rounded outline, ``width`` px inside ``rect``: the ring between it and
     the rectangle inset by ``width``."""
-    x0, y0, x1, y1 = rect
-    if x1 <= x0 or y1 <= y0:
-        return
-    w, h = round((x1 - x0) * _Q) / _Q, round((y1 - y0) * _Q) / _Q
-    rq = round(max(0.0, min(r, w / 2, h / 2)) * _Q) / _Q
-    wq = round(width * _Q) / _Q
-
-    def build():
-        seg = []
-        for cx, cy, a0 in ((w - rq, h - rq, 0), (rq, h - rq, 90), (rq, rq, 180), (w - rq, rq, 270)):
-            for k in range(7):
-                a = math.radians(a0 + 15 * k)
-                seg.append((cx, cy, math.cos(a), math.sin(a)))
-        outer = [(cx + rq * c, cy + rq * s_) for cx, cy, c, s_ in seg]
-        ri = max(0.0, rq - wq)
-        inner = [(cx + ri * c, cy + ri * s_) for cx, cy, c, s_ in seg]
-        if rq < wq:                            # (nearly) square corners: clamp the inner ring
-            inner = [(min(max(x, wq), w - wq), min(max(y, wq), h - wq)) for x, y in outer]
-        verts, tris = [], []
-        n = len(outer)
-        for i in range(n):
-            verts += [outer[i], inner[i]]
-        for i in range(n):
-            a_, b_ = 2 * i, 2 * ((i + 1) % n)
-            tris += [(a_, a_ + 1, b_), (b_, a_ + 1, b_ + 1)]
-        return verts, tris
-    _draw(_batch(("outline", w, h, rq, wq), build), x0, y0, color)
+    if width > 0:
+        _rounded_draw(rect, r, width, color)
 
 
 def polygon(points, color) -> None:
