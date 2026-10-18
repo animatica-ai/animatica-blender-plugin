@@ -374,6 +374,20 @@ def _push_actions_to_nla(armature_obj, actions, *, fill_end=None) -> list:
     return tracks
 
 
+def _warn_left_behind(op, arm, what: str) -> None:
+    """Name the bones the result will not move: ones that carry part of the
+    mesh but hang beside the body (`request_builder.left_behind`)."""
+    try:
+        names = request_builder.left_behind(arm)
+    except request_builder.BuildError:
+        return
+    if names:
+        shown = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+        op.report({'WARNING'}, f"{shown} move part of the mesh but hang beside the body, so the "
+                               f"{what} will not move them. To bring them along, parent them "
+                               "into the body (Edit Mode, Ctrl+P → Keep Offset)")
+
+
 def _root_location_data_path(armature_obj) -> str | None:
     """The fcurve data_path that drives the armature's root-bone location."""
     if armature_obj is None or armature_obj.type != 'ARMATURE':
@@ -1180,6 +1194,7 @@ class ANIMATICA_OT_generate(Operator):
         except request_builder.BuildError as exc:
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
+        _warn_left_behind(self, arm, "take")
 
         # Whether the server was asked to sample a cycle: the take then comes
         # back closed, and the bake only straightens and repeats it. Loop is
@@ -2050,7 +2065,12 @@ class ANIMATICA_OT_generate_pose(Operator):
 
         # Send the user's own armature skeleton — the server retargets it to
         # the canonical on the way in and back again on the way out.
-        request_skeleton = request_builder.armature_to_skeleton(arm)
+        try:
+            request_skeleton = request_builder.armature_to_skeleton(arm)
+        except request_builder.BuildError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        _warn_left_behind(self, arm, "pose")
 
         if not model_caps.get("supports_retargeting", True):
             canonical_joints = {j["name"] for j in model_caps["canonical_skeleton"]["joints"]}
