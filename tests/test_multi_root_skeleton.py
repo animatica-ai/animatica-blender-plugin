@@ -317,6 +317,80 @@ def test_rigify_unchanged():
           request_builder.main_root(rig) == first, (request_builder.main_root(rig), first))
 
 
+def rigify_with_extra_pieces():
+    """A generated Rigify rig with two deform chains Rigify did not make, both
+    under ``root``: a prop bone off to the side that moves no skin, and a
+    weighted cape strand. The parent walk leaves each a piece of its own; the
+    metarig is gone, so the bake takes its fallback, a copy of the rig."""
+    clear()
+    if not addon_utils.enable("rigify", default_set=True):
+        return None, None
+    bpy.ops.object.armature_human_metarig_add()
+    meta = bpy.context.active_object
+    bpy.ops.pose.rigify_generate()
+    rig = next(o for o in bpy.data.objects if o.type == 'ARMATURE' and o is not meta)
+    bpy.data.objects.remove(meta, do_unlink=True)
+    bpy.context.view_layer.objects.active = rig
+    bpy.ops.object.mode_set(mode='EDIT')
+    eb = rig.data.edit_bones
+    for name, parent, head, tail in (
+            ("DEF-prop", "root", (1.5, 0.0, 1.0), (1.5, 0.0, 1.3)),
+            ("DEF-cape.001", "root", (0.0, 0.25, 1.4), (0.0, 0.3, 1.0)),
+            ("DEF-cape.002", "DEF-cape.001", (0.0, 0.3, 1.0), (0.0, 0.32, 0.6))):
+        b = eb.new(name)
+        b.head, b.tail, b.parent, b.use_deform = head, tail, eb[parent], True
+    bpy.ops.object.mode_set(mode='OBJECT')
+    mesh = skin(rig, sorted(request_builder.emitted_deform_bones(rig) - {"DEF-prop"}))
+    return rig, mesh
+
+
+def test_rigify_bake_follows_the_request():
+    """The server turns the body against the tree the request sent, so the copy
+    the Rigify bake drives must hang every one of those joints the same way --
+    though it deforms no mesh to weigh, and carries the face and tweak bones
+    the request leaves out."""
+    rig, mesh = rigify_with_extra_pieces()
+    if rig is None:
+        check("(Rigify not available: skipped)", True)
+        return
+    from animatica_blender import gltf_to_blender, rigify_bake
+
+    tree = request_builder.request_tree(rig)
+    check("(custom Rigify: the body is the request's root)",
+          next(iter(tree)) == "DEF-spine", next(iter(tree)))
+    check("(...the prop stays out, the cape goes)",
+          "DEF-prop" not in tree and {"DEF-cape.001", "DEF-cape.002"} <= set(tree))
+    mesh.modifiers[0].object = None
+    blind = request_builder._build_deform_parent_map(rig, request_builder.emitted_deform_bones(rig))
+    mesh.modifiers[0].object = rig
+    check("(blind to the skin, the tree would be rooted elsewhere)",
+          [n for n, p in blind.items() if p is None] != ["DEF-spine"],
+          [n for n, p in blind.items() if p is None])
+
+    seen: dict[str, str | None] = {}
+    heads: dict[str, object] = {}
+    real = rigify_bake.apply_anim_to_rigify
+
+    def capture(src, target, **_kw):
+        seen.update({b.name: (b.parent.name if b.parent else None) for b in src.data.bones})
+        heads.update({b.name: b.head_local.copy() for b in src.data.bones})
+        return 0
+
+    rigify_bake.apply_anim_to_rigify = capture
+    try:
+        gltf_to_blender._bake_to_control_rig(
+            rig, source_action=bpy.data.actions.new("Take"), frame_start=1, frame_end=2)
+    finally:
+        rigify_bake.apply_anim_to_rigify = real
+    check("the bake drove a copy of the rig", bool(seen), len(seen))
+    wrong = {n: (p, seen.get(n, "missing")) for n, p in tree.items() if seen.get(n, "missing") != p}
+    check("...hanging every joint the server saw from the request's parent", not wrong,
+          dict(list(wrong.items())[:4]))
+    moved = sorted(n for n, h in heads.items() if (h - rig.data.bones[n].head_local).length > 1e-5)
+    check("...and keeping the rig's rest pose: no re-parented bone snaps to its new parent",
+          not moved, moved[:4])
+
+
 def test_one_root_unchanged():
     clear()
     body = [b for b in GAME_RIP if b[0] in BODY]
@@ -349,6 +423,7 @@ def main():
     test_root_motion_not_deforming()
     test_flat_control_rig_unchanged()
     test_rigify_unchanged()
+    test_rigify_bake_follows_the_request()
     test_one_root_unchanged()
     test_helpers_still_filtered()
 

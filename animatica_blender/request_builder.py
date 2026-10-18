@@ -895,6 +895,8 @@ def _closest_deform_ancestor(pb: bpy.types.PoseBone, deform: set[str]):
 def _build_deform_parent_map(
     armature_obj: bpy.types.Object,
     deform: set[str],
+    *,
+    skin_from: bpy.types.Object | None = None,
 ) -> dict[str, str | None]:
     """Build a parent map for the deform-only skeleton tree.
 
@@ -914,9 +916,10 @@ def _build_deform_parent_map(
          moves none of the character's mesh is a helper (a game rip's
          attachment bones, still deforming under a ``root_motion`` bone that
          is not) and stays out; a tree that moves most of it is the body, and
-         its top is the root. Rigify comes out of the walk as one tree, so
-         this never touches it, nor the bake, which rebuilds this map on a
-         copy of the rig that deforms no mesh.
+         its top is the root. A stock Rigify rig comes out of the walk as one
+         tree, so this never touches it. The skin is ``skin_from``'s, when
+         given: the bake builds this map on a copy of the rig, which deforms
+         no mesh of its own.
       2. **Spatial fallback** — when the walk yields no DEF ancestor (which
          happens on Rigify because DEFs parent through ``ORG-*``/``MCH-*``
          intermediaries), use rest-pose tail-to-head proximity: each
@@ -965,7 +968,7 @@ def _build_deform_parent_map(
     body_root = None
     orphans = [n for n in deform if n not in parent_map]
     if len(orphans) > 1:
-        skin = _skin_weights(armature_obj)
+        skin = _skin_weights(skin_from or armature_obj)
         top = {n: _walk_to_top(n, parent_map) for n in deform}
         weight: dict[str, float] = {}
         for n, t in top.items():
