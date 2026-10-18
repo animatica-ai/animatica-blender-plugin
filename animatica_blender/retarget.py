@@ -19,6 +19,7 @@ target stands facing its own way, and answers with the mapping it used.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from typing import Any
@@ -118,14 +119,49 @@ def sample_motion(armature_obj, action, frames) -> dict[str, Any]:
             "root_translations": root_translations, "joint_positions": joint_positions}
 
 
-def build_retarget_request(clip: dict[str, Any], target_obj) -> dict[str, Any]:
-    """The ``POST /retarget`` body moving ``clip`` onto ``target_obj``."""
+def build_retarget_request(clip: dict[str, Any], target_obj, body: bool = True) -> dict[str, Any]:
+    """The ``POST /retarget`` body moving ``clip`` onto ``target_obj``: with ``body``, the target's
+    body shape too (spheres inside its skin, ``body_shape``), so the server keeps its limbs out of
+    its body. A character without a skinned mesh goes without one."""
+    skeleton = request_builder.armature_to_skeleton(target_obj)
+    target: dict[str, Any] = {"skeleton": skeleton}
+    if body:
+        from . import body_shape
+        try:
+            spheres = body_shape.body_spheres(target_obj, skeleton)
+        except Exception as exc:                                     # noqa: BLE001
+            print(f"[animatica] body shape for {target_obj.name} skipped: {exc}")
+            spheres = []
+        if spheres:
+            target["body"] = {"spheres": spheres}
     return {
         "protocol_version": PROTOCOL_VERSION,
         "source": clip,
-        "target": {"skeleton": request_builder.armature_to_skeleton(target_obj)},
+        "target": target,
         "options": {"secondary_motion": False},
     }
+
+
+def _rejects_body(exc: Exception) -> bool:
+    """A server from before body shapes refuses the field outright (a schema error naming it)."""
+    status = getattr(exc, "status", None)
+    if status not in (400, 422):
+        return False
+    return "body" in (str(exc) + json.dumps(getattr(exc, "details", None) or {}, default=str))
+
+
+def send_retarget(server_url: str | None, body: dict[str, Any]) -> dict[str, Any]:
+    """POST ``body``; a server that refuses its ``target.body`` gets it again without one, so
+    Paste Motion keeps working against a server that doesn't know body shapes yet."""
+    client = mmcp_client.MmcpClient(server_url or mmcp_client.get_mmcp_url())
+    try:
+        return client.retarget(body)
+    except Exception as exc:                                         # noqa: BLE001
+        if "body" not in body.get("target", {}) or not _rejects_body(exc):
+            raise
+        plain = dict(body)
+        plain["target"] = {k: v for k, v in body["target"].items() if k != "body"}
+        return client.retarget(plain)
 
 
 def retarget_report(gltf: dict[str, Any]) -> dict[str, Any]:
@@ -379,8 +415,7 @@ def paste(target, server_url: str | None = None, at_frame: int | None = None) ->
     if _CLIPBOARD is None:
         raise ValueError("nothing copied")
     at = bpy.context.scene.frame_current if at_frame is None else at_frame
-    gltf = mmcp_client.MmcpClient(server_url or mmcp_client.get_mmcp_url()).retarget(
-        build_retarget_request(_CLIPBOARD["clip"], target))
+    gltf = send_retarget(server_url, build_retarget_request(_CLIPBOARD["clip"], target))
     return bake_result(_CLIPBOARD, gltf, target, at)
 
 
@@ -553,7 +588,7 @@ class ANIMATICA_OT_paste_motion(Operator):
 
     def _worker(self, server_url: str, body: dict) -> None:
         try:
-            self._result = mmcp_client.MmcpClient(server_url).retarget(body)
+            self._result = send_retarget(server_url, body)
         except Exception as exc:                                     # noqa: BLE001
             self._error = exc
 
