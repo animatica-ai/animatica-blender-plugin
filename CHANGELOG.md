@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [1.0.6] — 2026-10-18
+
+### Fixed
+
+- **Rigs with several root bones generate.** A game rip, such as a Source2Viewer export of a
+  Deadlock character, often has the body under `pelvis` and other bones beside it at the top:
+  `root_motion` with its attachments and IK targets, a weapon, cloth. On such a rig every take,
+  pose and example failed with "Malformed MMCP generate request". The add-on now sends the body
+  alone: the bone tree that moves the character's mesh (without a mesh, the deepest tree). The
+  bones beside it are left as they are, so the motion lands on the pelvis. Where the body itself
+  is split over several root bones, Generate names the ones to join (Edit Mode, Ctrl+P → Keep
+  Offset) instead of failing, and bones beside the body that still move part of the mesh are
+  named in a warning: the take will not move them.
+- **Rigify rigs with extra deform chains bake as the server made the take, without their
+  metarig.** The copy of the rig the bake drives now hangs every joint from the parent the
+  request gave it, so a prop or cape chain no longer becomes the root of the body.
+
 ## [1.0.5] — 2026-10-18
 
 ### Fixed

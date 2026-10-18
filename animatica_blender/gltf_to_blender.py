@@ -1320,7 +1320,12 @@ def _bake_to_control_rig(
         # become orphans, and their keyframed rotations end up interpreted
         # relative to the wrong parent (or the world). The server computed
         # those rotations against the parent-walked / spatial-fallback
-        # deform tree, so we make the source duplicate match that exact tree.
+        # deform tree, so we make the source duplicate match that exact tree:
+        # every joint the request sent hangs from the parent the request gave
+        # it. This map alone cannot promise that -- it is built from more
+        # bones than the request sends (the face, the tweak halves), so a
+        # loose piece can find another neighbour -- and the copy deforms no
+        # mesh, so it weighs the skin on the rig it was copied from.
         bpy.ops.object.mode_set(mode='EDIT')
         try:
             ebones = src_arm.data.edit_bones
@@ -1331,16 +1336,20 @@ def _bake_to_control_rig(
                     if src_arm.data.bones[eb.name].use_deform
                 }
                 parent_map = request_builder._build_deform_parent_map(
-                    src_arm, deform_names
+                    src_arm, deform_names, skin_from=armature_obj,
                 )
+                parent_map.update(request_builder.request_tree(armature_obj))
                 # Re-parent first (still need parents alive), then delete non-DEFs.
                 for eb in ebones:
                     if eb.name not in deform_names:
                         continue
                     new_parent_name = parent_map.get(eb.name)
                     new_parent = ebones.get(new_parent_name) if new_parent_name else None
+                    # Unconnect first: a connected bone given a new parent
+                    # snaps its head to that parent's tail, and the rest
+                    # positions are already correct.
+                    eb.use_connect = False
                     eb.parent = new_parent
-                    eb.use_connect = False  # avoid auto-snap; rest positions are already correct
 
             to_delete = [eb for eb in ebones if not src_arm.data.bones[eb.name].use_deform]
             for eb in to_delete:
