@@ -1029,15 +1029,50 @@ def request_joint_set(armature_obj: bpy.types.Object) -> set[str]:
     pose directly — satisfied neither, and its handles went out as joints.
 
     A bone outside the deform set is a helper whatever moves it. Where every
-    bone deforms, this is every bone.
+    bone deforms, this is every bone under the rig's root (see `_main_tree`).
     """
     if armature_obj is None or armature_obj.type != 'ARMATURE':
         return set()
-    pose_bones = {pb.name for pb in armature_obj.pose.bones}
     deform = emitted_deform_bones(armature_obj)
-    if deform and (is_control_rig(armature_obj) or len(deform) < len(pose_bones)):
+    if _filters_to_deform(armature_obj, deform):
         return deform
-    return pose_bones
+    return _main_tree(armature_obj)
+
+
+def _filters_to_deform(armature_obj: bpy.types.Object, deform: set[str]) -> bool:
+    """Whether the request carries the deform bones only: on a control rig, or
+    where some bones do not deform (helpers, or a face we leave out)."""
+    return bool(deform) and (
+        is_control_rig(armature_obj) or len(deform) < len(armature_obj.pose.bones))
+
+
+def _main_tree(armature_obj: bpy.types.Object) -> set[str]:
+    """The rig's biggest bone tree: every bone, unless it has several roots.
+
+    The schema takes one ``parent: null`` joint. A game rip has the body under
+    one bone and loose ones beside it (a weapon, an attachment, cloth), all at
+    the top; sent as they are, they are several roots, and the server refuses
+    the whole request as "Malformed MMCP generate request: 1 problem(s)". The
+    body is the biggest tree, so it goes out alone and the bones beside it stay
+    as they are, like a control rig's helpers. Hung under the body instead,
+    they would be read and written against a parent they do not have in
+    Blender.
+    """
+    root = main_root(armature_obj)
+    if root is None:
+        return set()
+    return {root.name} | {b.name for b in root.bone.children_recursive}
+
+
+def main_root(armature_obj: bpy.types.Object) -> bpy.types.PoseBone | None:
+    """The root of the rig's biggest bone tree (see `_main_tree`): its only
+    root bone, or of several the one with most bones under it, then the one
+    nearer the rig's origin. Where a request says where the root is, it is
+    this bone."""
+    roots = [pb for pb in armature_obj.pose.bones if pb.parent is None]
+    if len(roots) <= 1:
+        return roots[0] if roots else None
+    return max(roots, key=lambda pb: (len(pb.bone.children_recursive), -pb.bone.head_local.length))
 
 
 def armature_to_skeleton(armature_obj: bpy.types.Object) -> dict[str, Any]:
@@ -1055,7 +1090,8 @@ def armature_to_skeleton(armature_obj: bpy.types.Object) -> dict[str, Any]:
     classifier would otherwise see Ctrl_*/IK helpers/pole vectors and pick
     wrong slots. Parent links of deform bones get rewritten via
     :func:`_build_deform_parent_map` so the result is a single tree (the
-    server's schema requires exactly one ``parent: null`` joint).
+    server's schema requires exactly one ``parent: null`` joint). A plain rig
+    with several root bones sends its biggest tree (see :func:`_main_tree`).
     """
     mw = armature_obj.matrix_world
     pose_bones = list(armature_obj.pose.bones)
@@ -1072,7 +1108,8 @@ def armature_to_skeleton(armature_obj: bpy.types.Object) -> dict[str, Any]:
 
     # What goes out, decided in one place (see `request_joint_set`) so the
     # skeleton and the constraints cannot disagree about what a joint is.
-    use_deform_filter = request_joint_set(armature_obj) != {pb.name for pb in pose_bones}
+    emitted = request_joint_set(armature_obj)
+    use_deform_filter = _filters_to_deform(armature_obj, deform)
     parent_map = _build_deform_parent_map(armature_obj, deform) if use_deform_filter else None
 
     # The server requires parents to appear before their children in joints[].
@@ -1089,7 +1126,7 @@ def armature_to_skeleton(armature_obj: bpy.types.Object) -> dict[str, Any]:
 
     joints: list[dict[str, Any]] = []
     for pb in ordered_bones:
-        if use_deform_filter and pb.name not in deform:
+        if pb.name not in emitted:
             continue
         if use_deform_filter:
             parent_name = parent_map[pb.name]  # may be None for the root
@@ -1493,10 +1530,7 @@ def _start_anchor(
 ) -> dict[str, Any] | None:
     if any(_pins_frame_zero(c) for c in existing):
         return None
-    root_pb = next(
-        (pb for pb in armature_obj.pose.bones if pb.parent is None),
-        None,
-    )
+    root_pb = main_root(armature_obj)
     if root_pb is None:
         return None
     root_world = (armature_obj.matrix_world @ root_pb.matrix).translation

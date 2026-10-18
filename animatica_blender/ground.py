@@ -227,7 +227,8 @@ def ground_constraint(scene, arm, constraints: list[dict], reference_z: float | 
     when there is no route, no ground found, or the ground is the flat Y=0 the
     model assumes anyway."""
     if reference_z is None:
-        root = next((pb for pb in arm.pose.bones if pb.parent is None), None) if arm else None
+        from .request_builder import main_root
+        root = main_root(arm) if arm else None
         reference_z = float((arm.matrix_world @ root.head).z) if root is not None else 1.0
     anchors = _anchors(constraints, reference_z)
     if not anchors:
