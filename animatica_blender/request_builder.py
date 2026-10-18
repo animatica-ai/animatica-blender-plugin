@@ -1047,16 +1047,16 @@ def _filters_to_deform(armature_obj: bpy.types.Object, deform: set[str]) -> bool
 
 
 def _main_tree(armature_obj: bpy.types.Object) -> set[str]:
-    """The rig's biggest bone tree: every bone, unless it has several roots.
+    """The rig's body: every bone, unless it has several root bones.
 
     The schema takes one ``parent: null`` joint. A game rip has the body under
-    one bone and loose ones beside it (a weapon, an attachment, cloth), all at
-    the top; sent as they are, they are several roots, and the server refuses
-    the whole request as "Malformed MMCP generate request: 1 problem(s)". The
-    body is the biggest tree, so it goes out alone and the bones beside it stay
-    as they are, like a control rig's helpers. Hung under the body instead,
-    they would be read and written against a parent they do not have in
-    Blender.
+    one bone and others beside it at the top -- a ``root_motion`` bone with the
+    attachments and IK targets under it, a weapon, cloth; sent as they are,
+    they are several roots, and the server refuses the whole request as
+    "Malformed MMCP generate request: 1 problem(s)". The body goes out alone
+    and the bones beside it stay as they are, like a control rig's helpers.
+    Hung under the body instead, they would be read and written against a
+    parent they do not have in Blender.
     """
     root = main_root(armature_obj)
     if root is None:
@@ -1065,14 +1065,47 @@ def _main_tree(armature_obj: bpy.types.Object) -> set[str]:
 
 
 def main_root(armature_obj: bpy.types.Object) -> bpy.types.PoseBone | None:
-    """The root of the rig's biggest bone tree (see `_main_tree`): its only
-    root bone, or of several the one with most bones under it, then the one
-    nearer the rig's origin. Where a request says where the root is, it is
-    this bone."""
+    """The root of the rig's body (see `_main_tree`), and where a request says
+    the root is.
+
+    The rig's only root bone; of several, the one whose tree moves the most of
+    the character's mesh. Not the one with the most bones: a ``root_motion``
+    tree of attachments and IK targets can outnumber the body, and moves no
+    skin. Without a skinned mesh, the most bones, then the root nearer the
+    rig's origin.
+    """
     roots = [pb for pb in armature_obj.pose.bones if pb.parent is None]
     if len(roots) <= 1:
         return roots[0] if roots else None
-    return max(roots, key=lambda pb: (len(pb.bone.children_recursive), -pb.bone.head_local.length))
+    skin = _skin_weights(armature_obj)
+
+    def body_like(pb):
+        tree = [pb.bone, *pb.bone.children_recursive]
+        return (sum(skin.get(b.name, 0.0) for b in tree), len(tree), -pb.bone.head_local.length)
+
+    return max(roots, key=body_like)
+
+
+#: Vertices read per mesh when weighing which bones move the skin: plenty to
+#: tell a body from attachment bones, and a dense mesh stays quick.
+_SKIN_SAMPLE = 20000
+
+
+def _skin_weights(armature_obj: bpy.types.Object) -> dict[str, float]:
+    """Each bone's vertex weights, summed over the meshes this armature deforms."""
+    totals: dict[str, float] = {}
+    for ob in bpy.data.objects:
+        if ob.type != 'MESH' or not any(
+                m.type == 'ARMATURE' and m.object == armature_obj for m in ob.modifiers):
+            continue
+        names = {g.index: g.name for g in ob.vertex_groups}
+        verts = ob.data.vertices
+        for i in range(0, len(verts), max(1, len(verts) // _SKIN_SAMPLE)):
+            for g in verts[i].groups:
+                name = names.get(g.group)
+                if name is not None:
+                    totals[name] = totals.get(name, 0.0) + g.weight
+    return totals
 
 
 def armature_to_skeleton(armature_obj: bpy.types.Object) -> dict[str, Any]:

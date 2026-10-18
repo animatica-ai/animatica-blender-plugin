@@ -157,6 +157,39 @@ def test_game_rip():
               abs(x - want_x) < 1e-4 and abs(z - want_z) < 1e-4, (x, z, want_x, want_z))
 
 
+def skin(rig, bones):
+    """A mesh the rig deforms, one vertex weighted fully to each of ``bones``."""
+    pts = [rig.data.bones[b].head_local.copy() for b in bones]
+    me = bpy.data.meshes.new("Body")
+    me.from_pydata([tuple(p) for p in pts], [], [])
+    ob = bpy.data.objects.new("Body", me)
+    bpy.context.scene.collection.objects.link(ob)
+    for i, b in enumerate(bones):
+        ob.vertex_groups.new(name=b).add([i], 1.0, 'REPLACE')
+    ob.modifiers.new("Armature", 'ARMATURE').object = rig
+    return ob
+
+
+def test_root_motion_beside_the_body():
+    """``pelvis`` and ``root_motion`` both at the top, both with bones under
+    them -- and more under ``root_motion`` (attachments, IK targets) than in
+    the body. The body is the tree that moves the skin."""
+    clear()
+    helpers = [("root_motion", None, (0.0, 0.0, 0.0), (0.0, 0.2, 0.0))] + [
+        (f"attach_{i}", "root_motion", (0.05 * i, 0.0, 0.1), (0.05 * i, 0.0, 0.2)) for i in range(12)]
+    body = [b for b in GAME_RIP if b[0] in BODY]
+    rig = make_rig("RootMotion", helpers + body)
+    skin(rig, BODY)
+    skel = request_builder.armature_to_skeleton(rig)
+    names = [j["name"] for j in skel["joints"]]
+    problem = one_tree(skel["joints"])
+    check("root_motion beside the body: one tree", not problem, problem)
+    check("...the body's, though root_motion has more bones",
+          names[:1] == ["pelvis"] and sorted(names) == sorted(BODY), names)
+    check("...and it is the request's root",
+          getattr(request_builder.main_root(rig), "name", None) == "pelvis")
+
+
 def test_one_root_unchanged():
     clear()
     body = [b for b in GAME_RIP if b[0] in BODY]
@@ -182,6 +215,7 @@ def test_helpers_still_filtered():
 
 def main():
     test_game_rip()
+    test_root_motion_beside_the_body()
     test_one_root_unchanged()
     test_helpers_still_filtered()
 
