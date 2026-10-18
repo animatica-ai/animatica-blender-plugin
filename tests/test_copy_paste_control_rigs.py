@@ -46,7 +46,7 @@ import bpy  # noqa: E402
 from mathutils import Euler, Quaternion, Vector  # noqa: E402
 
 addon_utils.enable("animatica_blender", default_set=False)
-from animatica_blender import gltf_to_blender, mmcp_client, request_builder, retarget  # noqa: E402
+from animatica_blender import gltf_to_blender, request_builder, retarget  # noqa: E402
 
 SERVER = os.environ.get("RETARGET_SERVER", "http://127.0.0.1:8766")
 SOURCE_FBX = os.environ.get("SOURCE_FBX", os.path.expanduser("~/proscenium/rigs/Scissor Kick.fbx"))
@@ -260,7 +260,7 @@ def main():
             src.location.x = -2.0
             bpy.context.view_layer.objects.active = src
             copied = retarget.copy(src)
-            gltf = mmcp_client.MmcpClient(SERVER).retarget(retarget.build_retarget_request(copied["clip"], arp))
+            gltf = retarget.send_retarget(SERVER, retarget.build_retarget_request(copied["clip"], arp))
             report = retarget.retarget_report(gltf)
             check("pasted onto ARP: HumanIK reads it", report.get("method") == "hik", f"method {report.get('method')}")
             mapping = {s.split(":")[-1]: t for s, t in (report.get("mapping") or {}).items()}
