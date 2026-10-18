@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [1.0.7] — 2026-10-18
+
+### Fixed
+
+- **Paste Motion onto an Auto-Rig Pro rig reads it as a body.** Its skeleton went out with the
+  hands hanging off the chest and the feet off the hips, so the motion came out with hands and
+  feet glued to the torso. Arms and legs now arrive whole, shoulder to hand and hip to toes, and
+  the server retargets them as it does Mixamo and Rigify rigs. Keying the result onto Auto-Rig
+  Pro's controls is not in yet.
+- **Copy Motion off a control rig copies the pose you see.** On Rigify and Auto-Rig Pro some
+  joints were read against the wrong bone, so a pasted forearm or shin could come out turned by
+  tens of degrees.
+
 ## [1.0.6] — 2026-10-18
 
 ### Fixed
