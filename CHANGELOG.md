@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [1.0.8] — 2026-10-19
+
+### Fixed
+
+- **Paste Motion keeps the limbs out of the body.** On a character built differently from the one
+  the motion came from (a belly, a cartoon's round torso, a bulky rig), pasted hands and forearms
+  went into the body. Paste Motion now sends the character's body shape with the request (spheres
+  fitted inside its mesh), and the motion server pushes the arms out of the torso, head, legs and
+  each other, and swings knees apart without moving the feet, easing in and out so nothing jumps.
+  A server that doesn't know body shapes yet gets the request without one.
+
 ## [1.0.7] — 2026-10-18
 
 ### Fixed
