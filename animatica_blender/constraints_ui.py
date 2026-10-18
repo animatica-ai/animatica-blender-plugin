@@ -1146,16 +1146,30 @@ def authored_pose_frames(
     return sorted(frames), keyed_bones
 
 
-def mmcp_joint_rotation(pb: bpy.types.PoseBone, mw_rot: 'Matrix', mw_rot_t: 'Matrix') -> list[float]:
-    """``pb``'s evaluated pose as an MMCP local rotation, ``[x, y, z, w]``.
+def _evaluated_turn(pb: bpy.types.PoseBone) -> 'Matrix':
+    """How far ``pb`` has turned from its rest, armature space: its evaluated rotation (any
+    stretch scaled out) against its rest one, whatever bone Blender hangs it from."""
+    return pb.matrix.to_3x3().normalized() @ pb.bone.matrix_local.to_3x3().transposed()
 
-    The per-bone rotation delta, converted to the MMCP world frame in three steps:
 
-      1. ``ML @ R_basis @ ML.T``   — bone-local-rest → armature-local
-      2. ``mw_rot @ _ @ mw_rot.T`` — armature-local → Blender world (no-op when the
-                                     armature is at identity; required for rigs like
-                                     Mixamo that carry a 90° + 0.01 ``matrix_world``)
-      3. ``S_inv @ _ @ S``         — Blender Z-up → MMCP Y-up
+def mmcp_joint_rotation(pb: bpy.types.PoseBone, mw_rot: 'Matrix', mw_rot_t: 'Matrix',
+                        parent: bpy.types.PoseBone | None = None) -> list[float]:
+    """``pb``'s evaluated pose as an MMCP local rotation, ``[x, y, z, w]``, relative to
+    ``parent``: the joint above it in the tree the request sends (``None`` at its root).
+
+    That is the bone Blender hangs it from on a plain rig, and often not on a control rig: Auto-Rig
+    Pro hangs a forearm off ``c_traj`` and its root off a control, Rigify hangs a forearm off the
+    upper arm's tweak half. The server chains the rotations down the tree it was sent, so a
+    rotation measured against Blender's parent there put the forearm wherever that bone had turned
+    (Auto-Rig Pro's forearms 80 degrees off, Rigify's 30, on a posed rig).
+
+    The turn relative to the parent, converted to the MMCP world frame in three steps:
+
+      1. ``turn(parent).T @ turn(pb)`` — each bone's turn from its rest, armature-local
+      2. ``mw_rot @ _ @ mw_rot.T``     — armature-local → Blender world (no-op when the
+                                         armature is at identity; required for rigs like
+                                         Mixamo that carry a 90° + 0.01 ``matrix_world``)
+      3. ``S_inv @ _ @ S``             — Blender Z-up → MMCP Y-up
 
     For a whole clip (retarget.py): every joint carries the object's full world turn,
     which is what ``POST /retarget`` reads (the pose-keyframe samplers, through
@@ -1166,9 +1180,9 @@ def mmcp_joint_rotation(pb: bpy.types.PoseBone, mw_rot: 'Matrix', mw_rot_t: 'Mat
     stay in sync.
     """
     S = _MMCP_TO_BLENDER
-    R_basis = _evaluated_local_basis(pb).to_3x3()
-    ML = pb.bone.matrix_local.to_3x3()
-    R_blender_arm = ML @ R_basis @ ML.transposed()
+    R_blender_arm = _evaluated_turn(pb)
+    if parent is not None:
+        R_blender_arm = _evaluated_turn(parent).transposed() @ R_blender_arm
     R_blender_world = mw_rot @ R_blender_arm @ mw_rot_t
     R_mmcp = S.transposed() @ R_blender_world @ S
     w, x, y, z = R_mmcp.to_quaternion()

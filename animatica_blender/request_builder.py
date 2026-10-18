@@ -809,6 +809,33 @@ def _is_tweak_half(name: str) -> bool:
     return parts[0].lower() in _TWEAK_HALF_SEGMENTS
 
 
+def is_auto_rig_pro(armature_obj: bpy.types.Object) -> bool:
+    """True for a rig Auto-Rig Pro generated. It marks the object (``arp_rig_type``) and the
+    armature (``arp_updated``); it also sets ``rig_id``, so that alone does not tell it from
+    Rigify."""
+    if armature_obj is None or armature_obj.type != 'ARMATURE':
+        return False
+    return "arp_rig_type" in armature_obj.keys() or "arp_updated" in armature_obj.data.keys()
+
+
+# Auto-Rig Pro splits each limb segment into two deform halves at its twist: the upper arm into
+# ``c_arm_twist_offset`` and ``arm_stretch``, the forearm into ``forearm_stretch`` and
+# ``forearm_twist``, the thigh into ``thigh_twist`` and ``thigh_stretch``, the shin into
+# ``leg_stretch`` and ``leg_twist``. The second half of each starts halfway down the segment, so
+# sent as joints they put an extra joint mid-limb, and the server's HumanIK read the arm a joint
+# down -- shoulder at the elbow, elbow mid-forearm -- as Rigify's ``.001`` halves would. They are
+# not sent. They still join the tree up (a hand starts where ``forearm_twist`` ends), so the tree
+# is built through them and they are then left out (`_arp_bridges`).
+_ARP_SECOND_HALVES: frozenset[str] = frozenset({"arm_stretch", "forearm_twist", "thigh_stretch", "leg_twist"})
+
+
+def _arp_bridges(armature_obj: bpy.types.Object, deform: set[str]) -> set[str]:
+    """An Auto-Rig Pro rig's second limb halves among ``deform`` (``arm_stretch.l``...)."""
+    if not is_auto_rig_pro(armature_obj):
+        return set()
+    return {n for n in deform if n.rsplit(".", 1)[0] in _ARP_SECOND_HALVES}
+
+
 def emitted_deform_bones(armature_obj: bpy.types.Object) -> set[str]:
     """Return the subset of deform bones that :func:`armature_to_skeleton`
     actually serializes — i.e. ``detect_deform_bones`` minus the face
@@ -835,6 +862,7 @@ def emitted_deform_bones(armature_obj: bpy.types.Object) -> set[str]:
                     stack.append(child)
     deform = deform - face_drop
     deform = deform - {n for n in deform if _is_tweak_half(n)}
+    deform = deform - _arp_bridges(armature_obj, deform)
     return deform
 
 
@@ -912,7 +940,14 @@ def _build_deform_parent_map(
          the ``ORG-`` twin and take the first ancestor whose ``DEF-`` twin goes
          out. Guessed spatially instead, a Rigify rig came out rooted at a thigh
          with the spine under it, and the server took it for no biped at all.
-      1c. **The skin** — where the walk leaves several trees, a tree that
+      1c. **The joints** — a bone that starts exactly where another deform bone
+         ends, and far from where its walk parent ends, hangs off that bone
+         (`_connect_joined_bones`): Auto-Rig Pro hangs its limbs off the rig's
+         root and the IK/FK mechanism, and the walk put its hands on the chest.
+      1d. **Shared starts** — trees whose tops start at one point join under
+         the one reaching lowest (`_join_shared_starts`): Auto-Rig Pro's pelvis
+         and spine both start at the base of the spine.
+      1e. **The skin** — where the walk leaves several trees, a tree that
          moves none of the character's mesh is a helper (a game rip's
          attachment bones, still deforming under a ``root_motion`` bone that
          is not) and stays out; a tree that moves most of it is the body, and
@@ -924,7 +959,7 @@ def _build_deform_parent_map(
          happens on Rigify because DEFs parent through ``ORG-*``/``MCH-*``
          intermediaries), use rest-pose tail-to-head proximity: each
          orphan's parent is the DEF whose tail is closest to its head.
-      3. **Single root** — the body's top from 1c; failing that, among bones
+      3. **Single root** — the body's top from 1e; failing that, among bones
          that still have no parent (orphans with no spatial match, or
          cycle-breakers), the one most apart from the others, then closest
          to the armature's origin. The rest attach under it.
@@ -964,7 +999,13 @@ def _build_deform_parent_map(
                 break
             a = a.parent
 
-    # Step 1c: what the skin says, where the walk left several trees.
+    # Step 1c: a bone that starts exactly where another ends hangs off that one.
+    _connect_joined_bones(deform, parent_map, head_w, tail_w)
+
+    # Step 1d: bones that start together, neither one hanging off a joint.
+    _join_shared_starts(deform, parent_map, head_w)
+
+    # Step 1e: what the skin says, where the walk left several trees.
     body_root = None
     orphans = [n for n in deform if n not in parent_map]
     if len(orphans) > 1:
@@ -1041,6 +1082,87 @@ def _build_deform_parent_map(
     return parent_map
 
 
+#: How close (a fraction of the bone's length) a bone's head must sit to another's tail to count
+#: as joined to it. Joined bones share the point exactly; 1% leaves room for float noise only.
+_JOINED = 0.01
+
+
+def _hangs_under(name: str, other: str, parent_map: dict[str, str | None]) -> bool:
+    """True when ``other`` already hangs (somewhere) under ``name``: parenting ``name`` to it
+    would close a loop."""
+    seen: set[str] = set()
+    cur = other
+    while cur is not None and cur not in seen:
+        if cur == name:
+            return True
+        seen.add(cur)
+        cur = parent_map.get(cur)
+    return False
+
+
+def _connect_joined_bones(deform: set[str], parent_map: dict[str, str | None],
+                          head_w: dict, tail_w: dict) -> None:
+    """Step 1c of :func:`_build_deform_parent_map`, in place: the joints win over the walk.
+
+    A control rig whose deform bones are driven by constraints keeps them out of a deform
+    hierarchy: Auto-Rig Pro parents its arm and leg ``_stretch`` bones to the rig's root and its
+    hand and foot to the IK/FK mechanism, so the walk up the hierarchy skipped whole limbs -- the
+    hand came out under the chest, the foot under the pelvis, the upper arm on its own -- and the
+    server could not read the rig as a body. The rest pose still says how the body goes together:
+    each of those bones starts exactly where the one before it ends. So where the walk's parent
+    ends far from where a bone starts -- further than either bone is long: the walk skipped
+    something -- and another deform bone ends exactly there, the bone hangs off that one. A walk
+    parent near the bone is kept (Rigify's fingers start a little past the hand, at the ends of
+    their palm bones, and stay on the hand), and a bone joined to nothing keeps whatever the walk
+    found (a shoulder starts beside the chest, not at its end)."""
+    for name in sorted(deform):
+        h = head_w[name]
+        length = max((tail_w[name] - h).length, 1e-6)
+        tol = _JOINED * length
+        cur = parent_map.get(name)
+        if cur is not None and (tail_w[cur] - h).length <= max(length, (tail_w[cur] - head_w[cur]).length):
+            continue
+        best, best_d = None, tol
+        for other in deform:
+            if other == name:
+                continue
+            d = (tail_w[other] - h).length
+            if d <= best_d and not _hangs_under(name, other, parent_map):
+                best, best_d = other, d
+        if best is not None:
+            parent_map[name] = best
+
+
+def _join_shared_starts(deform: set[str], parent_map: dict[str, str | None], head_w: dict) -> None:
+    """Step 1d of :func:`_build_deform_parent_map`, in place: tops of trees that start at one point.
+
+    Auto-Rig Pro's pelvis (``root.x``) points down from the base of the spine, and its first
+    spine bone starts at the same point, both under controls only: two trees, neither joined to
+    the other, and the spatial fallback hung the pelvis off the spine's END, rooting the body at
+    the spine. Where trees' tops start together, the one the legs hang from -- the one reaching
+    lowest -- is the hips, and the others hang off it."""
+    tops = [n for n in sorted(deform) if parent_map.get(n) is None]
+    if len(tops) < 2:
+        return
+    lowest: dict[str, float] = {}
+    for n in deform:
+        t = _walk_to_top(n, parent_map)
+        lowest[t] = min(lowest.get(t, float("inf")), head_w[n].z)
+    placed: set[str] = set()
+    for a in tops:
+        if a in placed:
+            continue
+        group = [b for b in tops if b not in placed
+                 and (head_w[b] - head_w[a]).length <= 1e-4 + 1e-3 * max(head_w[a].length, 1.0)]
+        if len(group) < 2:
+            continue
+        hips = min(group, key=lambda n: (lowest.get(n, head_w[n].z), n))
+        for b in group:
+            if b != hips:
+                parent_map[b] = hips
+            placed.add(b)
+
+
 def _walk_to_top(name: str, parent_map: dict[str, str | None]) -> str:
     """The top of ``name``'s tree in a partial ``parent_map``."""
     seen: set[str] = set()
@@ -1072,7 +1194,17 @@ def request_tree(armature_obj: bpy.types.Object) -> dict[str, str | None]:
         return {}
     deform = emitted_deform_bones(armature_obj)
     if _filters_to_deform(armature_obj, deform):
-        parents = _build_deform_parent_map(armature_obj, deform)
+        # Auto-Rig Pro's second limb halves join the tree up but are not sent: whatever hangs
+        # off one hangs off its parent instead
+        bridges = _arp_bridges(armature_obj, detect_deform_bones(armature_obj)) - deform
+        full = _build_deform_parent_map(armature_obj, deform | bridges)
+        parents = {}
+        for n, p in full.items():                       # the body's tree: a loose piece is not in it
+            if n in bridges:
+                continue
+            while p in bridges:
+                p = full.get(p)
+            parents[n] = p
         return {n: parents[n] for n in _topological_order(parents)}
     body = _body_bones(armature_obj)
     return {pb.name: (pb.parent.name if pb.parent else None)

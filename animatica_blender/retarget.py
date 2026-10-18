@@ -81,6 +81,8 @@ def sample_motion(armature_obj, action, frames) -> dict[str, Any]:
     joint_names = [j["name"] for j in skeleton["joints"]]
     root_name = next(j["name"] for j in skeleton["joints"] if j["parent"] is None)
     pose_bones = [armature_obj.pose.bones[n] for n in joint_names]
+    # each rotation against the joint above it in the tree sent, not Blender's parent
+    parents = [armature_obj.pose.bones[j["parent"]] if j["parent"] else None for j in skeleton["joints"]]
     root_pb = armature_obj.pose.bones[root_name]
 
     if armature_obj.animation_data is None:
@@ -103,7 +105,8 @@ def sample_motion(armature_obj, action, frames) -> dict[str, Any]:
             scene.frame_set(f)
             # ``frame_set`` alone does not always carry through drivers and constraint stacks
             bpy.context.view_layer.update()
-            rotations.append([constraints_ui.mmcp_joint_rotation(pb, mw_rot, mw_rot_t) for pb in pose_bones])
+            rotations.append([constraints_ui.mmcp_joint_rotation(pb, mw_rot, mw_rot_t, parent)
+                              for pb, parent in zip(pose_bones, parents)])
             root_translations.append(list(coords.blender_pos_to_mmcp((mw @ root_pb.matrix).translation)))
             joint_positions.append([list(coords.blender_pos_to_mmcp(mw @ pb.head)) for pb in pose_bones])
     finally:
