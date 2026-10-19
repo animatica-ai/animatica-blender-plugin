@@ -4,7 +4,8 @@ under the waypoints and the Autoposer's floor.
 Two roofs like the rooftop chase they were written for: the upper one's top
 at z=0, a 2.5 m gap, the lower one's at z=-0.6, the street 6.6 m down. The
 character stands on the upper roof; its own body and control shapes must not
-count as ground.
+count as ground. And a seat on the upper roof, with a character sat on it who
+gets up: the seat is what they sit on, not the ground they stand on.
 
 Runs headless, without a server::
 
@@ -162,6 +163,50 @@ def test_waypoints(arm):
           abs(obj.location.z - (-0.6 + waypoints.MARKER_LIFT)) < 1e-3, obj.location.z)
 
 
+def test_seat():
+    """A character sat on a seat gets up and steps forward: the ground is under the feet. Read
+    from the hips, the seat was the ground at the start, the take was stood on it, and the
+    character got up onto the chair (2026-10-19)."""
+    from animatica_blender import gltf_to_blender
+
+    scene = bpy.context.scene
+    seat = box("Seat", -0.3, 0.3, 2.0, 2.5, 0.0, 0.45)
+    data = bpy.data.armatures.new("Sitter")
+    sitter = bpy.data.objects.new("Sitter", data)
+    scene.collection.objects.link(sitter)
+    bpy.context.view_layer.objects.active = sitter
+    bpy.ops.object.mode_set(mode='EDIT')
+    hips = data.edit_bones.new("Hips")
+    hips.head, hips.tail = (0, 2.25, 0.55), (0, 2.25, 0.75)       # on the seat
+    shin = data.edit_bones.new("Shin")
+    shin.head, shin.tail = (0, 1.9, 0.5), (0, 1.9, 0.02)          # the feet on the roof, in front
+    shin.parent = hips
+    bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.context.view_layer.update()
+    try:
+        cons = [
+            {"type": "pose_keyframe", "frame": 0, "joint_rotations": {"Hips": [0, 0, 0, 1]},
+             "root_position": mmcp_root(0.0, 2.25, 0.55)},
+            {"type": "pose_keyframe", "frame": 29, "joint_rotations": {"Hips": [0, 0, 0, 1]},
+             "root_position": mmcp_root(0.0, 1.0, 0.99)},
+        ]
+        old = ground.ground_constraint(scene, sitter, cons)
+        check("from the hips, the seat comes out as ground (the bug)",
+              old is not None and any(abs(p[2] - 0.45) < 1e-3 for p in old["points"]))
+        new = ground.ground_constraint(scene, sitter, cons, start_frame=1)
+        check("from the feet, it does not: the roof under them is the flat floor", new is None,
+              new and sorted({round(p[2], 2) for p in new["points"]}))
+        at = sitter.matrix_world @ sitter.pose.bones["Hips"].head
+        feet = gltf_to_blender._feet_on_frame(sitter, 1)
+        check("Generate Pose's ground on the seated frame: the roof, not the seat",
+              feet is not None and abs(gltf_to_blender._ground_under(sitter, at, feet)) < 1e-4,
+              (feet, gltf_to_blender._ground_under(sitter, at, feet)))
+    finally:
+        bpy.data.objects.remove(sitter, do_unlink=True)
+        bpy.data.objects.remove(seat, do_unlink=True)
+        bpy.context.view_layer.update()
+
+
 def test_autoposer_shift():
     """pose_on_ground: the targets go down by the floor, the solve comes back up. Animatica
     Marionette's, a separate add-on (its own repo): checked only when it is installed."""
@@ -205,6 +250,7 @@ def main():
         test_flat_and_raised(arm)
         test_request(arm)
         test_waypoints(arm)
+        test_seat()
         test_autoposer_shift()
     except Exception:
         traceback.print_exc()

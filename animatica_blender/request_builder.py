@@ -440,7 +440,8 @@ def build_request(
             "Add a prompt block on the timeline, draw a root path, or pin an effector"
         )
 
-    _add_ground(constraints, model_caps=model_caps, scene=scene, armature_obj=armature_obj)
+    _add_ground(constraints, model_caps=model_caps, scene=scene, armature_obj=armature_obj,
+                start_frame=frame_range[0])
 
     valid_joint_names = {j["name"] for j in request_skeleton.get("joints", [])}
     _validate_constraint_joints(constraints, valid_joint_names)
@@ -696,7 +697,8 @@ def build_request_for_block(
     # source keys outside the preview's frame range, which by definition
     # don't apply to a per-block regen anyway.
 
-    _add_ground(constraints, model_caps=model_caps, scene=scene, armature_obj=armature_obj)
+    _add_ground(constraints, model_caps=model_caps, scene=scene, armature_obj=armature_obj,
+                start_frame=block_start)
 
     valid_joint_names = {j["name"] for j in request_skeleton.get("joints", [])}
     _validate_constraint_joints(constraints, valid_joint_names)
@@ -1785,16 +1787,18 @@ def _pins_frame_zero(c: dict[str, Any]) -> bool:
 
 
 def _add_ground(constraints: list[dict[str, Any]], *, model_caps: dict[str, Any],
-                scene, armature_obj) -> None:
+                scene, armature_obj, start_frame: int | None = None) -> None:
     """The ground along the take's route (MMCP 1.3 ``ground_height``), where
     the server says it understands one. Without it the model walks a route
-    that drops off one roof onto a lower one at the old height, in the air."""
+    that drops off one roof onto a lower one at the old height, in the air.
+    ``start_frame`` is the scene frame of the request's frame 0: the key poses
+    are read there, so the ground is found under their feet."""
     if "ground_height" not in (model_caps.get("supported_constraints") or ()):
         return
     from . import ground
 
     try:
-        c = ground.ground_constraint(scene, armature_obj, constraints)
+        c = ground.ground_constraint(scene, armature_obj, constraints, start_frame=start_frame)
     except Exception as exc:                                  # noqa: BLE001
         # a scene the rays cannot read must not stop a generation
         print(f"[animatica] ground not sent: {exc}")

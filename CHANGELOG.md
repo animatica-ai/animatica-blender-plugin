@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [Unreleased]
+
+### Fixed
+
+- **Getting up from a chair stays on the floor.** The ground under a take was read straight down
+  from the hips, so a character sat on a chair found the seat: the take was stood on it, and the
+  character got up onto the chair before coming down. At a key pose the ground is now read from
+  just above its feet, so a seat, a bench or a sofa under the hips isn't taken for the floor; a
+  kerb or a stair still is. Generate Pose on a seated frame puts the pose on the floor under the
+  feet the same way.
+
 ## [1.0.8] — 2026-10-19
 
 ### Fixed

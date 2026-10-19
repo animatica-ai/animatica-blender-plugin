@@ -1906,6 +1906,12 @@ def bake_single_pose(
     pose = armature_obj.pose
     _ns = bone_namespace(pose)
 
+    # Where the feet are on that frame now, before anything is written (and
+    # before the rotation modes change, which can change how the keys read):
+    # the ground the pose goes on is the one under them, not under the hips.
+    feet = (_feet_on_frame(armature_obj, target_frame)
+            if root_translation in ("height_only", "on_ground") else None)
+
     for pb in pose.bones:
         pb.rotation_mode = 'QUATERNION'
 
@@ -1969,7 +1975,7 @@ def bake_single_pose(
                 # over world Z=0: on a roof below 0 the pose came out lifted
                 # to 0, standing on air (see _ground_under).
                 current_world = armature_obj.matrix_world @ bone.head
-                floor = _ground_under(armature_obj, current_world)
+                floor = _ground_under(armature_obj, current_world, feet)
                 target_world = Vector((current_world.x, current_world.y, floor + pose_world.z))
             else:  # "full"
                 target_world = pose_world
@@ -2031,16 +2037,37 @@ def _stand_on_ground(armature_obj, bone, ML, floor: float, frame: int) -> None:
         scene.frame_set(was)
 
 
-def _ground_under(armature_obj, at: Vector) -> float:
+def _feet_on_frame(armature_obj, frame: int) -> float | None:
+    """World height of the rig's lowest point on ``frame`` as it is keyed now."""
+    from . import ground
+
+    scene = bpy.context.scene
+    was = scene.frame_current
+    try:
+        if was != frame:
+            scene.frame_set(frame)
+        else:
+            bpy.context.view_layer.update()
+        return ground.lowest_point(armature_obj)
+    except Exception:                       # noqa: BLE001 -- the ray falls back to the hips
+        return None
+    finally:
+        if scene.frame_current != was:
+            scene.frame_set(was)
+
+
+def _ground_under(armature_obj, at: Vector, feet: float | None = None) -> float:
     """World height of the ground under ``at`` (the root, where it stands):
-    the scene's surfaces, as the Autoposer and the waypoints read them, from
-    just above it and past the character's own meshes. With nothing there,
+    the scene's surfaces, as the waypoints read them, past the character's own
+    meshes. The ray starts just above ``feet`` (the rig's lowest point) when
+    that is known, else just above the root: from the hips, a character sat on
+    a chair found the seat, and the pose was stood on it. With nothing there,
     the armature's base plane, which is where the model's floor sits."""
     from . import ground
 
+    z_from = feet + ground.STEP_UP if feet is not None else at.z + ground.RAY_HEADROOM
     try:
-        z = ground.surface_below(bpy.context.scene, at.x, at.y, at.z + ground.RAY_HEADROOM,
-                                 arm=armature_obj)
+        z = ground.surface_below(bpy.context.scene, at.x, at.y, z_from, arm=armature_obj)
     except Exception:                       # noqa: BLE001 -- a pose still lands
         z = None
     return float(z) if z is not None else float(armature_obj.matrix_world.translation.z)
