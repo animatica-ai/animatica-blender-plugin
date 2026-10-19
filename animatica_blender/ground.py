@@ -31,6 +31,12 @@ from mathutils import Vector
 #: How far above the hips the ray starts: a step up is found, a hat, a
 #: washing line or a ceiling overhead is not.
 RAY_HEADROOM = 0.3
+#: At a key pose the ray starts this far above the pose's lowest point -- its
+#: feet, a knee for a kneel -- not above the hips: the ground is what the feet
+#: are on. From the hips, a character sat on a chair found the seat, the take
+#: was stood on it, and it got up onto the chair. A kerb or a stair is found,
+#: a seat is not.
+STEP_UP = 0.3
 #: How far down it looks before deciding there is nothing there.
 RAY_DEPTH = 50.0
 #: Ground this much lower than the route's ground either side, for a short
@@ -130,44 +136,80 @@ def surface_below_cached(scene, x, y, z_from, *, arm=None):
 # Along the route, for the request
 # ---------------------------------------------------------------------------
 
-def _anchors(constraints: list[dict], reference_z: float) -> list[tuple[int, float, float, float]]:
-    """``(frame, x, y, z_ref)`` in Blender world space, one per frame the request
-    puts the root somewhere: key poses (with their height) and waypoints."""
+def lowest_point(arm) -> float | None:
+    """World height of the rig's lowest deforming joint, as it is evaluated now:
+    where its feet are (a knee for a kneel, the body lying down)."""
+    if arm is None or arm.type != 'ARMATURE':
+        return None
+    mw = arm.matrix_world
+    zs = [min((mw @ pb.head).z, (mw @ pb.tail).z) for pb in arm.pose.bones if pb.bone.use_deform]
+    return min(zs) if zs else None
+
+
+def key_pose_stances(scene, arm, constraints: list[dict], start_frame: int) -> dict[int, float]:
+    """Request frame -> the height of the lowest point of each key pose: the rig
+    evaluated on the scene frame the key pose was sampled from."""
+    frames = sorted({int(c["frame"]) for c in constraints
+                     if c.get("type") == "pose_keyframe" and c.get("root_position") is not None})
+    if not frames or arm is None or arm.type != 'ARMATURE':
+        return {}
+    was = scene.frame_current
+    out = {}
+    try:
+        for f in frames:
+            scene.frame_set(int(start_frame) + f)
+            low = lowest_point(arm)
+            if low is not None:
+                out[f] = low
+    finally:
+        scene.frame_set(was)
+    return out
+
+
+def _anchors(constraints: list[dict], reference_z: float,
+             stances: dict[int, float] | None = None) -> list[tuple[int, float, float, float, float]]:
+    """``(frame, x, y, z_ref, z_ray)`` in Blender world space, one per frame the
+    request puts the root somewhere: key poses (with their height) and
+    waypoints. ``z_ray`` is where the ray down from there starts: above the
+    feet at a key pose whose stance is known, above the hips otherwise."""
     from . import coords
 
-    pts: dict[int, tuple[float, float, float]] = {}
+    stances = stances or {}
+    pts: dict[int, tuple] = {}
     for c in constraints:
         kind = c.get("type")
         if kind == "pose_keyframe" and c.get("root_position") is not None:
             x, y, z = coords.mmcp_pos_to_blender(c["root_position"])
-            pts[int(c["frame"])] = (x, y, z)
+            f = int(c["frame"])
+            pts[f] = (x, y, z, stances.get(f))
         elif kind == "root_path":
             for f, (mx, mz) in zip(c["frames"], c["positions_xz"]):
                 x, y, _ = coords.mmcp_pos_to_blender((mx, 0.0, mz))
-                pts.setdefault(int(f), (x, y, None))
+                pts.setdefault(int(f), (x, y, None, None))
     out = []
     last_z = reference_z
     for f in sorted(pts):
-        x, y, z = pts[f]
+        x, y, z, low = pts[f]
         if z is None:
             z = last_z
         last_z = z
-        out.append((f, x, y, z))
+        out.append((f, x, y, z, z + RAY_HEADROOM if low is None else low + STEP_UP))
     return out
 
 
-def _polyline(anchors) -> list[tuple[float, float, float]]:
+def _polyline(anchors) -> list[tuple[float, float, float, float]]:
     """Points every ``SPACING`` m along straight lines between the anchors (in
-    frame order), each ``(x, y, z_ref)``."""
+    frame order), each ``(x, y, z_ref, z_ray)``."""
     out = []
-    for (_f0, x0, y0, z0), (_f1, x1, y1, z1) in zip(anchors, anchors[1:]):
+    for (_f0, x0, y0, z0, r0), (_f1, x1, y1, z1, r1) in zip(anchors, anchors[1:]):
         length = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
         n = max(1, int(length / SPACING))
         for k in range(n):
             s = k / float(n)
-            out.append((x0 + (x1 - x0) * s, y0 + (y1 - y0) * s, z0 + (z1 - z0) * s))
-    f, x, y, z = anchors[-1]
-    out.append((x, y, z))
+            out.append((x0 + (x1 - x0) * s, y0 + (y1 - y0) * s, z0 + (z1 - z0) * s,
+                        r0 + (r1 - r0) * s))
+    f, x, y, z, r = anchors[-1]
+    out.append((x, y, z, r))
     return out
 
 
@@ -221,24 +263,30 @@ def _drop_bumps(heights: list, spacing: float) -> list:
     return out
 
 
-def ground_constraint(scene, arm, constraints: list[dict], reference_z: float | None = None) -> dict | None:
+def ground_constraint(scene, arm, constraints: list[dict], reference_z: float | None = None,
+                      *, start_frame: int | None = None) -> dict | None:
     """The MMCP ``ground_height`` constraint for the take's planned route --
     points on the surfaces along it and a little either side -- or ``None``
     when there is no route, no ground found, or the ground is the flat Y=0 the
-    model assumes anyway."""
+    model assumes anyway.
+
+    With ``start_frame`` (the scene frame the request's frame 0 is), each key
+    pose is looked at where it was sampled, and the ground there is read
+    under its feet (see `STEP_UP`)."""
     if reference_z is None:
         from .request_builder import main_root
         root = main_root(arm) if arm else None
         reference_z = float((arm.matrix_world @ root.head).z) if root is not None else 1.0
-    anchors = _anchors(constraints, reference_z)
+    stances = key_pose_stances(scene, arm, constraints, start_frame) if start_frame is not None else None
+    anchors = _anchors(constraints, reference_z, stances)
     if not anchors:
         return None
     skip = _excluded(arm)
     line = _polyline(anchors)
-    centre = [surface_below(scene, x, y, z + RAY_HEADROOM, arm=arm, exclude=skip) for x, y, z in line]
+    centre = [surface_below(scene, x, y, z_ray, arm=arm, exclude=skip) for x, y, _z, z_ray in line]
     centre = _drop_bumps(_drop_gaps(centre, SPACING), SPACING)
     pts = []
-    for i, ((x, y, z_ref), h) in enumerate(zip(line, centre)):
+    for i, ((x, y, _z_ref, z_ray), h) in enumerate(zip(line, centre)):
         if h is None:
             continue
         # across the route: the feet are either side of it, and a turn cuts corners
@@ -250,7 +298,7 @@ def ground_constraint(scene, arm, constraints: list[dict], reference_z: float | 
         pts.append((x, y, h))
         for side in (-LANE, LANE):
             lx, ly = x + px * side, y + py * side
-            lh = surface_below(scene, lx, ly, z_ref + RAY_HEADROOM, arm=arm, exclude=skip)
+            lh = surface_below(scene, lx, ly, z_ray, arm=arm, exclude=skip)
             if lh is not None and h - GAP_DEPTH < lh < h + OBSTACLE_HEIGHT:
                 pts.append((lx, ly, lh))
     if not pts or all(abs(h) < FLAT_EPS for _x, _y, h in pts):
