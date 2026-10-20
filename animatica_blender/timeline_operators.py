@@ -1792,6 +1792,35 @@ class ANIMATICA_OT_remove_prompt_block(bpy.types.Operator):
         return {'FINISHED'}
 
 
+def _regen_travel_back(arm, action) -> bool:
+    """Before a block Redo: In place off, the travel back on the take.
+
+    The server answers with travel and the splice writes it into the root, so
+    the take has to travel when the request samples its seams and when the
+    splice lands. The original keys In place saved are the old take's, too:
+    restoring or applying after the splice would write them over the new
+    block. True when In place was on and is off now.
+    """
+    from . import inplace, preview_session
+    if arm is None or action is None or inplace.applied_mode(action) != "in_place":
+        return False
+    # The root keys this rewrites are the take's, not edits of the artist's.
+    with preview_session.keeping_edits(action):
+        return inplace.restore(arm, action)
+
+
+def _regen_after(arm, action, settings, spliced: bool) -> None:
+    """After a block Redo, spliced or not: In place back on the take as the
+    toggle says, with original keys saved from the take as it is now. The same
+    as the end of a full take."""
+    from . import operators
+    if spliced and action is not None and "animatica_loop" in action:
+        # A cycle is not one once a stretch of it was rewritten; the marker
+        # would make In place read it as a loop.
+        del action["animatica_loop"]
+    operators._apply_inplace_constraint(arm, enabled=bool(getattr(settings, "inplace", False)))
+
+
 class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
     """Generate one prompt block again and keep the rest of the preview.
 
@@ -1829,6 +1858,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
     _request_start_frame = None
     _anchor_frames = None
     _start_time = 0.0
+    _inplace_was_on = False
 
     @classmethod
     def poll(cls, context):
@@ -1848,6 +1878,19 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             return idx
         return -1
 
+    def _redo_is_whole_loop(self, context, idx) -> bool:
+        # A loop is one block, so its Redo is the whole take's. The per-block
+        # path can't make a cycle: it never asks the model for a loop and
+        # never closes the seam, so the take goes to Generate instead.
+        from . import mmcp_client, request_builder
+        s = context.scene.animatica
+        model_caps = mmcp_client.cached_model(s.model_id)
+        if model_caps is None:
+            return False
+        return request_builder.redo_makes_loop(
+            s, s.prompt_blocks, context.scene, model_caps, idx,
+        )
+
     def invoke(self, context, event):
         # Pre-fill the seed dialog. Priority:
         #   1. the block's stored seed (if non-zero) — the typical iteration
@@ -1863,6 +1906,10 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         if block.locked:
             self.report({'WARNING'}, "This block is locked: unlock it to make it again")
             return {'CANCELLED'}
+        if self._redo_is_whole_loop(context, idx):
+            # Same as Shift+Redo: Generate takes its seed from Settings, so no
+            # seed dialog here.
+            return bpy.ops.animatica.generate('INVOKE_DEFAULT')
         self.seed = int(block.seed) if int(block.seed) > 0 else int(s.seed)
         return context.window_manager.invoke_props_dialog(self, width=320)
 
@@ -1899,6 +1946,11 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         if s.is_generating:
             self.report({'WARNING'}, "Already generating. Wait, or click Cancel")
             return {'CANCELLED'}
+
+        # Direct calls (scripts, the skill over MCP) skip invoke, so the loop
+        # case is caught here too.
+        if self._redo_is_whole_loop(context, idx):
+            return bpy.ops.animatica.generate('INVOKE_DEFAULT')
 
         if not s.is_previewing:
             self.report({'ERROR'}, "Regenerate Block works only on a live preview")
@@ -1947,6 +1999,10 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         from . import properties
         properties.save_blocks_to_armature(arm, s)
 
+        # In place comes off before the request: its seams are read from the
+        # travelling take, the space the server answers in.
+        self._inplace_was_on = _regen_travel_back(arm, preview_action)
+
         try:
             req, (fs, fe) = request_builder.build_request_for_block(
                 block_index=idx,
@@ -1963,6 +2019,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             )
         except request_builder.BuildError as exc:
             self.report({'ERROR'}, str(exc))
+            self._restore_inplace(context)
             return {'CANCELLED'}
 
         # Frames sent as constraints become KEYFRAME-typed anchors after the
@@ -2087,6 +2144,11 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             self.report({'ERROR'}, f"Splice failed: {exc}")
             return {'CANCELLED'}
 
+        # In place on the new take, with its own original keys, whether or not
+        # it was on the old one. Done here, so cleanup leaves it alone.
+        self._inplace_was_on = False
+        _regen_after(arm, preview_action, s, spliced=True)
+
         self._cleanup(context)
         for area in context.screen.areas:
             area.tag_redraw()
@@ -2103,6 +2165,24 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             self._timer = None
         s.is_generating = False
         s.cancel_requested = False
+        self._restore_inplace(context)
+
+    def _restore_inplace(self, context):
+        # Ended without a splice: In place goes back on, so the take is as it
+        # was. A failure here must not hide the one that ended the Redo.
+        if not self._inplace_was_on:
+            return
+        self._inplace_was_on = False
+        from .operators import _live_target_armature_or_clear
+        s = context.scene.animatica
+        try:
+            arm = _live_target_armature_or_clear(s)
+            if arm is None:
+                return
+            ad = arm.animation_data
+            _regen_after(arm, ad.action if ad else None, s, spliced=False)
+        except Exception as exc:                          # noqa: BLE001 — logged only
+            print(f"[animatica] Regenerate Block: could not put In place back: {exc}")
 
 
 # ---------------------------------------------------------------------------
