@@ -443,6 +443,26 @@ def build_request(
     _add_ground(constraints, model_caps=model_caps, scene=scene, armature_obj=armature_obj,
                 start_frame=frame_range[0])
 
+    # Loop: sampled as a cycle by the model (motionmcp 0.4 ``options.loop``),
+    # which needs one segment. Loop is only offered where the model advertises
+    # it; a request it cannot loop goes out without it.
+    # Not into a gap between the user's keys: that take is spliced into their
+    # action, which is not made a cycle (see operators.bake_take), so a cycle
+    # asked of the model would only be thrown away.
+    loop = bool(getattr(settings, "loop", False) and model_caps.get("supports_loop")
+                and len(segments) == 1 and not will_splice(armature_obj, frame_range))
+
+    # A loop whose only constraint is the start anchor goes out without it.
+    # The server settles the cycle as a whole, then pins the hips to the
+    # anchor on frame 0 alone, and the last frame no longer meets the first:
+    # a jolt at every wrap. Without the anchor frame 0 sits at the origin and
+    # the operator moves the whole take onto the character (see places_start).
+    # Anything else in the request is in world space, the ground included,
+    # and keeps the anchor; so does a control rig.
+    if loop and not is_control_rig(armature_obj) and constraints == [
+            _start_anchor(armature_obj, [], constraint_objects.get("root_paths", ()))]:
+        constraints = []
+
     valid_joint_names = {j["name"] for j in request_skeleton.get("joints", [])}
     _validate_constraint_joints(constraints, valid_joint_names)
     _validate_constraint_count(constraints, model_caps)
@@ -459,14 +479,7 @@ def build_request(
     else:
         request["duration_frames"] = total_frames
 
-    # Loop: sampled as a cycle by the model (motionmcp 0.4 ``options.loop``),
-    # which needs one segment. Loop is only offered where the model advertises
-    # it; a request it cannot loop goes out without it.
-    # Not into a gap between the user's keys: that take is spliced into their
-    # action, which is not made a cycle (see operators.bake_take), so a cycle
-    # asked of the model would only be thrown away.
-    if (getattr(settings, "loop", False) and model_caps.get("supports_loop") and len(segments) == 1
-            and not will_splice(armature_obj, frame_range)):
+    if loop:
         request["options"]["loop"] = True
 
     # Variations: several samples of the one take, as far as the model allows.
@@ -882,6 +895,42 @@ def will_splice(armature_obj, frame_range) -> bool:
         not (lo <= int(round(kp.co.x)) <= hi)
         for fc in iter_action_fcurves(action) for kp in fc.keyframe_points
     )
+
+
+def _same_block(a, b) -> bool:
+    """Whether two handles are one block. Every read of a Blender collection
+    item hands back a fresh wrapper, so ``is`` alone misses; the pointer is
+    the identity there, and plain stand-ins fall back to ``is``/``==``."""
+    if a is b:
+        return True
+    ptr = getattr(a, "as_pointer", None)
+    if ptr is not None and hasattr(b, "as_pointer"):
+        return ptr() == b.as_pointer()
+    return a == b
+
+
+def redo_makes_loop(settings, prompt_blocks, scene, model_caps, block_index) -> bool:
+    """True when redoing block ``block_index`` is redoing the loop take.
+
+    With Loop on, the take is the one block that counts (see
+    :func:`compute_frame_range`), so "redo this block" and "redo the take" are
+    the same thing: the redo has to ask for a loop, not a plain segment. Needs
+    the model to loop at all, and the block to be that one considered block —
+    the same reckoning ``compute_frame_range`` uses, so the two never disagree
+    about which block the take is.
+    """
+    if not getattr(settings, "loop", False):
+        return False
+    if not (model_caps or {}).get("supports_loop"):
+        return False
+    blocks = list(prompt_blocks or ())
+    if not 0 <= block_index < len(blocks):
+        return False
+    target = blocks[block_index]
+    live = [b for b in generation_blocks(prompt_blocks, scene)
+            if getattr(b, "enabled", True)]
+    considered = [b for b in live if (b.prompt or "").strip()] or live
+    return len(considered) == 1 and _same_block(considered[0], target)
 
 
 def is_control_rig(armature_obj: bpy.types.Object) -> bool:
@@ -1756,11 +1805,10 @@ def _start_anchor(
 ) -> dict[str, Any] | None:
     if any(_pins_frame_zero(c) for c in existing):
         return None
-    root_pb = main_root(armature_obj)
-    if root_pb is None:
+    spot = start_spot(armature_obj)
+    if spot is None:
         return None
-    root_world = (armature_obj.matrix_world @ root_pb.matrix).translation
-    x, _, z = coords.blender_pos_to_mmcp(root_world)
+    x, _, z = coords.blender_pos_to_mmcp((spot[0], spot[1], 0.0))
     anchor: dict[str, Any] = {
         "type":         "root_path",
         "frames":       [0],
@@ -1775,6 +1823,24 @@ def _start_anchor(
             anchor["heading_radians"] = [h]
             break
     return anchor
+
+
+def start_spot(armature_obj: bpy.types.Object) -> tuple[float, float] | None:
+    """Where the character stands: world XY of the main root's head in the
+    current pose, the spot the start anchor pins frame 0 to. ``None`` when
+    the rig has no root to read."""
+    root_pb = main_root(armature_obj)
+    if root_pb is None:
+        return None
+    root_world = (armature_obj.matrix_world @ root_pb.matrix).translation
+    return root_world.x, root_world.y
+
+
+def places_start(request: dict[str, Any]) -> bool:
+    """``True`` when a constraint in ``request`` pins frame 0 in the world.
+    A loop sent without one starts at the origin, and the operator has to
+    move it onto the character itself."""
+    return any(_pins_frame_zero(c) for c in request.get("constraints") or ())
 
 
 def _pins_frame_zero(c: dict[str, Any]) -> bool:

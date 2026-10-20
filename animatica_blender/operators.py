@@ -115,6 +115,36 @@ def _build_regen_request_action(
     return scratch, []
 
 
+def _own_take_request_action(preview, states):
+    """Scratch action holding only the artist's edits on *preview*, for a
+    take whose rig had no action of its own: the take's own keys are the old
+    take, not the artist's, and went into the request as if they were (a
+    shorter block was spliced into the old one, and Loop could not loop).
+    None when there is nothing of theirs on it."""
+    from . import inplace, preview_session
+    if not states:
+        return None
+    scratch = preview.copy()
+    scratch.use_fake_user = False
+    # nothing of the take's record comes over: its cycle, path, In place
+    for k in ("animatica_loop", "animatica_baked", inplace.SERVER_KEY, inplace.BACKUP_KEY,
+              inplace.APPLIED_KEY, inplace.ROOT_MOTION_KEY):
+        if k in scratch:
+            del scratch[k]
+    # Emptied, not made anew: the curves stay where the rig's slot has them.
+    for fc in constraints_ui.iter_action_fcurves(scratch):
+        fc.keyframe_points.clear()
+        for mod in list(fc.modifiers):
+            fc.modifiers.remove(mod)
+    preview_session.apply_edits(states, scratch)
+    from .constraints_ui import _iter_fcurve_collections
+    for fcurves in _iter_fcurve_collections(scratch):
+        for fc in list(fcurves):
+            if not len(fc.keyframe_points):
+                fcurves.remove(fc)
+    return scratch
+
+
 MOTION_ACTION_PREFIX = "Animatica_Motion"
 POSE_ACTION_NAME     = "Animatica_Pose"
 
@@ -899,7 +929,7 @@ def bake_take(context, settings, arm, result, **bake) -> tuple:
 
 def _bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int, gen_end: int,
                anchor_frames=None, splice_target=None, server_looped: bool = False,
-               source_action_name: str = "", sample_index: int = 0) -> tuple:
+               loop_spot=None, source_action_name: str = "", sample_index: int = 0) -> tuple:
     """The bake itself, for :func:`bake_take`.
 
     Everything a take gets between the server's answer and the preview, for one
@@ -976,6 +1006,13 @@ def _bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int,
             start_frame=gen_start,
             anchor_frames=anchor_frames,
         )
+        # A loop sent with no start anchor comes back starting at the origin:
+        # moved whole onto where the character stood. Before the pins and the
+        # locks, which hold bones in the world.
+        if server_looped and loop_spot is not None:
+            from . import loop
+            moved = loop.place(arm, action, (gen_start, gen_end), loop_spot)
+            print(f"[animatica] loop: moved onto the character's spot, {moved:.1f} cm")
     skipped = list(action.get("animatica_skipped_joints") or [])
     # The server's travel trajectory for this sample, if it sent one (MMCP
     # supports_trajectory): In place uses it (see inplace.py).
@@ -1083,7 +1120,50 @@ class ANIMATICA_OT_generate(Operator):
     _regen_scratch_actions: list | None = None
     _regen_src = None
     _regen_preview = None
+    _inplace_was_on = False
+    _loop_spot = None
     _start_time: float = 0.0
+
+    def _regen_own_take(self, context, arm) -> None:
+        """Generate again over a take on a rig that had no action of its own.
+
+        The take's keys are the old take's, not the artist's, so the new one
+        replaces it: the request is made from the artist's edits on it alone,
+        as the first take was made from what the rig had, and the bake is a
+        fresh one -- a shorter block is a new take of that length (and a loop
+        of it), with In place reading it afresh. Before, the take's keys
+        outside the block read as the artist's: the new frames were spliced
+        into the old take, Loop could not loop, and In place, still on with
+        the old take's original keys, was not applied to them.
+
+        Not when the take showing was spliced into the action the rig had
+        when the session began (Reject puts that back from its copy): that
+        action is the rig's, kept, and so are its keys either side. Nor with
+        edits of the artist's outside the block. Then the new frames still go
+        into the take showing, and In place comes off first, so the take is
+        read and spliced travelling (left on, its original keys were the old
+        take's, and the new frames kept their travel).
+        """
+        from . import preview_session
+        from .timeline_operators import _regen_travel_back
+        ad = arm.animation_data
+        preview = ad.action if ad is not None else None
+        if not _is_motion_bake_action(preview):
+            return
+        settings = context.scene.animatica
+        if preview_session.spliced_of(arm) != preview:
+            states = preview_session.travel_edits(arm, preview)
+            scratch = _own_take_request_action(preview, states)
+            ad.action = scratch
+            lo, hi = request_builder.compute_frame_range(settings.prompt_blocks, arm, context.scene)
+            if not _action_has_keys_outside(scratch, lo, hi):
+                self._regen_scratch_actions = [scratch] if scratch is not None else []
+                self._regen_preview = preview
+                self._splice_target = None
+                return
+            ad.action = preview
+            bpy.data.actions.remove(scratch)
+        self._inplace_was_on = _regen_travel_back(arm, preview)
 
     def execute(self, context):
         settings = context.scene.animatica
@@ -1125,6 +1205,8 @@ class ANIMATICA_OT_generate(Operator):
         self._regen_src = None
         self._regen_preview = None
         self._regen_edits = []
+        self._inplace_was_on = False
+        self._loop_spot = None
 
         # The user's action, as the take's preview session keeps it (by
         # reference: renamed meanwhile, it is still the one); by name for a
@@ -1180,6 +1262,10 @@ class ANIMATICA_OT_generate(Operator):
                     self._splice_target = src
                 else:
                     arm.animation_data.action = src
+        elif preview_session.get(arm) is not None:
+            # A take showing on a rig with no action of its own: the new take
+            # replaces it whole (see _regen_own_take).
+            self._regen_own_take(context, arm)
 
         try:
             req = request_builder.build_request(
@@ -1193,6 +1279,9 @@ class ANIMATICA_OT_generate(Operator):
             )
         except request_builder.BuildError as exc:
             self.report({'ERROR'}, str(exc))
+            if self._regen_preview is not None or self._inplace_was_on:
+                # the take showing back on the rig, as it was
+                self._cleanup(context)
             return {'CANCELLED'}
         _warn_left_behind(self, arm, "take")
 
@@ -1200,6 +1289,11 @@ class ANIMATICA_OT_generate(Operator):
         # back closed, and the bake only straightens and repeats it. Loop is
         # the model's alone; a take it did not sample as a cycle is not looped.
         self._server_looped = bool((req.get("options") or {}).get("loop"))
+        # A loop with nothing pinning its frame 0 goes without the start
+        # anchor; where the character stands now is where the bake puts it.
+        self._loop_spot = (request_builder.start_spot(arm)
+                           if self._server_looped and not request_builder.places_start(req)
+                           else None)
         if (getattr(settings, "loop", False) and not self._server_looped
                 and (model_caps or {}).get("supports_loop")):
             gen_range = request_builder.compute_frame_range(settings.prompt_blocks, arm, context.scene)
@@ -1333,6 +1427,7 @@ class ANIMATICA_OT_generate(Operator):
                 anchor_frames=getattr(self, "_anchor_frames", None),
                 splice_target=getattr(self, "_splice_target", None),
                 server_looped=getattr(self, "_server_looped", False),
+                loop_spot=getattr(self, "_loop_spot", None),
                 source_action_name=settings.source_action_name,
             )
             n_actions = 1
@@ -1348,6 +1443,7 @@ class ANIMATICA_OT_generate(Operator):
                 anchor_frames=getattr(self, "_anchor_frames", None),
                 splice_target_name=(getattr(self, "_splice_target", None) or SimpleNamespace(name="")).name,
                 server_looped=getattr(self, "_server_looped", False),
+                loop_spot=getattr(self, "_loop_spot", None),
                 source_action_name=settings.source_action_name,
             )
 
@@ -1361,6 +1457,16 @@ class ANIMATICA_OT_generate(Operator):
                 if old is not action and old.users == 0 and not old.use_fake_user:
                     bpy.data.actions.remove(old)
                 self._clear_regen_state()
+            elif self._regen_preview is not None:
+                # A take replaced whole (see _regen_own_take): it goes.
+                old = self._regen_preview
+                if old is not action and old.users == 0 and not old.use_fake_user:
+                    name = old.name
+                    bpy.data.actions.remove(old)
+                    if action.name.startswith(name + "."):
+                        action.name = name      # not "….001" after the take it replaced
+                self._clear_regen_state()
+            self._inplace_was_on = False             # the bake applied it afresh
         except Exception as exc:                         # noqa: BLE001 — surfaced to UI
             self._cleanup(context)
             self.report({'ERROR'}, f"Bake failed: {exc}")
@@ -1413,6 +1519,15 @@ class ANIMATICA_OT_generate(Operator):
             and arm.animation_data is not None
         ):
             arm.animation_data.action = regen_preview
+
+        if not preview and self._inplace_was_on and arm is not None:
+            # In place came off for the request (see _regen_own_take): no
+            # take came, so it goes back on the one showing.
+            self._inplace_was_on = False
+            try:
+                _apply_inplace_constraint(arm, enabled=bool(getattr(s, "inplace", False)))
+            except Exception as exc:                     # noqa: BLE001 — logged only
+                print(f"[animatica] Generate: could not put In place back: {exc}")
 
         self._clear_regen_state()
 
