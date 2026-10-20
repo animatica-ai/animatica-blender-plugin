@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [1.0.10] — 2026-10-20
+
+### Fixed
+
+- **Redo keeps Loop and In place.** With both on, the first take came out as a seamless cycle held
+  on the spot, but Redo made a take that was neither. Redo on a looped take now makes the whole
+  loop again, the same as Shift+Redo. A block's Redo puts In place back on afterwards with a fresh
+  record of the take, so switching In place off later no longer brings back the previous take's
+  travel.
+- **Generating again over a take replaces it.** On a character with no action of its own, a
+  shorter prompt box and Redo gave a take that walked forward inside the box, stood still outside
+  it, and wasn't a loop, because the old take's keys outside the box were read as the artist's.
+  The take is now replaced whole, keeping only the artist's own edits on it, so a shorter box
+  gives a new take of that length, looped and in place when those are on.
+- **A loop meets its first frame without a jolt.** Once per cycle the hips jumped and the arms
+  snapped at the wrap. A loop with nothing else pinning it is now made without the start point
+  and then moved onto the spot where the character stands, so its last frame runs into its first.
+  Loops that also carry ground, key poses, pins or paths still jolt slightly at the wrap.
+
 ## [1.0.9] — 2026-10-19
 
 ### Fixed
