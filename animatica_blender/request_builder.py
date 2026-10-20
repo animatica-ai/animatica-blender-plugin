@@ -884,6 +884,42 @@ def will_splice(armature_obj, frame_range) -> bool:
     )
 
 
+def _same_block(a, b) -> bool:
+    """Whether two handles are one block. Every read of a Blender collection
+    item hands back a fresh wrapper, so ``is`` alone misses; the pointer is
+    the identity there, and plain stand-ins fall back to ``is``/``==``."""
+    if a is b:
+        return True
+    ptr = getattr(a, "as_pointer", None)
+    if ptr is not None and hasattr(b, "as_pointer"):
+        return ptr() == b.as_pointer()
+    return a == b
+
+
+def redo_makes_loop(settings, prompt_blocks, scene, model_caps, block_index) -> bool:
+    """True when redoing block ``block_index`` is redoing the loop take.
+
+    With Loop on, the take is the one block that counts (see
+    :func:`compute_frame_range`), so "redo this block" and "redo the take" are
+    the same thing: the redo has to ask for a loop, not a plain segment. Needs
+    the model to loop at all, and the block to be that one considered block —
+    the same reckoning ``compute_frame_range`` uses, so the two never disagree
+    about which block the take is.
+    """
+    if not getattr(settings, "loop", False):
+        return False
+    if not (model_caps or {}).get("supports_loop"):
+        return False
+    blocks = list(prompt_blocks or ())
+    if not 0 <= block_index < len(blocks):
+        return False
+    target = blocks[block_index]
+    live = [b for b in generation_blocks(prompt_blocks, scene)
+            if getattr(b, "enabled", True)]
+    considered = [b for b in live if (b.prompt or "").strip()] or live
+    return len(considered) == 1 and _same_block(considered[0], target)
+
+
 def is_control_rig(armature_obj: bpy.types.Object) -> bool:
     """``True`` when the armature's deform layer is driven from a separate
     control layer via constraints — what people mean by "control rig".
