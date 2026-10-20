@@ -443,6 +443,26 @@ def build_request(
     _add_ground(constraints, model_caps=model_caps, scene=scene, armature_obj=armature_obj,
                 start_frame=frame_range[0])
 
+    # Loop: sampled as a cycle by the model (motionmcp 0.4 ``options.loop``),
+    # which needs one segment. Loop is only offered where the model advertises
+    # it; a request it cannot loop goes out without it.
+    # Not into a gap between the user's keys: that take is spliced into their
+    # action, which is not made a cycle (see operators.bake_take), so a cycle
+    # asked of the model would only be thrown away.
+    loop = bool(getattr(settings, "loop", False) and model_caps.get("supports_loop")
+                and len(segments) == 1 and not will_splice(armature_obj, frame_range))
+
+    # A loop whose only constraint is the start anchor goes out without it.
+    # The server settles the cycle as a whole, then pins the hips to the
+    # anchor on frame 0 alone, and the last frame no longer meets the first:
+    # a jolt at every wrap. Without the anchor frame 0 sits at the origin and
+    # the operator moves the whole take onto the character (see places_start).
+    # Anything else in the request is in world space, the ground included,
+    # and keeps the anchor; so does a control rig.
+    if loop and not is_control_rig(armature_obj) and constraints == [
+            _start_anchor(armature_obj, [], constraint_objects.get("root_paths", ()))]:
+        constraints = []
+
     valid_joint_names = {j["name"] for j in request_skeleton.get("joints", [])}
     _validate_constraint_joints(constraints, valid_joint_names)
     _validate_constraint_count(constraints, model_caps)
@@ -459,14 +479,7 @@ def build_request(
     else:
         request["duration_frames"] = total_frames
 
-    # Loop: sampled as a cycle by the model (motionmcp 0.4 ``options.loop``),
-    # which needs one segment. Loop is only offered where the model advertises
-    # it; a request it cannot loop goes out without it.
-    # Not into a gap between the user's keys: that take is spliced into their
-    # action, which is not made a cycle (see operators.bake_take), so a cycle
-    # asked of the model would only be thrown away.
-    if (getattr(settings, "loop", False) and model_caps.get("supports_loop") and len(segments) == 1
-            and not will_splice(armature_obj, frame_range)):
+    if loop:
         request["options"]["loop"] = True
 
     # Variations: several samples of the one take, as far as the model allows.
@@ -1792,11 +1805,10 @@ def _start_anchor(
 ) -> dict[str, Any] | None:
     if any(_pins_frame_zero(c) for c in existing):
         return None
-    root_pb = main_root(armature_obj)
-    if root_pb is None:
+    spot = start_spot(armature_obj)
+    if spot is None:
         return None
-    root_world = (armature_obj.matrix_world @ root_pb.matrix).translation
-    x, _, z = coords.blender_pos_to_mmcp(root_world)
+    x, _, z = coords.blender_pos_to_mmcp((spot[0], spot[1], 0.0))
     anchor: dict[str, Any] = {
         "type":         "root_path",
         "frames":       [0],
@@ -1811,6 +1823,24 @@ def _start_anchor(
             anchor["heading_radians"] = [h]
             break
     return anchor
+
+
+def start_spot(armature_obj: bpy.types.Object) -> tuple[float, float] | None:
+    """Where the character stands: world XY of the main root's head in the
+    current pose, the spot the start anchor pins frame 0 to. ``None`` when
+    the rig has no root to read."""
+    root_pb = main_root(armature_obj)
+    if root_pb is None:
+        return None
+    root_world = (armature_obj.matrix_world @ root_pb.matrix).translation
+    return root_world.x, root_world.y
+
+
+def places_start(request: dict[str, Any]) -> bool:
+    """``True`` when a constraint in ``request`` pins frame 0 in the world.
+    A loop sent without one starts at the origin, and the operator has to
+    move it onto the character itself."""
+    return any(_pins_frame_zero(c) for c in request.get("constraints") or ())
 
 
 def _pins_frame_zero(c: dict[str, Any]) -> bool:

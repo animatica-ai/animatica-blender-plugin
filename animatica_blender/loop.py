@@ -159,6 +159,42 @@ def close_root(arm, action) -> None:
         fc.update()
 
 
+def place(arm, action, frame_range, spot) -> float:
+    """Shift the whole take rigidly so its root starts on *spot*. Returns the shift, cm.
+
+    A loop request that carries no start anchor is sampled by the server with
+    the cycle at the origin, so the take comes back starting there. This puts
+    it back where the character stood: the root bone's head on the first frame
+    moves onto *spot* (world X and Y), and every key of the root's location
+    moves by the same offset. The height stays. The root is the one the bake
+    writes its travel to (``request_builder.main_root``), which on a rig with
+    several root bones is not always the first.
+    """
+    if arm is None or action is None:
+        return 0.0
+    from .request_builder import main_root
+
+    root = main_root(arm)
+    loc = _bone_curves(action).get((root.name, "location")) if root is not None else None
+    if not loc or len(loc) != 3:
+        return 0.0
+    lo = int(frame_range[0])
+    # The root has no parent, so its head is its rest head plus its own
+    # location, taken through the bone's rest axes; its pose rotation and scale
+    # do not move the head. Worked out from the curves, with no frame_set.
+    rest = root.bone.matrix_local.to_3x3()
+    head = arm.matrix_world @ (root.bone.head_local + rest @ Vector([fc.evaluate(lo) for fc in loc]))
+    back = Vector((spot[0] - head.x, spot[1] - head.y, 0.0))
+    local_back = (arm.matrix_world.to_3x3() @ rest).inverted() @ back
+    for fc, d in zip(loc, local_back):
+        for k in fc.keyframe_points:
+            k.co.y += d
+            k.handle_left.y += d
+            k.handle_right.y += d
+        fc.update()
+    return back.length * 100.0
+
+
 #: a cycle's heading is straightened only when it is off by less than this; a
 #: bigger angle is taken to be meant (a diagonal walk), and left alone
 STRAIGHTEN_LIMIT = math.radians(30.0)
