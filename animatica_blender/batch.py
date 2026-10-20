@@ -140,6 +140,7 @@ class _Job:
     splice_target_name: str
     source_name: str
     looped: bool
+    loop_spot: tuple | None = None  # where a loop sent with no start anchor is put (see bake_take)
     future: object = None
     done: bool = False
     ok: bool = False                # its take is on the character, waiting for review
@@ -293,12 +294,16 @@ class ANIMATICA_OT_generate_batch(Operator):
             gen_start, gen_end = request_builder.compute_frame_range(blocks, arm, scene)
             act = arm.animation_data.action if arm.animation_data and arm.animation_data.action else None
             source = act if act is not None and not operators._is_motion_bake_action(act) else None
+            looped = bool((req.get("options") or {}).get("loop"))
             jobs.append(_Job(
                 name=arm.name, req=req, blocks=blocks, gen_start=gen_start, gen_end=gen_end,
                 anchors=operators.anchor_frames_for(req, source, gen_start, gen_end),
                 splice_target_name=act.name if act is not None else "",
                 source_name=source.name if source is not None else "",
-                looped=bool((req.get("options") or {}).get("loop")),
+                looped=looped,
+                # Where it stands now, before the request, as for a single Generate.
+                loop_spot=(request_builder.start_spot(arm)
+                           if looped and not request_builder.places_start(req) else None),
             ))
 
         if not jobs:
@@ -360,7 +365,7 @@ class ANIMATICA_OT_generate_batch(Operator):
                     arm.animation_data_create()
                 bake = dict(
                     prompt_blocks=job.blocks, gen_start=job.gen_start, gen_end=job.gen_end,
-                    anchor_frames=job.anchors, server_looped=job.looped,
+                    anchor_frames=job.anchors, server_looped=job.looped, loop_spot=job.loop_spot,
                     source_action_name=job.source_name,
                 )
                 action, _ = operators.bake_take(

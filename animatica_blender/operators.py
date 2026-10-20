@@ -929,7 +929,7 @@ def bake_take(context, settings, arm, result, **bake) -> tuple:
 
 def _bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int, gen_end: int,
                anchor_frames=None, splice_target=None, server_looped: bool = False,
-               source_action_name: str = "", sample_index: int = 0) -> tuple:
+               loop_spot=None, source_action_name: str = "", sample_index: int = 0) -> tuple:
     """The bake itself, for :func:`bake_take`.
 
     Everything a take gets between the server's answer and the preview, for one
@@ -1006,6 +1006,13 @@ def _bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int,
             start_frame=gen_start,
             anchor_frames=anchor_frames,
         )
+        # A loop sent with no start anchor comes back starting at the origin:
+        # moved whole onto where the character stood. Before the pins and the
+        # locks, which hold bones in the world.
+        if server_looped and loop_spot is not None:
+            from . import loop
+            moved = loop.place(arm, action, (gen_start, gen_end), loop_spot)
+            print(f"[animatica] loop: moved onto the character's spot, {moved:.1f} cm")
     skipped = list(action.get("animatica_skipped_joints") or [])
     # The server's travel trajectory for this sample, if it sent one (MMCP
     # supports_trajectory): In place uses it (see inplace.py).
@@ -1114,6 +1121,7 @@ class ANIMATICA_OT_generate(Operator):
     _regen_src = None
     _regen_preview = None
     _inplace_was_on = False
+    _loop_spot = None
     _start_time: float = 0.0
 
     def _regen_own_take(self, context, arm) -> None:
@@ -1198,6 +1206,7 @@ class ANIMATICA_OT_generate(Operator):
         self._regen_preview = None
         self._regen_edits = []
         self._inplace_was_on = False
+        self._loop_spot = None
 
         # The user's action, as the take's preview session keeps it (by
         # reference: renamed meanwhile, it is still the one); by name for a
@@ -1280,6 +1289,11 @@ class ANIMATICA_OT_generate(Operator):
         # back closed, and the bake only straightens and repeats it. Loop is
         # the model's alone; a take it did not sample as a cycle is not looped.
         self._server_looped = bool((req.get("options") or {}).get("loop"))
+        # A loop with nothing pinning its frame 0 goes without the start
+        # anchor; where the character stands now is where the bake puts it.
+        self._loop_spot = (request_builder.start_spot(arm)
+                           if self._server_looped and not request_builder.places_start(req)
+                           else None)
         if (getattr(settings, "loop", False) and not self._server_looped
                 and (model_caps or {}).get("supports_loop")):
             gen_range = request_builder.compute_frame_range(settings.prompt_blocks, arm, context.scene)
@@ -1413,6 +1427,7 @@ class ANIMATICA_OT_generate(Operator):
                 anchor_frames=getattr(self, "_anchor_frames", None),
                 splice_target=getattr(self, "_splice_target", None),
                 server_looped=getattr(self, "_server_looped", False),
+                loop_spot=getattr(self, "_loop_spot", None),
                 source_action_name=settings.source_action_name,
             )
             n_actions = 1
@@ -1428,6 +1443,7 @@ class ANIMATICA_OT_generate(Operator):
                 anchor_frames=getattr(self, "_anchor_frames", None),
                 splice_target_name=(getattr(self, "_splice_target", None) or SimpleNamespace(name="")).name,
                 server_looped=getattr(self, "_server_looped", False),
+                loop_spot=getattr(self, "_loop_spot", None),
                 source_action_name=settings.source_action_name,
             )
 

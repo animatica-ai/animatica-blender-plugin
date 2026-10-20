@@ -85,6 +85,7 @@ def show(context, arm, index: int) -> None:
         anchor_frames=b.get("anchor_frames"),
         splice_target=bpy.data.actions.get(b.get("splice_target_name") or ""),
         server_looped=b.get("server_looped", False),
+        loop_spot=b.get("loop_spot"),
         source_action_name=b.get("source_action_name", ""),
     )
     if action is not old and old is not None and operators._is_motion_bake_action(old):
