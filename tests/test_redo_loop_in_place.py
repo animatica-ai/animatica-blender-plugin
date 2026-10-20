@@ -4,7 +4,8 @@ A looped take is one block, so its Redo is the whole take's Generate
 (``request_builder.redo_makes_loop``). A block Redo of an in-place take puts
 the travel back before the request, and takes it out again after the splice
 with original keys of the new take; with no splice, the take is left as it
-was.
+was. Generate again over a take on a rig with no action of its own sends the
+artist's edits alone, not the old take's keys.
 
 A SOMA30 rig built from the bundled joints, its Hips keyed travelling, stands
 in for the take's preview; the splice is stood in for by keys written into
@@ -205,10 +206,55 @@ def round_trip_failed():
     check("...the loop marker stays", "animatica_loop" in act)
 
 
+# --- 4. Generate again over a take on a rig with no action of its own ------
+
+def own_take_scratch():
+    """The request for a take replaced whole is made from the artist's edits
+    on it alone (operators._own_take_request_action): none of the take's keys,
+    cycle or In place go into it."""
+    from animatica_blender import constraints_ui, preview_session
+    scene, arm, top, act = build_take()
+    act["animatica_loop"] = {"start": 1.0, "cut": 60.0}
+    for fc in constraints_ui.iter_action_fcurves(act):
+        fc.modifiers.new('CYCLES')
+        for kp in fc.keyframe_points:
+            kp.type = 'GENERATED'
+    preview_session.record_baseline(act)
+
+    states = preview_session.travel_edits(arm, act)
+    check("no edits on the take: nothing of the artist's to send",
+          operators._own_take_request_action(act, states) is None)
+
+    pb = next(p for p in arm.pose.bones if p.parent is not None)
+    pb.rotation_mode = 'QUATERNION'
+    scene.frame_set(20)
+    pb.rotation_quaternion = (0.9, 0.3, 0.2, 0.1)
+    pb.keyframe_insert("rotation_quaternion", frame=20)
+    keys_before = sum(len(fc.keyframe_points) for fc in constraints_ui.iter_action_fcurves(act))
+    states = preview_session.travel_edits(arm, act)
+    scratch = operators._own_take_request_action(act, states)
+    check("an edit on the take: a scratch action", scratch is not None)
+    if scratch is None:
+        return
+    kps = [(fc.data_path, int(round(kp.co.x)), kp.type)
+           for fc in constraints_ui.iter_action_fcurves(scratch) for kp in fc.keyframe_points]
+    check("...holding the edit alone", kps and all(f == 20 and pb.name in p for p, f, _ in kps),
+          f"{len(kps)} keys")
+    check("...typed the artist's", all(t != 'GENERATED' for _, _, t in kps))
+    check("...with none of the take's cycle, record or In place",
+          not any(fc.modifiers for fc in constraints_ui.iter_action_fcurves(scratch))
+          and not any(k in scratch for k in ("animatica_loop", inplace.BACKUP_KEY, inplace.APPLIED_KEY)))
+    keys_after = sum(len(fc.keyframe_points) for fc in constraints_ui.iter_action_fcurves(act))
+    check("...and the take itself untouched", keys_after == keys_before
+          and inplace.applied_mode(act) == "in_place" and "animatica_loop" in act)
+    bpy.data.actions.remove(scratch)
+
+
 def main():
     loop_decision()
     round_trip_spliced()
     round_trip_failed()
+    own_take_scratch()
 
 
 if __name__ == "__main__":
