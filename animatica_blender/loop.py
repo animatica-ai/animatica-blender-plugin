@@ -77,7 +77,8 @@ def apply(arm, action, frame_range) -> dict:
             if prop == "rotation_quaternion" and len(fcs) == 4]
     if not rots:
         return {}
-    root = next((pb for pb in arm.pose.bones if pb.parent is None), None)
+    from .request_builder import top_bone
+    root = top_bone(arm)
     root_loc = curves.get((root.name, "location")) if root is not None else None
     if root_loc is not None and len(root_loc) != 3:
         root_loc = None
@@ -135,7 +136,8 @@ def close_root(arm, action) -> None:
     on a root bone that rests tilted, where one of its own channels carries
     both travel and height.
     """
-    root = next((pb for pb in arm.pose.bones if pb.parent is None), None)
+    from .request_builder import top_bone
+    root = top_bone(arm)
     loc = _bone_curves(action).get((root.name, "location")) if root is not None else None
     if not loc or len(loc) != 3:
         return
@@ -168,13 +170,15 @@ def place(arm, action, frame_range, spot) -> float:
     moves onto *spot* (world X and Y), and every key of the root's location
     moves by the same offset. The height stays. The root is the one the bake
     writes its travel to (``request_builder.main_root``), which on a rig with
-    several root bones is not always the first.
+    several root bones is not always the first; on a rig whose controls carry
+    the take, the control at its top, keyed with it (``top_bone``).
     """
     if arm is None or action is None:
         return 0.0
-    from .request_builder import main_root
+    from .gltf_to_blender import control_profile
+    from .request_builder import main_root, top_bone
 
-    root = main_root(arm)
+    root = top_bone(arm) if control_profile(arm) is not None else main_root(arm)
     loc = _bone_curves(action).get((root.name, "location")) if root is not None else None
     if not loc or len(loc) != 3:
         return 0.0

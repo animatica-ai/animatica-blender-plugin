@@ -204,6 +204,10 @@ def pose_channels(arm) -> list:
     reading the pose even a fraction of a second later reads the action's pose
     back instead of the one just solved.
     """
+    from . import gltf_to_blender
+    prof = gltf_to_blender.control_profile(arm)
+    if prof is not None:
+        return _control_channels(arm, prof)
     channels = []
     root = next((pb for pb in arm.pose.bones if pb.parent is None), None)
     hips = hips_bone(arm)
@@ -218,6 +222,28 @@ def pose_channels(arm) -> list:
                 (f'pose.bones["{pb.name}"].location', i, v)
                 for i, v in enumerate(pb.location)
             ]
+    return channels
+
+
+def _control_channels(arm, prof) -> list:
+    """`pose_channels` on a rig whose controls carry the pose (`gltf_to_blender.control_profile`):
+    the controls it is set through, as `control_rig.key` keys them -- each limb's FK, or its IK
+    controls while it is in IK. Its deform bones follow them; keys on those do nothing."""
+    names = list(dict.fromkeys(prof.keyed(arm)))
+    for limb, side in prof.limbs(arm):
+        if prof.ik_spec(arm, limb, side) is None or not prof.is_ik(arm, limb, side):
+            continue
+        fk = set(prof.fk_controls(arm, limb, side))
+        names = [n for n in names if n not in fk] + [n for n in prof.ik_controls(arm, limb, side) if n not in names]
+    channels = []
+    for name in names:
+        pb = arm.pose.bones.get(name)
+        if pb is None:
+            continue
+        path, values = _rotation_values(pb)
+        channels += [(f'pose.bones["{name}"].{path}', i, v) for i, v in enumerate(values)]
+        if not all(pb.lock_location):
+            channels += [(f'pose.bones["{name}"].location', i, v) for i, v in enumerate(pb.location)]
     return channels
 
 
@@ -236,8 +262,16 @@ def hips_bone(arm) -> str:
 
 def is_rest_pose(arm) -> bool:
     """Whether the rig stands in its rest pose (a T-pose on most): every
-    deform bone where its rest puts it."""
+    deform bone where its rest puts it. On a control rig, as it shows: its
+    deform bones are never keyed, so their own transforms are always at rest."""
     from mathutils import Matrix
+    from . import request_builder
+    if request_builder.is_control_rig(arm):
+        bpy.context.view_layer.update()
+        for pb in arm.pose.bones:
+            if pb.bone.use_deform and not _same(pb.matrix, pb.bone.matrix_local):
+                return False
+        return True
     ident = Matrix.Identity(4)
     for pb in arm.pose.bones:
         if not pb.bone.use_deform:
@@ -246,6 +280,10 @@ def is_rest_pose(arm) -> bool:
         if any(abs(m[r][c] - ident[r][c]) > 1e-4 for r in range(4) for c in range(4)):
             return False
     return True
+
+
+def _same(a, b, eps: float = 1e-4) -> bool:
+    return all(abs(a[r][c] - b[r][c]) <= eps for r in range(4) for c in range(4))
 
 
 #: frames of the take under review the artist said to keep (the next Redo holds them)

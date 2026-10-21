@@ -8,6 +8,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [Unreleased]
+
+### Fixed
+
+- **Takes land on Rigify and Auto-Rig Pro rigs.** On Rigify a take went through the metarig, whose
+  arm and leg bones Rigify rolls differently from the rig's: the arms came out held out in front.
+  With the metarig hidden, as it usually is, nothing was baked and the character didn't move. On
+  Auto-Rig Pro only the deform bones were keyed, so the hips walked off and the hands and feet
+  stayed where they started. A take, a pasted clip and a generated pose are now keyed on the rig's
+  own controls, the way Marionette poses it, and land exactly on every joint. This covers Rigify and
+  Auto-Rig Pro, and CloudRig and rigs connected in Marionette through the same profiles. Arms and
+  legs are keyed in FK; on Rigify the IK is matched on every frame, so switching a limb back to IK
+  doesn't jump. Outside the take each
+  limb stays in the mode it had, the controls keep their rotation modes, and Discard puts the
+  IK/FK switches back.
+- **Regenerate Block on a control rig.** The block's control keys were wiped and only deform keys
+  went back, so the block stopped moving. It now gets the new motion on the controls.
+- **Key poses read off a control rig.** A key pose, and the frames Regenerate Block holds either
+  side of the block, were read against the wrong bones. Auto-Rig Pro's arms went out 80 to 90
+  degrees off and Rigify's shoulders about 20. The pose is now read off the bones the controls
+  set, so the take passes through the pose you see. An edit on a control, such as an IK hand
+  moved, counts for Regenerate Block too.
+- **Set Key Pose on a control rig** keys the controls, and a posed control rig is no longer taken
+  for the rest pose.
+- **In place, Loop and waypoints on a control rig.** In place moves the rig's top control (Rigify's
+  `root`, Auto-Rig Pro's `c_pos`), which a take now keys. The start spot, the ground and waypoints
+  read where the hips are, not the rig's root control on the floor.
+- **Paste Motion onto Auto-Rig Pro** writes the finger controls, and limbs outside the pasted
+  stretch keep their IK/FK mode.
+- **A control rig keeps its hand pose.** The model has no fingers, and a take no longer flattens
+  the finger controls.
+
 ## [1.0.10] — 2026-10-20
 
 ### Fixed

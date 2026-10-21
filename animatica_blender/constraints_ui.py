@@ -1040,7 +1040,7 @@ def sample_effector_target(
     }
 
 
-def _evaluated_local_basis(pb: bpy.types.PoseBone) -> 'Matrix':
+def _evaluated_local_basis(pb: bpy.types.PoseBone, parent=False, pose=None) -> 'Matrix':
     """The bone-local matrix_basis equivalent computed from the *evaluated*
     pose-bone matrix, so constraint-driven bones (control-rig setups) report
     a non-identity basis even though they were never directly keyed.
@@ -1048,11 +1048,39 @@ def _evaluated_local_basis(pb: bpy.types.PoseBone) -> 'Matrix':
     For a freely-keyed bone this returns exactly ``pb.matrix_basis``; for a
     bone driven by a Copy*/IK constraint it returns the basis that, applied
     against the bone's rest, would reproduce ``pb.matrix``.
+
+    ``parent``: the joint above it in the tree the request sends (None at its
+    root), which on a control rig is often not the bone Blender hangs it from
+    (see `mmcp_joint_rotation`); left out, Blender's parent. ``pose``: the
+    bones' pose matrices to read instead of their evaluated ones
+    (`_request_pose`).
     """
-    if pb.parent is None:
-        return pb.bone.matrix_local.inverted() @ pb.matrix
-    parent_offset = pb.bone.matrix_local.inverted() @ pb.parent.bone.matrix_local
-    return parent_offset @ pb.parent.matrix.inverted() @ pb.matrix
+    if parent is False:
+        parent = pb.parent
+    M = pose.get(pb.name, pb.matrix) if pose else pb.matrix
+    if parent is None:
+        return pb.bone.matrix_local.inverted() @ M
+    P = pose.get(parent.name, parent.matrix) if pose else parent.matrix
+    parent_offset = pb.bone.matrix_local.inverted() @ parent.bone.matrix_local
+    return parent_offset @ P.inverted() @ M
+
+
+def _request_parents(arm: bpy.types.Object) -> dict:
+    """``{bone name: the pose bone above it in the tree the request sends, or None}``."""
+    from . import request_builder
+    pbs = arm.pose.bones
+    return {n: (pbs.get(p) if p else None) for n, p in request_builder.request_tree(arm).items()}
+
+
+def _request_pose(arm: bpy.types.Object) -> dict | None:
+    """The pose a key pose is read from on a rig whose controls carry it: each sent bone off the
+    skeleton bone the controls set (`control_bake.read_pose`). None elsewhere: the bones as
+    they evaluate."""
+    from . import control_bake, gltf_to_blender, request_builder
+    prof = gltf_to_blender.control_profile(arm)
+    if prof is None:
+        return None
+    return control_bake.read_pose(arm, prof, request_builder.request_tree(arm))
 
 
 def _request_root_pose_bone(arm: bpy.types.Object) -> bpy.types.PoseBone | None:
@@ -1070,7 +1098,8 @@ def _request_root_pose_bone(arm: bpy.types.Object) -> bpy.types.PoseBone | None:
     return arm.pose.bones.get(root) if root else None
 
 
-def _joint_rotation_to_mmcp(pb: bpy.types.PoseBone, *, is_root: bool, yaw, tilt) -> list[float]:
+def _joint_rotation_to_mmcp(pb: bpy.types.PoseBone, *, is_root: bool, yaw, tilt,
+                            parent=False, pose=None) -> list[float]:
     """One pose bone's rotation the way the server expects it: relative to
     its parent, in the MMCP Y-up frame, relative to the rig's rest pose as
     it stands at yaw 0 (``x, y, z, w``).
@@ -1087,9 +1116,12 @@ def _joint_rotation_to_mmcp(pb: bpy.types.PoseBone, *, is_root: bool, yaw, tilt)
 
     ``yaw``/``tilt`` come from ``coords.split_world_yaw``. The inverse of
     this chain lives in ``gltf_to_blender._RotationBaker`` on the bake path
-    and must stay in sync.
+    and must stay in sync. ``parent``: the joint above ``pb`` in the tree
+    sent (`_request_parents`); on a control rig Blender's parent is often
+    another bone, and a key pose read against it went out with Auto-Rig Pro's
+    arms 80-90 degrees off and Rigify's shoulders 20.
     """
-    R_basis = _evaluated_local_basis(pb).to_3x3()
+    R_basis = _evaluated_local_basis(pb, parent, pose).to_3x3()
     ML      = pb.bone.matrix_local.to_3x3()
     R_blender_arm   = ML @ R_basis @ ML.transposed()
     R_blender_world = tilt @ R_blender_arm @ tilt.transposed()
@@ -1277,6 +1309,7 @@ def sample_pose_keyframes(
 
     constraints: list[dict[str, Any]] = []
     sampled_pbs = [pb for pb in armature_obj.pose.bones if pb.name in sample_bone_names]
+    parents = _request_parents(armature_obj)
     try:
         for f in authored:
             scene.frame_set(f)
@@ -1286,9 +1319,11 @@ def sample_pose_keyframes(
             # the previous frame.
             bpy.context.view_layer.update()
             joint_rotations: dict[str, list[float]] = {}
+            pose = _request_pose(armature_obj)
             for pb in sampled_pbs:
                 joint_rotations[pb.name] = _joint_rotation_to_mmcp(
-                    pb, is_root=(pb.name == root_name), yaw=yaw, tilt=tilt)
+                    pb, is_root=(pb.name == root_name), yaw=yaw, tilt=tilt,
+                    parent=parents.get(pb.name, pb.parent), pose=pose)
 
             if not joint_rotations:
                 continue
@@ -1385,12 +1420,15 @@ def sample_pose_at_frame(
         bpy.context.view_layer.update()
 
         root_name = sample_root.name if sample_root is not None else None
+        parents = _request_parents(armature_obj)
+        pose = _request_pose(armature_obj)
         joint_rotations: dict[str, list[float]] = {}
         for pb in armature_obj.pose.bones:
             if pb.name not in sample_bone_names:
                 continue
             joint_rotations[pb.name] = _joint_rotation_to_mmcp(
-                pb, is_root=(pb.name == root_name), yaw=yaw, tilt=tilt)
+                pb, is_root=(pb.name == root_name), yaw=yaw, tilt=tilt,
+                parent=parents.get(pb.name, pb.parent), pose=pose)
 
         if not joint_rotations:
             return None

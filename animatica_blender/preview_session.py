@@ -83,9 +83,21 @@ def _pose_snapshot(arm) -> dict:
             "euler": list(pb.rotation_euler),
             "aa": list(pb.rotation_axis_angle),
             "scale": list(pb.scale),
+            "props": _bone_props(pb),
         }
         for pb in arm.pose.bones
     }
+
+
+def _bone_props(pb) -> dict:
+    """A bone's own number properties: a control rig's switches (Rigify's ``IK_FK``, Auto-Rig
+    Pro's ``ik_fk_switch``), which a take on its controls flips to FK."""
+    out = {}
+    for k in pb.keys():
+        v = pb[k]
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[k] = v
+    return out
 
 
 def _restore_pose(arm, pose: dict) -> None:
@@ -107,6 +119,9 @@ def _restore_pose(arm, pose: dict) -> None:
             pb.scale = p["scale"]
         except (KeyError, TypeError, ValueError):
             continue
+        for k, v in (p.get("props") or {}).items():
+            if k in pb.keys() and isinstance(pb[k], (int, float)):
+                pb[k] = type(pb[k])(v)
 
 
 # --- the actions it keeps ------------------------------------------------------

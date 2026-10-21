@@ -589,9 +589,19 @@ def build_request_for_block(
     # every bone using each bone's current value, so most KEYFRAME-typed
     # kps have values identical to the surrounding GENERATED frames; only
     # bones with a real value delta count as user edits.
+    #
+    # On a rig whose controls carry the take, the artist edits controls -- a hand's IK target
+    # moved as much as an FK arm turned -- and the key pins the joints they move.
+    from . import gltf_to_blender
+    prof = gltf_to_blender.control_profile(armature_obj)
     edited_bones_by_frame = _user_edited_bones_per_frame(
         preview_action, block_start, block_end,
+        channels=("rotation", "location") if prof is not None else ("rotation",),
     )
+    if prof is not None:
+        from . import control_bake
+        edited_bones_by_frame = {f: hit for f, bones in edited_bones_by_frame.items()
+                                 if (hit := control_bake.moved_by(armature_obj, prof, bones))}
     # Frames the artist kept from the take: held whole, though their values
     # are the take's own (which is why the edit test above passes them over).
     from .pose_edit import kept_frames
@@ -1342,12 +1352,35 @@ def main_root(armature_obj: bpy.types.Object) -> bpy.types.PoseBone | None:
     """The bone whose place says where the character stands, for the start
     anchor and the ground: the rig's first root bone, as it always was, but on
     a plain rig with several, the body's (`_body_bones`), not a weapon or a
-    ``root_motion`` bone that happens to come first."""
+    ``root_motion`` bone that happens to come first. On a control rig, the
+    root of the tree sent (its hips): the joint the server's root position is
+    of, where the rig's own first root is a control on the floor that a take
+    does not move."""
+    if is_control_rig(armature_obj):
+        root = next((n for n, p in request_tree(armature_obj).items() if p is None), None)
+        if root is not None and root in armature_obj.pose.bones:
+            return armature_obj.pose.bones[root]
     roots = [pb for pb in armature_obj.pose.bones if pb.parent is None]
     if len(roots) > 1 and not _filters_to_deform(armature_obj, emitted_deform_bones(armature_obj)):
         body = _body_bones(armature_obj)
         return next(pb for pb in roots if pb.name in body)
     return roots[0] if roots else None
+
+
+def top_bone(armature_obj: bpy.types.Object) -> bpy.types.PoseBone | None:
+    """The bone that carries the whole character, which In place, a loop and a
+    path move: the rig's first root bone; on a rig whose controls carry the
+    take (`gltf_to_blender.control_profile`), the control its body control
+    hangs from at the top (Rigify's ``root``, Auto-Rig Pro's ``c_pos``), which
+    the take keys for them (`control_bake.top`)."""
+    from . import gltf_to_blender
+    prof = gltf_to_blender.control_profile(armature_obj)
+    if prof is not None:
+        from . import control_bake
+        name = control_bake.top(armature_obj, prof)
+        if name is not None:
+            return armature_obj.pose.bones[name]
+    return next((pb for pb in armature_obj.pose.bones if pb.parent is None), None)
 
 
 def left_behind(armature_obj: bpy.types.Object) -> list[str]:
@@ -1690,6 +1723,7 @@ def _user_edited_bones_per_frame(
     action: bpy.types.Action | None,
     frame_start: int,
     frame_end: int,
+    channels: tuple[str, ...] = ("rotation",),
 ) -> dict[int, set[str]]:
     """Map each user-keyed frame inside ``[frame_start, frame_end]`` to the
     set of bones the user *actually* rotated at that frame.
@@ -1718,6 +1752,9 @@ def _user_edited_bones_per_frame(
     is a tight delta check. For sparse anchors (a kp with no surrounding
     GENERATED neighbours), the bone is conservatively flagged as edited —
     we can't disprove the user's intent, so we honour it.
+
+    ``channels``: the curves that count, by their property's name (the
+    rotations; on a control rig the locations too, an IK target moved).
     """
     if action is None:
         return {}
@@ -1729,7 +1766,7 @@ def _user_edited_bones_per_frame(
     kp_value_at: dict[tuple[str, int, int], float] = {}  # (bone, frame, axis) -> value
 
     for fc in constraints_ui.iter_action_fcurves(action):
-        if "rotation" not in fc.data_path:
+        if not any(c in fc.data_path.rsplit(".", 1)[-1] for c in channels):
             continue
         bone = constraints_ui._bone_name_from_data_path(fc.data_path)
         if bone is None:

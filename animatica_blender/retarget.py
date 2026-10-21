@@ -355,6 +355,11 @@ def bake_result(copied: dict[str, Any], gltf: dict[str, Any], target, at_frame: 
     ad = target.animation_data
     own, own_slot = ad.action, getattr(ad, "action_slot", None)
     modes = {pb.name: pb.rotation_mode for pb in target.pose.bones}
+    # the pose as it was, put back after the scratch bake: on a control rig that bake sets the
+    # controls, flips the limbs to FK and puts the foot roll at rest, keyed or not
+    from . import preview_session
+    pose = preview_session._pose_snapshot(target)
+    props = {name: p["props"] for name, p in pose.items()}
     first = int(at_frame) - (min(copied["keys"]) - copied["sampled"][0])    # where clip frame 0 lands
     scratch = None
     try:
@@ -368,8 +373,7 @@ def bake_result(copied: dict[str, Any], gltf: dict[str, Any], target, at_frame: 
                 ad.action_slot = own_slot
             except Exception:                                        # noqa: BLE001
                 pass
-        for name, mode in modes.items():
-            target.pose.bones[name].rotation_mode = mode
+        preview_session._restore_pose(target, pose)
         if scratch is not None:
             bpy.data.actions.remove(scratch)
     if own is None:
@@ -379,8 +383,19 @@ def bake_result(copied: dict[str, Any], gltf: dict[str, Any], target, at_frame: 
     types = [t for _i, _f, t in picks]
     report = retarget_report(gltf)
     unreached = set(report.get("unmapped_target_joints") or ())
-    # a control rig's deform bones follow its controls: keys on them do nothing
-    skip = set(request_builder.detect_deform_bones(target)) if request_builder.is_control_rig(target) else set()
+    # a control rig's deform bones follow its controls: keys on them do nothing (one that is a
+    # control too -- Auto-Rig Pro's fingers -- is written)
+    skip = set()
+    if request_builder.is_control_rig(target):
+        skip = set(request_builder.detect_deform_bones(target))
+        prof = gltf_to_blender.control_profile(target)
+        if prof is not None:
+            skip -= {c for c, _b in prof.controls(target)}
+    had = {(fc.data_path, fc.array_index) for fc in constraints_ui.iter_action_fcurves(own, target)}
+    # which sides of the stretch the action has animation on: a switch is held there only
+    xs = [kp.co.x for fc in constraints_ui.iter_action_fcurves(own, target) if '"][' not in fc.data_path
+          for kp in fc.keyframe_points]
+    sides = (any(x < frames[0] - 0.5 for x in xs), any(x > frames[-1] + 0.5 for x in xs))
     by_bone: dict[tuple[str, str], dict[int, np.ndarray]] = {}
     for (path, index), vals in values.items():
         by_bone.setdefault((_bake_common.bone_of(path), path), {})[index] = vals
@@ -403,10 +418,40 @@ def bake_result(copied: dict[str, Any], gltf: dict[str, Any], target, at_frame: 
         for index, vals in sorted(chans.items()):
             fc = _bake_common.ensure_fcurve(own, target, path, index)
             if fc is not None:
+                switch = path.endswith('"]') and prop not in _REST
+                edges = _edges(fc, (path, index) in had, props.get(bone, {}), path, frames, sides) if switch else None
                 _overwrite(fc, frames, vals, types)
+                if switch:
+                    _hold_switch(fc, edges)
         written.add(bone)
     _bake_common.group_curves(own)
     return {"action": own, "frames": frames, "joints": len(written), "kept": len(kept - written)}
+
+
+def _edges(fc, existed: bool, before: dict, path: str, frames: list[int], sides) -> list:
+    """``[(frame, value)]`` a control rig's switch reads just either side of the stretch before
+    the paste -- off its curve, or the bone's own value where the action has none -- on the
+    sides the action has animation on (``sides``: before, after). A side with none gets no key:
+    it has nothing to play, and the key would only make a frame nobody asked for."""
+    at = [f for f, on in ((frames[0] - 1, sides[0]), (frames[-1] + 1, sides[1])) if on]
+    if existed:
+        return [(f, fc.evaluate(f)) for f in at]
+    name = path.rsplit('["', 1)[-1][:-2]
+    if name not in before:
+        return []
+    return [(f, float(before[name])) for f in at]
+
+
+def _hold_switch(fc, edges: list) -> None:
+    """A control rig's switch the paste keyed (a limb put in FK): stepped, not eased, and either
+    side of the stretch what it read there before (``edges``), so the frames outside keep the
+    mode they had."""
+    for f, value in edges:
+        if abs(fc.evaluate(f) - value) > 1e-6:
+            fc.keyframe_points.insert(f, value, options={'FAST'})
+    for kp in fc.keyframe_points:
+        kp.interpolation = 'CONSTANT'
+    fc.update()
 
 
 def paste(target, server_url: str | None = None, at_frame: int | None = None) -> dict[str, Any]:

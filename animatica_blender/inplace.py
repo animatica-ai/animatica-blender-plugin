@@ -82,9 +82,27 @@ def _find(arm, names, side=None):
     return None
 
 
+#: a control-rig profile's joints (`control_rig.Profile.joints`) for each role
+_PROFILE_ROLES = {"hips": ("Hips",), "spine": ("Spine1",), "chest": ("Chest", "Spine2"), "neck": ("Neck1",),
+                  "head": ("Head",)}
+_PROFILE_SIDED = {"arm": "Arm", "forearm": "ForeArm", "hand": "Hand", "leg": "Leg", "shin": "Shin",
+                  "foot": "Foot", "toe": "ToeBase"}
+
+
 def bones(arm) -> dict:
     """The body's bones, by role (canonical names, and common alternatives).
-    Missing ones are left out: the COM is made of what is there."""
+    Missing ones are left out: the COM is made of what is there. On a rig
+    whose controls carry the take, its profile's skeleton (Rigify's ORG
+    chain, Auto-Rig Pro's limbs): its names are none of these."""
+    from .gltf_to_blender import control_profile
+    prof = control_profile(arm)
+    if prof is not None:
+        j, pbs = prof.joints(arm), arm.pose.bones
+        out = {role: next((pbs[j[n]] for n in names if n in j), None) for role, names in _PROFILE_ROLES.items()}
+        for side in ("Left", "Right"):
+            for role, n in _PROFILE_SIDED.items():
+                out[f"{side[0].lower()}_{role}"] = pbs.get(j.get(side + n, ""))
+        return {k: v for k, v in out.items() if v is not None}
     out = {role: _find(arm, names) for role, names in _ROLES.items()}
     for side in ("Left", "Right"):
         for role, names in _SIDED.items():
@@ -92,6 +110,12 @@ def bones(arm) -> dict:
     if out["hips"] is None:
         out["hips"] = next((b for b in arm.pose.bones if b.parent is None), None)
     return {k: v for k, v in out.items() if v is not None}
+
+
+def _top(arm):
+    """The bone In place moves: the one that carries the whole character (`request_builder.top_bone`)."""
+    from .request_builder import top_bone
+    return top_bone(arm)
 
 
 # Winter (2009) segment masses, and where along the segment its centre is.
@@ -120,7 +144,7 @@ def sample(arm, scene, first: int, last: int) -> dict:
     """Per frame, world positions of the body's bones (head, tail) and the top
     bone's pose matrix (armature space). Leaves the scene on its frame."""
     B = bones(arm)
-    top = next(pb for pb in arm.pose.bones if pb.parent is None)
+    top = _top(arm)
     keep = scene.frame_current
     mw = arm.matrix_world
     heads = {k: [] for k in B}
@@ -866,7 +890,7 @@ def restore(arm, action) -> bool:
     the artist set on the root since (see :func:`_artist_edits`)."""
     if arm is None or not is_applied(action):
         return False
-    top = next((pb for pb in arm.pose.bones if pb.parent is None), None)
+    top = _top(arm)
     saved = json.loads(action[BACKUP_KEY])["keys"]
     curves = _root_curves(action, top.name) if top is not None else {}
     edits, deleted = _artist_edits(action, top, curves)
@@ -1068,7 +1092,7 @@ def apply(arm, action, scene, spans, fps: float | None = None, *, reuse: bool = 
         print(f"[Animatica] In place: {why}")
         return []
     restore(arm, action)
-    top = next((pb for pb in arm.pose.bones if pb.parent is None), None)
+    top = _top(arm)
     if top is None:
         return []
     fps = fps or scene.render.fps / scene.render.fps_base

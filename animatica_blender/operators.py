@@ -964,6 +964,7 @@ def _bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int,
     # control-rig hand-off, only bake_gltf_to_armature does.
     # However many blocks the take has: next to a locked block, a fresh bake
     # would carry only the artist's own keys over and drop the locked motion.
+    prof = None                     # the control-rig profile a fresh bake keys the take through
     spliced = (
         splice_target is not None
         and not request_builder.is_control_rig(arm)
@@ -998,6 +999,12 @@ def _bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int,
         if "animatica_loop" in action:
             del action["animatica_loop"]
     else:
+        # A rig whose controls carry the take: its limbs' IK/FK mode as it stands, which the
+        # frames outside the take keep (control_bake.hold_outside, once they are carried in).
+        prof = gltf_to_blender.control_profile(arm)
+        if prof is not None:
+            from . import control_bake
+            modes_before = control_bake.switches(arm, prof)
         action = gltf_to_blender.bake_gltf_to_armature(
             result,
             arm,
@@ -1040,6 +1047,13 @@ def _bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int,
         if carried:
             print(f"[animatica] carried {carried} authored key(s) from "
                   f"outside {gen_start}..{gen_end} into the preview")
+    if not spliced and prof is not None:
+        from . import control_bake
+        control_bake.hold_outside(
+            arm, prof, action,
+            control_bake.switches_in(arm, prof, src_action, gen_start - 1, modes_before),
+            control_bake.switches_in(arm, prof, src_action, gen_end + 1, modes_before),
+            gen_start, gen_end)
 
     # Pins land where they were put, on this rig, whatever the server's
     # retarget did to them (see pin_fix).

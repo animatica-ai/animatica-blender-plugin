@@ -26,8 +26,24 @@ among them.
 
 ## Control rigs
 
-Takes can be baked onto a control rig only for **Rigify** and the **Mixamo
-Control Rig**. Other control rigs get the motion on their deform bones.
+Takes are keyed on the controls of **Rigify**, **Auto-Rig Pro**, **CloudRig**
+and **Mixamo Control Rig** rigs, and of any rig connected with Marionette's
+Rig Connection. Other control rigs get the motion on their deform bones, which
+their constraints override, so it doesn't show: connect the rig in Marionette
+first.
+
+On Rigify, Auto-Rig Pro and CloudRig, arms and legs are keyed in FK over the
+take. Rigify's IK is matched to it on every frame; Auto-Rig Pro's and
+CloudRig's IK controls are left where they were.
+Rigify's FK spine turns about the middle of its bones, so the spine lands a few
+millimetres short of the take.
+
+The model has no fingers. A take leaves a control rig's finger controls as they
+are, and the **Hand Pose** setting only reaches fingers named the Mixamo way
+(``LeftHandIndex1``).
+
+On a Mixamo Control Rig, **In place** and **Loop**'s spot don't move the take
+yet.
 
 ## Loop needs one block
 
