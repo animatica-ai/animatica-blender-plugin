@@ -467,6 +467,11 @@ def _inplace_spans(armature_obj, action) -> list:
     looped = action.get("animatica_loop")
     if looped is not None and "start" in looped and "cut" in looped:
         return [(int(looped["start"]), int(looped["cut"]), True)]
+    # the take, not the artist's keys carried in either side of it (a control rig's take holds
+    # its top control there as it stood: fitted with them, In place left the hips 1.5 m off)
+    took = armature_obj.get("animatica_take_range")
+    if took is not None and len(took) == 2 and _is_motion_bake_action(action):
+        return [(int(took[0]), int(took[1]), False)]
     lo, hi = action.frame_range
     return [(int(round(lo)), int(round(hi)), False)]
 
@@ -795,6 +800,9 @@ class ANIMATICA_OT_connect(Operator):
 GENERATION_OPERATORS = (
     "animatica.generate", "animatica.generate_pose",
     "animatica.regenerate_block", "animatica.generate_batch",
+    # waits on the server's /retarget the same way: left out, an undo or redo while it waited
+    # cleared "generating", and the bar offered everything again with the paste still running
+    "animatica.paste_motion",
 )
 
 
@@ -1054,6 +1062,10 @@ def _bake_take(context, settings, arm, result, *, prompt_blocks, gen_start: int,
             control_bake.switches_in(arm, prof, src_action, gen_start - 1, modes_before),
             control_bake.switches_in(arm, prof, src_action, gen_end + 1, modes_before),
             gen_start, gen_end)
+        # and the controls the take keys that the artist's animation either side does not (the
+        # top control, which carries the take's travel): held there as they stood
+        session = preview_session.get(arm) or {}
+        control_bake.hold_outside_curves(arm, action, session.get("pose") or {}, gen_start, gen_end)
 
     # Pins land where they were put, on this rig, whatever the server's
     # retarget did to them (see pin_fix).

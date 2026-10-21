@@ -19,8 +19,8 @@ Proscenium, and keep the identifiers those releases actually shipped.
   stayed where they started. A take, a pasted clip and a generated pose are now keyed on the rig's
   own controls, the way Marionette poses it, and land exactly on every joint. This covers Rigify and
   Auto-Rig Pro, and CloudRig and rigs connected in Marionette through the same profiles. Arms and
-  legs are keyed in FK; on Rigify the IK is matched on every frame, so switching a limb back to IK
-  doesn't jump. Outside the take each
+  legs are keyed in FK; on Rigify and Auto-Rig Pro the IK is matched on every frame, so switching
+  a limb back to IK doesn't jump. Outside the take each
   limb stays in the mode it had, the controls keep their rotation modes, and Discard puts the
   IK/FK switches back.
 - **Regenerate Block on a control rig.** The block's control keys were wiped and only deform keys
@@ -32,13 +32,21 @@ Proscenium, and keep the identifiers those releases actually shipped.
   moved, counts for Regenerate Block too.
 - **Set Key Pose on a control rig** keys the controls, and a posed control rig is no longer taken
   for the rest pose.
-- **In place, Loop and waypoints on a control rig.** In place moves the rig's top control (Rigify's
-  `root`, Auto-Rig Pro's `c_pos`), which a take now keys. The start spot, the ground and waypoints
-  read where the hips are, not the rig's root control on the floor.
+- **In place, Loop and waypoints on a control rig.** A take's travel is now keyed on the rig's top
+  control (Rigify's `root`, Auto-Rig Pro's `c_pos`), where a plain rig carries it in its root
+  bone, so In place takes it out and a loop repeats it. A loop on Auto-Rig Pro wasn't made a cycle
+  at all, and on Rigify it snapped back every cycle. In place takes out the take's travel only, not
+  that of the animation either side of it. The start spot, the ground and waypoints read where the
+  hips are, not the rig's root control on the floor.
+- **A take next to your own animation on a control rig leaves it as it was.** The controls the take
+  keys and your animation doesn't are held as they stood either side of the take, so the frames
+  outside it don't move.
 - **Paste Motion onto Auto-Rig Pro** writes the finger controls, and limbs outside the pasted
   stretch keep their IK/FK mode.
 - **A control rig keeps its hand pose.** The model has no fingers, and a take no longer flattens
   the finger controls.
+- **Paste Motion stays busy through an undo.** An undo or redo while a paste waited on the server
+  cleared the bar's "working" state, with the paste still running.
 
 ## [1.0.10] — 2026-10-20
 

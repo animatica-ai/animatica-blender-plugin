@@ -26,6 +26,8 @@ the answer baked on as on any plain rig. Per rig:
   (not the rest pose) and keys the controls;
 * Regenerate Block: the block's frames the new answer's, the frames either side the take's;
 * In place: the travel out through the rig's top control, the body's motion kept, and back;
+* Loop (the server's cycle): made a cycle on the controls, held on the spot by In place, and
+  walking on a cycle's travel a cycle with it off;
 * Paste Motion (the server's answer as if retargeted): each copied key's pose on the controls
   (Auto-Rig Pro's finger controls are deform bones too, and were skipped), the limbs' mode
   before the pasted stretch as it was, and no key after it where the action has nothing.
@@ -62,13 +64,14 @@ RIGS = {
                    reply="rigify.json", profile="Rigify", ik_matched=True,
                    ends=["DEF-hand.L", "DEF-foot.R"], tol=0.01,
                    spine=[f"DEF-spine.{i:03d}" for i in range(1, 7)] + ["DEF-spine"], finger="f_index.02.L",
-                   ik_hand="hand_ik.L"),
+                   ik_hand="hand_ik.L", loop_reply="rigify-loop.json"),
     "Auto-Rig Pro": dict(blend=os.environ.get("ARP_BLEND", os.path.join(TESTS, "arp_control_rig.blend")),
-                         reply="arp.json", profile="Auto-Rig Pro", ik_matched=False,
-                         ends=["hand.l", "foot.r"], tol=0.005, finger="c_index2.l", ik_hand="c_hand_ik.l"),
+                         reply="arp.json", profile="Auto-Rig Pro", ik_matched=True,
+                         ends=["hand.l", "foot.r"], tol=0.005, finger="c_index2.l", ik_hand="c_hand_ik.l",
+                         loop_reply="arp-loop.json"),
     "Auto-Rig Pro (Animatica's character)": dict(
         blend=os.environ.get("ARP_HERO_BLEND", os.path.join(TESTS, "arp_hero.blend")),
-        reply="arp-hero.json", profile="Auto-Rig Pro", ik_matched=False, ends=["hand.l", "foot.r"], tol=0.005,
+        reply="arp-hero.json", profile="Auto-Rig Pro", ik_matched=True, ends=["hand.l", "foot.r"], tol=0.005,
         ik_hand="c_hand_ik.l"),
     "Mixamo Rig": dict(blend=os.environ.get("MIXAMO_RIG_BLEND", os.path.join(TESTS, "mixamo_control_rig.blend")),
                        reply="mixamo.json", profile=None, ik_matched=False,
@@ -385,6 +388,53 @@ def run(label, spec):
               frames_keyed[-1] == done["frames"][-1], f"last key {frames_keyed[-1]}, last pasted {done['frames'][-1]}")
 
 
+def run_loop(label, spec):
+    """A looped take (the server's cycle): made a cycle on the controls, held on the spot by In
+    place, and travelling a cycle's length a cycle with it off."""
+    clear()
+    scene = bpy.context.scene
+    arm = load_rig(spec["blend"])
+    gltf = json.load(open(os.path.join(REPLIES, spec["loop_reply"])))
+    s = scene.animatica
+    s.target_armature = arm
+    s.loop = True                       # and In place with it, as Loop sets it
+    s.inplace = True
+    s.prompt_blocks.clear()
+    b = s.prompt_blocks.add()
+    b.prompt, b.frame_start, b.frame_end = "a person walks forward", 1, 60
+    select(arm)
+    bpy.ops.object.mode_set(mode='POSE')
+    action, _ = operators.bake_take(bpy.context, s, arm, gltf, prompt_blocks=s.prompt_blocks, gen_start=1,
+                                    gen_end=60, anchor_frames=set(), server_looped=True)
+    looped = dict(action.get("animatica_loop") or {})
+    check(f"{label}: a looped take is made a cycle", bool(looped), f"{looped}")
+    if not looped:
+        return
+    first, cut = int(looped["start"]), int(looped["cut"])
+    tree = request_builder.request_tree(arm)
+    names = [n for n in tree if not any(k in n for k in ("f_", "thumb", "palm", "index", "middle", "ring", "pinky"))]
+    hips = next(n for n, p in tree.items() if p is None)
+    scene.frame_set(first)
+    a = heads(arm, names)
+    scene.frame_set(cut)
+    c = heads(arm, names)
+    seam = max(((c[n] - c[hips]) - (a[n] - a[hips])).length for n in names)
+    check(f"{label}: ...its last frame is its first again (the pose)", seam < 0.03, f"{seam * 100:.1f} cm")
+    held = (c[hips] - a[hips]).to_2d().length
+    check(f"{label}: ...held on the spot by In place", held < 0.2, f"{held * 100:.0f} cm over a cycle")
+    s.inplace = False
+    operators._apply_inplace_constraint(arm, enabled=False)
+    scene.frame_set(first)
+    a = heads(arm, [hips])[hips]
+    scene.frame_set(cut)
+    c = heads(arm, [hips])[hips]
+    scene.frame_set(cut + (cut - first))
+    d = heads(arm, [hips])[hips]
+    one, two = (c - a).to_2d().length, (d - a).to_2d().length
+    check(f"{label}: ...and with In place off it walks on, cycle after cycle", one > 1.0 and abs(two - 2 * one) < 0.2,
+          f"{one:.2f} m a cycle, {two:.2f} m two")
+
+
 def main():
     if not os.path.isdir(REPLIES):
         print(f"SKIP: no answers in {REPLIES}")
@@ -398,6 +448,12 @@ def main():
         except Exception:                               # noqa: BLE001
             traceback.print_exc()
             FAILS.append(f"{label}: raised")
+        if spec.get("loop_reply") and os.path.exists(os.path.join(REPLIES, spec["loop_reply"])):
+            try:
+                run_loop(label, spec)
+            except Exception:                           # noqa: BLE001
+                traceback.print_exc()
+                FAILS.append(f"{label}: loop raised")
     print(f"\n{len(FAILS)} failed" + (": " + ", ".join(FAILS) if FAILS else ""))
     return 1 if FAILS else 0
 

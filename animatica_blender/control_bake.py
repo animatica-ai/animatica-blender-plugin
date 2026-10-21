@@ -10,8 +10,8 @@ Auto-Rig Pro's IK/FK blend chain) is given the pose of the deform bone that sits
 controls are set to that frame by frame and keyed (`control_rig.write`, `control_rig.key`): FK,
 and where the profile describes a limb's IK (Rigify's) the IK matched to the same pose and keyed
 too, so switching the limb back to IK at any frame shows the same pose. The deform keys are taken
-off again, and the rig's top control is keyed as it stands, for In place, a loop and a path to
-move the take through (`top`).
+off again, and the take's travel goes into the rig's top control, as a plain rig carries it in
+its root bone, for In place, a loop and a path to move the take through (`top`, `_carry_on_top`).
 
 A limb the bake switched from IK to FK keeps its switch's old value either side of the take
 where the action has animation (keyed there, constant: `hold_outside`), so frames outside it
@@ -89,6 +89,25 @@ def top(arm, prof) -> str | None:
             bare.append(n)
         todo += deps
     return bare[0] if bare else None
+
+
+def _carry_on_top(arm, head, mover, off) -> None:
+    """The take's travel into the top control: put under the body's control on the ground (its
+    world X and Y less ``off``, where it sits at rest), the body's control then put back where
+    it was, so nothing shows a change. The travel is then where a plain rig keeps it, in the
+    bone everything hangs from: what In place takes out, what a loop repeats with offset and a
+    path moves (on the body's control, a loop's travel snapped back every cycle)."""
+    pbs = arm.pose.bones
+    mpb, tpb = pbs[mover], pbs[head]
+    mw = arm.matrix_world
+    M = mpb.matrix.copy()
+    body = mw @ M.translation
+    T = mw @ tpb.matrix
+    T.translation.x, T.translation.y = body.x - off.x, body.y - off.y
+    tpb.matrix = mw.inverted() @ T
+    bpy.context.view_layer.update()
+    control_rig._set_to(arm, mpb, M)
+    bpy.context.view_layer.update()
 
 
 def _key_top(arm, name, frame) -> None:
@@ -276,6 +295,42 @@ def hold_outside(arm, prof, action, left: dict, right: dict, f0: int, f1: int) -
         fc.update()
 
 
+_SNAPSHOT = {"location": "loc", "rotation_quaternion": "quat", "rotation_euler": "euler",
+             "rotation_axis_angle": "aa", "scale": "scale"}
+
+
+def hold_outside_curves(arm, action, pose: dict, f0: int, f1: int, only=None) -> int:
+    """A control's curve with keys only from ``f0`` to ``f1`` (a take's, a paste's) held just
+    outside them at the value it had before (``pose``: `preview_session._pose_snapshot`), on a
+    side where ``action`` has animation of its own -- or it carries its first or last value over
+    those frames: the travel a take keys on the top control moved a kick before it by 1.7 cm.
+    ``only``: the ``(data path, index)`` curves to look at (default all). The keys added."""
+    curves = list(_bake_common.action_fcurves(action, arm) or ())
+    before = after = False
+    for fc in curves:
+        xs = [kp.co.x for kp in fc.keyframe_points]
+        before = before or any(x < f0 - 0.5 for x in xs)
+        after = after or any(x > f1 + 0.5 for x in xs)
+    added = 0
+    for fc in curves:
+        dp = fc.data_path
+        if not dp.startswith('pose.bones["') or (only is not None and (dp, fc.array_index) not in only):
+            continue
+        bone, prop = dp.split('"')[1], dp.rsplit(".", 1)[-1]
+        key = _SNAPSHOT.get(prop)
+        was = (pose.get(bone) or {}).get(key) if key else None
+        if was is None or fc.array_index >= len(was):
+            continue
+        xs = [kp.co.x for kp in fc.keyframe_points]
+        for f, side, outside in ((f0 - 1, before, any(x < f0 - 0.5 for x in xs)),
+                                 (f1 + 1, after, any(x > f1 + 0.5 for x in xs))):
+            if side and not outside:
+                fc.keyframe_points.insert(f, float(was[fc.array_index]), options={'FAST'})
+                added += 1
+        fc.update()
+    return added
+
+
 def switches_in(arm, prof, action, frame: int, fallback: dict) -> dict:
     """Each limb's switch as ``action`` keys it at ``frame``, or ``fallback``'s where it has no
     curve for it."""
@@ -346,6 +401,12 @@ def bake(arm, prof, action, frame_start: int, frame_end: int, *, joints=None, be
     right = _switches_at(arm, prof, frames[-1] + 1)
     worst = 0.0
     head = top(arm, prof) if joints is None else None
+    mover = prof.controls(arm)[0][0] if head is not None else None
+    bones = arm.data.bones
+    if mover is not None and (mover == head or any(arm.pose.bones[head].lock_location[:2])):
+        mover = None                                    # nothing to carry it in
+    off = (arm.matrix_world @ bones[mover].head_local) - (arm.matrix_world @ bones[head].head_local) \
+        if mover is not None else None
     # the correction passes, while they help this rig: checked again every RECHECK frames
     passes, stats = 3, {}
     control_rig.SWITCHED.pop(arm.name, None)
@@ -360,6 +421,8 @@ def bake(arm, prof, action, frame_start: int, frame_end: int, *, joints=None, be
             worst = max(worst, control_rig.write(arm, prof, want, passes=n, stats=stats))
             if n > 1:
                 passes = 1 if stats.get("pass") == 0 else 3
+            if mover is not None:
+                _carry_on_top(arm, head, mover, off)
             control_rig.key(arm, prof, f, match_modes=True)
             if head is not None:
                 _key_top(arm, head, f)

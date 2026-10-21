@@ -424,6 +424,14 @@ def bake_result(copied: dict[str, Any], gltf: dict[str, Any], target, at_frame: 
                 if switch:
                     _hold_switch(fc, edges)
         written.add(bone)
+    if skip:
+        # a control rig: a control the paste keyed that the action never had (the top control,
+        # which carries the travel) held either side of the stretch as it stood, on a side the
+        # action has animation on
+        from . import control_bake
+        new = {(fc.data_path, fc.array_index) for fc in constraints_ui.iter_action_fcurves(own, target)
+               if (fc.data_path, fc.array_index) not in had and '"][' not in fc.data_path}
+        control_bake.hold_outside_curves(target, own, pose, frames[0], frames[-1], only=new)
     _bake_common.group_curves(own)
     return {"action": own, "frames": frames, "joints": len(written), "kept": len(kept - written)}
 

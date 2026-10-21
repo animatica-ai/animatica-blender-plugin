@@ -33,8 +33,8 @@ their constraints override, so it doesn't show: connect the rig in Marionette
 first.
 
 On Rigify, Auto-Rig Pro and CloudRig, arms and legs are keyed in FK over the
-take. Rigify's IK is matched to it on every frame; Auto-Rig Pro's and
-CloudRig's IK controls are left where they were.
+take. Rigify's and Auto-Rig Pro's IK is matched to it on every frame, so a limb
+switched back to IK stays put; CloudRig's IK controls are left where they were.
 Rigify's FK spine turns about the middle of its bones, so the spine lands a few
 millimetres short of the take.
 
