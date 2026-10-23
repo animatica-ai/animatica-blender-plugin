@@ -1171,16 +1171,35 @@ def _connect_joined_bones(deform: set[str], parent_map: dict[str, str | None],
     hand came out under the chest, the foot under the pelvis, the upper arm on its own -- and the
     server could not read the rig as a body. The rest pose still says how the body goes together:
     each of those bones starts exactly where the one before it ends. So where the walk's parent
-    ends far from where a bone starts -- further than either bone is long: the walk skipped
+    ends far from where a bone starts -- further than the bone itself is long: the walk skipped
     something -- and another deform bone ends exactly there, the bone hangs off that one. A walk
     parent near the bone is kept (Rigify's fingers start a little past the hand, at the ends of
     their palm bones, and stay on the hand), and a bone joined to nothing keeps whatever the walk
-    found (a shoulder starts beside the chest, not at its end)."""
+    found (a shoulder starts beside the chest, not at its end).
+
+    One exception to near: a bone that starts exactly where a SIBLING ends -- another bone the
+    walk hung from the same parent -- that itself starts nearer the parent's end than the bone
+    does, continues the chain through that sibling, and hangs off it. Auto-Rig Pro's upper arm
+    and its shoulder both walk to the chest, the shoulder starting at the chest's top; on a rig
+    with a long chest (two spine bones, 26 cm) the chest's end, 17 cm from the shoulder joint,
+    counted as near, the arms stayed on the chest past the shoulders, and the server leaned
+    every take 10 degrees, the shoulders 14 off level. Rigify's palm bones end where its fingers
+    start too, but start back at the wrist, a hand's length from its end: the fingers stay on
+    the hand."""
+    walked = dict(parent_map)
     for name in sorted(deform):
         h = head_w[name]
         length = max((tail_w[name] - h).length, 1e-6)
         tol = _JOINED * length
         cur = parent_map.get(name)
+        if cur is not None:
+            gap = (h - tail_w[cur]).length
+            twin = next((o for o in sorted(deform) if o != name and walked.get(o) == cur
+                         and (tail_w[o] - h).length <= tol and (head_w[o] - tail_w[cur]).length < gap
+                         and not _hangs_under(name, o, parent_map)), None)
+            if twin is not None:
+                parent_map[name] = twin
+                continue
         if cur is not None and (tail_w[cur] - h).length <= max(length, (tail_w[cur] - head_w[cur]).length):
             continue
         best, best_d = None, tol

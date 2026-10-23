@@ -45,6 +45,10 @@ Proscenium, and keep the identifiers those releases actually shipped.
   stretch keep their IK/FK mode.
 - **A control rig keeps its hand pose.** The model has no fingers, and a take no longer flattens
   the finger controls.
+- **Takes on an Auto-Rig Pro rig with a long chest no longer lean.** On a rig with two spine
+  bones, the skeleton sent hung the arms from the chest instead of the shoulders, and the server
+  leaned every take: the shoulders about 14 degrees off level, the spine 10. The arms now hang from
+  the shoulders, and the take stands like the same character on a plain rig.
 - **Paste Motion stays busy through an undo.** An undo or redo while a paste waited on the server
   cleared the bar's "working" state, with the paste still running.
 

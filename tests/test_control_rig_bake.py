@@ -64,15 +64,17 @@ RIGS = {
                    reply="rigify.json", profile="Rigify", ik_matched=True,
                    ends=["DEF-hand.L", "DEF-foot.R"], tol=0.01,
                    spine=[f"DEF-spine.{i:03d}" for i in range(1, 7)] + ["DEF-spine"], finger="f_index.02.L",
-                   ik_hand="hand_ik.L", loop_reply="rigify-loop.json"),
+                   ik_hand="hand_ik.L", loop_reply="rigify-loop.json",
+                   arms=[("DEF-upper_arm.L", "DEF-shoulder.L"), ("DEF-upper_arm.R", "DEF-shoulder.R")]),
     "Auto-Rig Pro": dict(blend=os.environ.get("ARP_BLEND", os.path.join(TESTS, "arp_control_rig.blend")),
                          reply="arp.json", profile="Auto-Rig Pro", ik_matched=True,
                          ends=["hand.l", "foot.r"], tol=0.005, finger="c_index2.l", ik_hand="c_hand_ik.l",
-                         loop_reply="arp-loop.json"),
+                         loop_reply="arp-loop.json",
+                         arms=[("c_arm_twist_offset.l", "shoulder.l"), ("c_arm_twist_offset.r", "shoulder.r")]),
     "Auto-Rig Pro (Animatica's character)": dict(
         blend=os.environ.get("ARP_HERO_BLEND", os.path.join(TESTS, "arp_hero.blend")),
         reply="arp-hero.json", profile="Auto-Rig Pro", ik_matched=True, ends=["hand.l", "foot.r"], tol=0.005,
-        ik_hand="c_hand_ik.l"),
+        ik_hand="c_hand_ik.l", arms=[("c_arm_twist_offset.l", "shoulder.l"), ("c_arm_twist_offset.r", "shoulder.r")]),
     "Mixamo Rig": dict(blend=os.environ.get("MIXAMO_RIG_BLEND", os.path.join(TESTS, "mixamo_control_rig.blend")),
                        reply="mixamo.json", profile=None, ik_matched=False,
                        ends=["mixamorig1:LeftHand", "mixamorig1:RightFoot"], tol=0.02),
@@ -214,6 +216,11 @@ def run(label, spec):
         names = [n for n in names if n not in hand]
     check(f"{label}: its profile", (prof.name if prof else None) == spec["profile"],
           f"{prof.name if prof else None}")
+    # the arms sent hanging from the shoulders: hung from the chest past them (a long chest, two
+    # spine bones), the server leaned every take 10 degrees, the shoulders 14 off level
+    for upper, shoulder in spec.get("arms", ()):
+        check(f"{label}: {upper} hangs from {shoulder} in the skeleton sent", tree.get(upper) == shoulder,
+              f"from {tree.get(upper)}")
     modes = {pb.name: pb.rotation_mode for pb in arm.pose.bones}
     before = switches(arm, prof)
     # a hand pose on a finger control, unkeyed, as an animator leaves one
