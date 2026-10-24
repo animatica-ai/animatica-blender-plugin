@@ -589,9 +589,19 @@ def build_request_for_block(
     # every bone using each bone's current value, so most KEYFRAME-typed
     # kps have values identical to the surrounding GENERATED frames; only
     # bones with a real value delta count as user edits.
+    #
+    # On a rig whose controls carry the take, the artist edits controls -- a hand's IK target
+    # moved as much as an FK arm turned -- and the key pins the joints they move.
+    from . import gltf_to_blender
+    prof = gltf_to_blender.control_profile(armature_obj)
     edited_bones_by_frame = _user_edited_bones_per_frame(
         preview_action, block_start, block_end,
+        channels=("rotation", "location") if prof is not None else ("rotation",),
     )
+    if prof is not None:
+        from . import control_bake
+        edited_bones_by_frame = {f: hit for f, bones in edited_bones_by_frame.items()
+                                 if (hit := control_bake.moved_by(armature_obj, prof, bones))}
     # Frames the artist kept from the take: held whole, though their values
     # are the take's own (which is why the edit test above passes them over).
     from .pose_edit import kept_frames
@@ -1161,16 +1171,35 @@ def _connect_joined_bones(deform: set[str], parent_map: dict[str, str | None],
     hand came out under the chest, the foot under the pelvis, the upper arm on its own -- and the
     server could not read the rig as a body. The rest pose still says how the body goes together:
     each of those bones starts exactly where the one before it ends. So where the walk's parent
-    ends far from where a bone starts -- further than either bone is long: the walk skipped
+    ends far from where a bone starts -- further than the bone itself is long: the walk skipped
     something -- and another deform bone ends exactly there, the bone hangs off that one. A walk
     parent near the bone is kept (Rigify's fingers start a little past the hand, at the ends of
     their palm bones, and stay on the hand), and a bone joined to nothing keeps whatever the walk
-    found (a shoulder starts beside the chest, not at its end)."""
+    found (a shoulder starts beside the chest, not at its end).
+
+    One exception to near: a bone that starts exactly where a SIBLING ends -- another bone the
+    walk hung from the same parent -- that itself starts nearer the parent's end than the bone
+    does, continues the chain through that sibling, and hangs off it. Auto-Rig Pro's upper arm
+    and its shoulder both walk to the chest, the shoulder starting at the chest's top; on a rig
+    with a long chest (two spine bones, 26 cm) the chest's end, 17 cm from the shoulder joint,
+    counted as near, the arms stayed on the chest past the shoulders, and the server leaned
+    every take 10 degrees, the shoulders 14 off level. Rigify's palm bones end where its fingers
+    start too, but start back at the wrist, a hand's length from its end: the fingers stay on
+    the hand."""
+    walked = dict(parent_map)
     for name in sorted(deform):
         h = head_w[name]
         length = max((tail_w[name] - h).length, 1e-6)
         tol = _JOINED * length
         cur = parent_map.get(name)
+        if cur is not None:
+            gap = (h - tail_w[cur]).length
+            twin = next((o for o in sorted(deform) if o != name and walked.get(o) == cur
+                         and (tail_w[o] - h).length <= tol and (head_w[o] - tail_w[cur]).length < gap
+                         and not _hangs_under(name, o, parent_map)), None)
+            if twin is not None:
+                parent_map[name] = twin
+                continue
         if cur is not None and (tail_w[cur] - h).length <= max(length, (tail_w[cur] - head_w[cur]).length):
             continue
         best, best_d = None, tol
@@ -1342,12 +1371,35 @@ def main_root(armature_obj: bpy.types.Object) -> bpy.types.PoseBone | None:
     """The bone whose place says where the character stands, for the start
     anchor and the ground: the rig's first root bone, as it always was, but on
     a plain rig with several, the body's (`_body_bones`), not a weapon or a
-    ``root_motion`` bone that happens to come first."""
+    ``root_motion`` bone that happens to come first. On a control rig, the
+    root of the tree sent (its hips): the joint the server's root position is
+    of, where the rig's own first root is a control on the floor that a take
+    does not move."""
+    if is_control_rig(armature_obj):
+        root = next((n for n, p in request_tree(armature_obj).items() if p is None), None)
+        if root is not None and root in armature_obj.pose.bones:
+            return armature_obj.pose.bones[root]
     roots = [pb for pb in armature_obj.pose.bones if pb.parent is None]
     if len(roots) > 1 and not _filters_to_deform(armature_obj, emitted_deform_bones(armature_obj)):
         body = _body_bones(armature_obj)
         return next(pb for pb in roots if pb.name in body)
     return roots[0] if roots else None
+
+
+def top_bone(armature_obj: bpy.types.Object) -> bpy.types.PoseBone | None:
+    """The bone that carries the whole character, which In place, a loop and a
+    path move: the rig's first root bone; on a rig whose controls carry the
+    take (`gltf_to_blender.control_profile`), the control its body control
+    hangs from at the top (Rigify's ``root``, Auto-Rig Pro's ``c_pos``), which
+    the take keys for them (`control_bake.top`)."""
+    from . import gltf_to_blender
+    prof = gltf_to_blender.control_profile(armature_obj)
+    if prof is not None:
+        from . import control_bake
+        name = control_bake.top(armature_obj, prof)
+        if name is not None:
+            return armature_obj.pose.bones[name]
+    return next((pb for pb in armature_obj.pose.bones if pb.parent is None), None)
 
 
 def left_behind(armature_obj: bpy.types.Object) -> list[str]:
@@ -1690,6 +1742,7 @@ def _user_edited_bones_per_frame(
     action: bpy.types.Action | None,
     frame_start: int,
     frame_end: int,
+    channels: tuple[str, ...] = ("rotation",),
 ) -> dict[int, set[str]]:
     """Map each user-keyed frame inside ``[frame_start, frame_end]`` to the
     set of bones the user *actually* rotated at that frame.
@@ -1718,6 +1771,9 @@ def _user_edited_bones_per_frame(
     is a tight delta check. For sparse anchors (a kp with no surrounding
     GENERATED neighbours), the bone is conservatively flagged as edited —
     we can't disprove the user's intent, so we honour it.
+
+    ``channels``: the curves that count, by their property's name (the
+    rotations; on a control rig the locations too, an IK target moved).
     """
     if action is None:
         return {}
@@ -1729,7 +1785,7 @@ def _user_edited_bones_per_frame(
     kp_value_at: dict[tuple[str, int, int], float] = {}  # (bone, frame, axis) -> value
 
     for fc in constraints_ui.iter_action_fcurves(action):
-        if "rotation" not in fc.data_path:
+        if not any(c in fc.data_path.rsplit(".", 1)[-1] for c in channels):
             continue
         bone = constraints_ui._bone_name_from_data_path(fc.data_path)
         if bone is None:

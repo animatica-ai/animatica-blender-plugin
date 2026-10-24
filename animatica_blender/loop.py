@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 
-from mathutils import Quaternion, Vector
+from mathutils import Euler, Quaternion, Vector
 
 
 def _bone_curves(action):
@@ -41,14 +41,30 @@ def _bone_curves(action):
     return {k: [v[i] for i in sorted(v)] for k, v in out.items()}
 
 
-def _quat(fcs, f):
-    return Quaternion([fc.evaluate(f) for fc in fcs])
+def _quat(fcs, f, mode='QUATERNION'):
+    """The rotation ``fcs`` key at *f*: four quaternion curves, or three Euler ones in *mode*."""
+    if mode == 'QUATERNION':
+        return Quaternion([fc.evaluate(f) for fc in fcs])
+    return Euler([fc.evaluate(f) for fc in fcs], mode).to_quaternion()
 
 
 def _seam(rots, a, b):
     """Summed joint rotation difference between frames *a* and *b*, degrees."""
-    return math.degrees(sum(2.0 * math.acos(min(1.0, abs(_quat(fcs, a).dot(_quat(fcs, b)))))
-                            for fcs in rots))
+    return math.degrees(sum(2.0 * math.acos(min(1.0, abs(_quat(fcs, a, m).dot(_quat(fcs, b, m)))))
+                            for fcs, m in rots))
+
+
+def _rotations(arm, curves):
+    """``[(fcurves, rotation mode)]``: each bone's quaternion curves, and its Euler ones (a
+    control rig's controls keep their own mode: Auto-Rig Pro's are Euler)."""
+    out = [(fcs, 'QUATERNION') for (bone, prop), fcs in curves.items()
+           if prop == "rotation_quaternion" and len(fcs) == 4]
+    for (bone, prop), fcs in curves.items():
+        pb = arm.pose.bones.get(bone)
+        if prop == "rotation_euler" and len(fcs) == 3 and pb is not None and pb.rotation_mode not in (
+                'QUATERNION', 'AXIS_ANGLE'):
+            out.append((fcs, pb.rotation_mode))
+    return out
 
 
 def _set(fc, frame, value):
@@ -73,11 +89,11 @@ def apply(arm, action, frame_range) -> dict:
     if cut - lo < 8:
         return {}
     curves = _bone_curves(action)
-    rots = [fcs for (bone, prop), fcs in curves.items()
-            if prop == "rotation_quaternion" and len(fcs) == 4]
+    rots = _rotations(arm, curves)
     if not rots:
         return {}
-    root = next((pb for pb in arm.pose.bones if pb.parent is None), None)
+    from .request_builder import top_bone
+    root = top_bone(arm)
     root_loc = curves.get((root.name, "location")) if root is not None else None
     if root_loc is not None and len(root_loc) != 3:
         root_loc = None
@@ -135,7 +151,8 @@ def close_root(arm, action) -> None:
     on a root bone that rests tilted, where one of its own channels carries
     both travel and height.
     """
-    root = next((pb for pb in arm.pose.bones if pb.parent is None), None)
+    from .request_builder import top_bone
+    root = top_bone(arm)
     loc = _bone_curves(action).get((root.name, "location")) if root is not None else None
     if not loc or len(loc) != 3:
         return
@@ -168,13 +185,15 @@ def place(arm, action, frame_range, spot) -> float:
     moves onto *spot* (world X and Y), and every key of the root's location
     moves by the same offset. The height stays. The root is the one the bake
     writes its travel to (``request_builder.main_root``), which on a rig with
-    several root bones is not always the first.
+    several root bones is not always the first; on a rig whose controls carry
+    the take, the control at its top, keyed with it (``top_bone``).
     """
     if arm is None or action is None:
         return 0.0
-    from .request_builder import main_root
+    from .gltf_to_blender import control_profile
+    from .request_builder import main_root, top_bone
 
-    root = main_root(arm)
+    root = top_bone(arm) if control_profile(arm) is not None else main_root(arm)
     loc = _bone_curves(action).get((root.name, "location")) if root is not None else None
     if not loc or len(loc) != 3:
         return 0.0
@@ -213,8 +232,10 @@ def _straighten(arm, root, curves, lo, cut) -> float:
     left alone.
     """
     loc = curves.get((root.name, "location"))
-    rot = curves.get((root.name, "rotation_quaternion"))
-    if not loc or len(loc) != 3 or not rot or len(rot) != 4:
+    mode = root.rotation_mode
+    rot = curves.get((root.name, "rotation_quaternion" if mode == 'QUATERNION' else "rotation_euler"))
+    if not loc or len(loc) != 3 or not rot or len(rot) != (4 if mode == 'QUATERNION' else 3) \
+            or mode == 'AXIS_ANGLE':
         return 0.0
     # World space throughout: the ground is world XY whatever the armature
     # object is turned to (an imported Mixamo rig stands rotated 90 degrees).
@@ -236,12 +257,17 @@ def _straighten(arm, root, curves, lo, cut) -> float:
     pivot = at(lo)
     pivot.z = 0.0
     turn_m = turn.to_matrix()
+    prev = None
     for f in range(lo, cut + 1):
         # Rotation: the root's world orientation is frame_q @ basis.
-        q = _quat(rot, f)
+        q = _quat(rot, f, mode)
         new = (frame_q_inv @ turn @ frame_q @ q).normalized()
         if new.dot(q) < 0:
             new.negate()
+        if mode != 'QUATERNION':
+            # in the root's own Euler order, the short way from the frame before
+            new = new.to_euler(mode, prev) if prev is not None else new.to_euler(mode, Euler([fc.evaluate(f) for fc in rot], mode))
+            prev = new
         for fc, value in zip(rot, new):
             _set(fc, f, value)
         # Location: turned about the loop's starting spot on the ground.

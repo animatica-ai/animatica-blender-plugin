@@ -212,9 +212,11 @@ def create_marker(scene, frame: int, xy, owner=None, facing=None, z=None):
 
 
 def _root_xy(arm, frame: int):
-    """Where the character's root stands at *frame*, on the ground plane."""
+    """Where the character's root stands at *frame*, on the ground plane (on a control rig,
+    its hips: the rig's first root is a control on the floor a take does not move)."""
+    from .request_builder import main_root
     scene = bpy.context.scene
-    root = next((pb for pb in arm.pose.bones if pb.parent is None), None)
+    root = main_root(arm)
     if root is None:
         return None
     keep = scene.frame_current

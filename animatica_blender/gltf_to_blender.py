@@ -243,11 +243,14 @@ def bake_gltf_to_armature(
     # after the new, empty action had replaced the user's on the rig.
     _decode_channels(channels, _input_for, _quats_for, _vec3s_for)
 
-    # Make sure pose-bone rotation modes are quaternion (we're feeding quats).
+    # Make sure pose-bone rotation modes are quaternion (we're feeding quats). Not on a rig whose
+    # controls carry the take (`control_profile`): its deform keys are only read back, and its
+    # controls are keyed in the modes the animator set.
     pose = armature_obj.pose
     _ns = bone_namespace(pose)
-    for pb in pose.bones:
-        pb.rotation_mode = 'QUATERNION'
+    if control_profile(armature_obj) is None:
+        for pb in pose.bones:
+            pb.rotation_mode = 'QUATERNION'
 
     # Fresh Action.
     if armature_obj.animation_data is None:
@@ -456,8 +459,12 @@ def splice_gltf_into_action(
         for pb in pose.bones
     }
 
-    for pb in pose.bones:
-        pb.rotation_mode = 'QUATERNION'
+    # Not on a rig whose controls carry the take (`control_profile`): its controls' curves are
+    # in the modes the animator set, and its deform keys are only read back.
+    prof = control_profile(armature_obj)
+    if prof is None:
+        for pb in pose.bones:
+            pb.rotation_mode = 'QUATERNION'
 
     rotations = _RotationBaker(armature_obj, nodes)
     arm_world_inv = armature_obj.matrix_world.inverted()
@@ -563,6 +570,12 @@ def splice_gltf_into_action(
             delta     = arm_local - rest_head
             bone.location = ML_T @ delta
             bone.keyframe_insert(data_path="location", frame=frame)
+
+    # Step 2b — on a rig whose controls carry the take, the window's deform keys put on its
+    # controls (the window's control keys were wiped with the rest in step 1b).
+    if prof is not None:
+        _bake_to_control_rig(armature_obj, source_action=action,
+                             frame_start=fs_target, frame_end=fe_target)
 
     # Step 3 — restore the user-authored keys captured in step 1a. We insert
     # AFTER gltf so that at frames the model also wrote (very likely — the
@@ -1119,113 +1132,16 @@ def _detect_control_rig_kind(armature_obj: bpy.types.Object) -> str | None:
     return None
 
 
-def _find_associated_metarig(rig_obj: bpy.types.Object) -> bpy.types.Object | None:
-    """Find the metarig that ``rig_obj`` was generated from, if it still
-    exists in the scene. Rigify stamps ``metarig.data.rigify_target_rig``
-    with the generated rig's object when ``rigify_generate`` runs."""
-    for obj in bpy.data.objects:
-        if obj.type != 'ARMATURE' or obj is rig_obj:
-            continue
-        if getattr(obj.data, 'rigify_target_rig', None) is rig_obj:
-            return obj
-    return None
-
-
-def _bake_via_metarig_detour(
-    metarig_obj: bpy.types.Object,
-    rig_obj: bpy.types.Object,
-    *,
-    source_action: bpy.types.Action,
-    frame_start: int,
-    frame_end: int,
-) -> None:
-    """Bake using the metarig as the source instead of a rig duplicate.
-
-    The server returned animation keyed on ``DEF-*`` joints. The metarig
-    has the corresponding bare names (``DEF-spine`` ↔ ``spine``). Copy
-    fcurves over with the rename, run the standard helper-bone retarget
-    from metarig → rig, then restore the metarig's previous action.
-
-    Why bother: the metarig's chain is linear, so source pose endpoints
-    match what the server intended exactly. The rig-duplicate path has
-    to live with Rigify's bendy ``.001`` intermediaries, which introduce
-    a small per-segment offset (≈9 cm at the hand for a human rig) the
-    helper bake cannot cancel out.
-    """
-    from . import _bake_common, rigify_bake
-
-    bone_names = {pb.name for pb in metarig_obj.pose.bones}
-
-    # The retarget copies world-space transforms from the metarig's bones
-    # onto the rig's controls, and its helpers sit at the rig's rest bones
-    # by armature-local matrices, so the two objects must stand in the same
-    # place (``rigify_bake``). The metarig is usually left where it was
-    # generated while the rig is moved and turned, so it stands in for the
-    # duration of the bake exactly where the rig stands.
-    saved_meta_matrix = metarig_obj.matrix_world.copy()
-    metarig_obj.matrix_world = rig_obj.matrix_world.copy()
-
-    # Save + clear the metarig's existing action so we don't compose with it.
-    saved_meta_action = None
-    if metarig_obj.animation_data and metarig_obj.animation_data.action:
-        saved_meta_action = metarig_obj.animation_data.action
-        metarig_obj.animation_data.action = None
-    if metarig_obj.animation_data is None:
-        metarig_obj.animation_data_create()
-
-    # Stash the server keys on a fresh metarig action, renaming DEF- → bare.
-    meta_action = bpy.data.actions.new(f"{source_action.name} (metarig staging)")
-    metarig_obj.animation_data.action = meta_action
-    _bake_common.ensure_action_slot(metarig_obj.animation_data, meta_action, metarig_obj)
-
-    copied = 0
-    src_fcurves = _bake_common.action_fcurves(source_action, rig_obj)
-    if src_fcurves is not None:
-        for fc in src_fcurves:
-            dp = fc.data_path
-            if not dp.startswith('pose.bones["'):
-                continue
-            bone = dp.split('"')[1]
-            if not bone.startswith("DEF-"):
-                continue
-            bare = bone[4:]
-            if bare not in bone_names:
-                continue
-            new_dp = dp.replace(f'pose.bones["{bone}"]', f'pose.bones["{bare}"]')
-            new_fc = _bake_common.ensure_fcurve(meta_action, metarig_obj, new_dp, fc.array_index)
-            if new_fc is None:
-                continue
-            new_fc.keyframe_points.add(len(fc.keyframe_points))
-            for i, kp in enumerate(fc.keyframe_points):
-                new_fc.keyframe_points[i].co = kp.co
-                new_fc.keyframe_points[i].interpolation = kp.interpolation
-            new_fc.update()
-            copied += 1
-
-    print(f"[animatica] metarig detour: copied {copied} DEF-* fcurves to bare-name targets")
-
-    try:
-        baked = rigify_bake.apply_anim_to_rigify(
-            metarig_obj, rig_obj,
-            action=source_action,
-            frame_start=int(frame_start),
-            frame_end=int(frame_end),
-        )
-        print(f"[animatica] baked rigify control bones (via metarig): {baked}")
-    except Exception as exc:  # noqa: BLE001
-        print(f"[animatica] metarig-detour bake failed: {exc}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        # Restore the metarig to whatever it was animating before, and to
-        # where it stood.
-        metarig_obj.matrix_world = saved_meta_matrix
-        if metarig_obj.animation_data:
-            metarig_obj.animation_data.action = saved_meta_action
-        try:
-            bpy.data.actions.remove(meta_action)
-        except Exception:
-            pass
+def control_profile(armature_obj: bpy.types.Object):
+    """The `control_rig` profile a take on ``armature_obj`` is keyed through (`control_bake`):
+    a control rig of a family it knows (Rigify, Auto-Rig Pro, CloudRig) or one Marionette has
+    connected. None for any other rig, and for a Mixamo Rig, which has its own baker."""
+    if not request_builder.is_control_rig(armature_obj):
+        return None
+    if _detect_control_rig_kind(armature_obj) == "mixamo":
+        return None
+    from . import control_rig
+    return control_rig.profile(armature_obj)
 
 
 def _bake_to_control_rig(
@@ -1234,6 +1150,9 @@ def _bake_to_control_rig(
     source_action: bpy.types.Action,
     frame_start: int,
     frame_end: int,
+    joints=None,
+    before=None,
+    floor: float | None = None,
 ) -> None:
     """Bake deform-bone keyframes onto a control rig's control bones.
 
@@ -1245,34 +1164,38 @@ def _bake_to_control_rig(
     range, evaluate where the deform bones want to be and project that
     back onto the control rig.
 
-    Implementation: duplicate ``armature_obj`` into a source, mute the
-    deform-bone constraints on the source so the deform bones evaluate
-    from their own keyframes, then dispatch to a rig-specific baker that
-    sets up retarget constraints on the target rig's controls and bakes.
+    **Rigify, Auto-Rig Pro, CloudRig, rigs Marionette connected** (`control_profile`): the
+    deform keys are read back as a pose per frame and put on the rig's FK controls, the limbs'
+    IK matched (`control_bake`), exact on every joint. ``joints`` / ``before`` / ``floor`` go to
+    it (a pose generated for some bones only, stood on the ground).
 
-    **Rigify fast path** — if the rig has an associated metarig (the one
-    ``bpy.ops.pose.rigify_generate`` produced it from, discoverable via
-    ``metarig.data.rigify_target_rig``), use the metarig as the bake
-    source instead of duplicating the rig. The metarig's chain is
-    linear (no ``DEF-*.001`` bendy intermediates), so the helper-driven
-    retarget reproduces source poses exactly. The rig-duplicate fallback
-    is for rigs whose metarig has been deleted or wasn't linked.
+    The rest -- a Mixamo Rig, a Rigify rig its profile does not know: duplicate ``armature_obj``
+    into a source, mute the deform-bone constraints on the source so the deform bones evaluate
+    from their own keyframes, then dispatch to a rig-specific baker that sets up retarget
+    constraints on the target rig's controls and bakes (``mixamo_bake``, ``rigify_bake``).
+    Rigify's metarig used to stand in for that copy; its limb bones are rolled differently from
+    the rig's (Rigify turns its limbs to the bend), so the take landed turned, and with the
+    metarig hidden, as it usually is, nothing was baked at all.
     """
+    prof = control_profile(armature_obj)
+    if prof is not None:
+        from . import control_bake
+        try:
+            done = control_bake.bake(armature_obj, prof, source_action, frame_start, frame_end,
+                                     joints=joints, before=before, floor=floor)
+            print(f"[animatica] keyed {prof.name} controls: {done['frames']} frame(s), "
+                  f"{done['controls']} bones carried, worst miss {done['worst'] * 100:.1f} cm")
+        except Exception as exc:  # noqa: BLE001 -- the take keeps its deform keys
+            print(f"[animatica] control-rig bake failed: {exc}")
+            import traceback
+            traceback.print_exc()
+        return
+
     kind = _detect_control_rig_kind(armature_obj)
     if kind is None:
         print("[animatica] target armature is not a recognized control rig "
               "(no mr_control_rig or rig_id marker) — leaving DEF-bone keys")
         return
-
-    if kind == "rigify":
-        metarig = _find_associated_metarig(armature_obj)
-        if metarig is not None:
-            _bake_via_metarig_detour(
-                metarig, armature_obj,
-                source_action=source_action,
-                frame_start=frame_start, frame_end=frame_end,
-            )
-            return
 
     saved_active = bpy.context.view_layer.objects.active
     saved_mode = armature_obj.mode
@@ -1840,6 +1763,10 @@ def resolve_pose_bake_joint_names(
     out = set(selected_pose_bone_names)
     if not request_builder.is_control_rig(armature_obj):
         return _bare(out)
+    prof = control_profile(armature_obj)
+    if prof is not None:
+        from . import control_bake
+        return _bare(out | control_bake.moved_by(armature_obj, prof, out))
     specs = _build_control_specs(armature_obj)
     extras: set[str] = set()
     for name in selected_pose_bone_names:
@@ -1912,8 +1839,22 @@ def bake_single_pose(
     feet = (_feet_on_frame(armature_obj, target_frame)
             if root_translation in ("height_only", "on_ground") else None)
 
-    for pb in pose.bones:
-        pb.rotation_mode = 'QUATERNION'
+    # A rig whose controls carry the pose (`control_profile`): the pose it shows on that frame,
+    # which the bones not generated keep, and no rotation-mode change (see bake_gltf_to_armature).
+    prof = control_profile(armature_obj)
+    before = None
+    if prof is not None:
+        from . import control_bake
+        scene = bpy.context.scene
+        was = scene.frame_current
+        if was != target_frame:
+            scene.frame_set(target_frame)
+        before = {int(target_frame): control_bake.shown(armature_obj, request_builder.request_tree(armature_obj))}
+        if was != target_frame:
+            scene.frame_set(was)
+    else:
+        for pb in pose.bones:
+            pb.rotation_mode = 'QUATERNION'
 
     rotations = _RotationBaker(armature_obj, nodes)
 
@@ -1929,6 +1870,7 @@ def bake_single_pose(
     seated = None          # (root pose bone, its ML, the ground) once placed
 
     written = 0
+    written_bones: set[str] = set()
     for ch in channels:
         target = ch.get("target") or {}
         path = target.get("path")
@@ -1988,8 +1930,11 @@ def bake_single_pose(
                 seated = (bone, ML, floor)
 
         written += 1
+        written_bones.add(bone.name)
 
-    if seated is not None:
+    # On a rig the controls carry, the pose is stood on the ground as it will show, by the
+    # control bake: measured now, it would be the pose the controls still hold.
+    if seated is not None and prof is None:
         _stand_on_ground(armature_obj, *seated, target_frame)
 
     if written:
@@ -1999,6 +1944,9 @@ def bake_single_pose(
                 source_action=armature_obj.animation_data.action,
                 frame_start=int(target_frame),
                 frame_end=int(target_frame),
+                joints=written_bones if joint_name_filter is not None else None,
+                before=before,
+                floor=seated[2] if seated is not None else None,
             )
 
         # Tag every key at the pose-gen frame as authored. ``keyframe_insert``
