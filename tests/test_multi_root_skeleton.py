@@ -299,7 +299,9 @@ def test_flat_control_rig_unchanged():
 
 def test_rigify_unchanged():
     """A generated Rigify rig, skinned: the same tree as without a mesh, and
-    the start anchor still reads its ``root``."""
+    the start anchor reads the root of that tree, its hips -- the joint the
+    server's root position is of. Its first root bone, ``root``, is a control
+    on the floor: moved by ``torso``, the character stood elsewhere."""
     clear()
     if not addon_utils.enable("rigify", default_set=True):
         check("(Rigify not available: skipped)", True)
@@ -312,9 +314,8 @@ def test_rigify_unchanged():
     with_skin, without = deform_tree_with_and_without_skin(rig, mesh)
     check("Rigify: the same tree with the skin as without", with_skin == without)
     check("...rooted at DEF-spine", next(iter(with_skin)) == "DEF-spine", next(iter(with_skin)))
-    first = next(pb for pb in rig.pose.bones if pb.parent is None)
-    check("...and the start anchor still reads its first root bone",
-          request_builder.main_root(rig) == first, (request_builder.main_root(rig), first))
+    check("...and the start anchor reads its hips, the root of the tree sent",
+          request_builder.main_root(rig) == rig.pose.bones["DEF-spine"], request_builder.main_root(rig))
 
 
 def rigify_with_extra_pieces():
@@ -348,7 +349,9 @@ def test_rigify_bake_follows_the_request():
     """The server turns the body against the tree the request sent, so the copy
     the Rigify bake drives must hang every one of those joints the same way --
     though it deforms no mesh to weigh, and carries the face and tweak bones
-    the request leaves out."""
+    the request leaves out. That copy is for a Rigify rig its control-rig
+    profile does not know (a human one is keyed through its controls:
+    control_bake), so the profile is told to know none here."""
     rig, mesh = rigify_with_extra_pieces()
     if rig is None:
         check("(Rigify not available: skipped)", True)
@@ -377,11 +380,14 @@ def test_rigify_bake_follows_the_request():
         return 0
 
     rigify_bake.apply_anim_to_rigify = capture
+    known = gltf_to_blender.control_profile
+    gltf_to_blender.control_profile = lambda _arm: None
     try:
         gltf_to_blender._bake_to_control_rig(
             rig, source_action=bpy.data.actions.new("Take"), frame_start=1, frame_end=2)
     finally:
         rigify_bake.apply_anim_to_rigify = real
+        gltf_to_blender.control_profile = known
     check("the bake drove a copy of the rig", bool(seen), len(seen))
     wrong = {n: (p, seen.get(n, "missing")) for n, p in tree.items() if seen.get(n, "missing") != p}
     check("...hanging every joint the server saw from the request's parent", not wrong,

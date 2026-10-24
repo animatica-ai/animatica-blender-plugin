@@ -144,7 +144,8 @@ def _write_fcurve(fc, frames: list[int], values: list[float]) -> None:
 
 
 def _root_pose_bone(arm: bpy.types.Object) -> bpy.types.PoseBone | None:
-    return next((pb for pb in arm.pose.bones if pb.parent is None), None)
+    from .request_builder import top_bone
+    return top_bone(arm)
 
 
 def _world_to_root_basis_location(
