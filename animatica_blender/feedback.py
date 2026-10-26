@@ -5,12 +5,13 @@ Every take waits to be judged, and only the add-on sees how it ends. It is
 sent against the job the server named for the take (``X-Job-Id``), where the
 request and the result already are: ``POST /mmcp/generate/jobs/{id}/feedback``.
 
-* ``accepted`` -- Accept pressed.
-* ``kept`` -- the take was kept without Accept: the bar's Generate made the
-  next stretch, or fine-tuning began (see ``operators.keep_take``).
-* ``rejected`` -- Discard / Reject.
-* ``regenerated`` -- another take replaced it before anyone decided: Redo,
-  of the whole take or of one block.
+* ``accepted`` -- Keep (on the bar or in the sidebar), or Keep All of a batch.
+* ``kept`` -- kept by fine-tuning it: Marionette's first edit on a take keeps
+  it (see ``operators.keep_take``), a softer yes than Keep.
+* ``rejected`` -- Discard.
+* ``regenerated`` -- another take replaced it before anyone decided: Redo, of
+  the whole take or of one block, Generate over a take nobody kept, or a
+  version of the take from before a block Redo shown again.
 
 With it go the variation showing, every variation the artist looked at (only
 those lose to the one kept), and how many keys they changed on the take first.

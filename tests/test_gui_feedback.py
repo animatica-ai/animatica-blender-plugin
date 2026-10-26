@@ -10,9 +10,10 @@ job per request, the verdicts caught where they would go out.
   and the Redo's take was regenerated in turn.
 * Discard: ``rejected``, with the version showing, the versions seen, and the
   keys the artist changed first.
-* The take kept by working on it (``keep_take``: the bar's Generate, Marionette's
-  fine-tuning): ``kept``. Keep All of a batch: ``accepted``, each character
-  against its own job.
+* The take kept by fine-tuning it (``keep_take``, which Marionette's first edit
+  calls): ``kept``. Keep on the bar: ``accepted``. Keep All of a batch:
+  ``accepted``, each character against its own job.
+* Generate over a take nobody kept: that take was ``regenerated``.
 * Nothing goes out with "Share how I judge takes" off, self-hosted, signed out,
   or from a duplicate's copy of another character's take.
 
@@ -202,21 +203,41 @@ def scenario():
                                        "edited_keys": 1})], sent_since(n))
     check("Discard: the take's job goes with its session", job_on(ann) is None, job_on(ann))
 
-    # -- kept by working on it (the bar's Generate, Marionette's fine-tuning)
+    # -- kept by fine-tuning it (Marionette's first edit calls keep_take)
     s().variations = 1
     yield from generate()
     n = len(SENT)
     with bpy.context.temp_override(**override()):
         kept = operators.keep_take(bpy.context)
     yield from wait_for(lambda: len(SENT) > n, "the keep verdict")
-    check("kept by working on it: kept, not accepted",
+    check("kept by fine-tuning it: kept, not accepted",
           kept and sent_since(n) == [("job-3", {"verdict": "kept", "sample_index": 0, "seen_samples": [0],
                                                 "edited_keys": 0})], sent_since(n))
 
-    # -- a duplicate of a character whose take waits sends nothing for the copy
+    # -- Keep on the bar: accepted
     set_prompt(ann, "walks")                    # keeping locked the block: a fresh one
     yield from generate()
-    check("a fresh block makes a take", (job_on(ann) or {}).get("id") == "job-4", job_on(ann))
+    n = len(SENT)
+    click("keep_take")
+    yield from wait_for(lambda: len(SENT) > n, "the Keep verdict")
+    check("Keep on the bar: accepted",
+          sent_since(n) == [("job-4", {"verdict": "accepted", "sample_index": 0, "seen_samples": [0],
+                                       "edited_keys": 0})], sent_since(n))
+
+    # -- Generate over a take nobody kept makes it again: that take was regenerated
+    set_prompt(ann, "walks")
+    yield from generate()
+    n = len(SENT)
+    with bpy.context.temp_override(**override()):
+        bpy.ops.animatica.toolbar_generate('INVOKE_DEFAULT')
+    yield from wait_for(lambda: not s().is_generating, "the take made again")
+    yield from wait_for(lambda: len(SENT) > n, "the verdict on the take replaced")
+    check("Generate over a take nobody kept: regenerated",
+          sent_since(n) == [("job-5", {"verdict": "regenerated", "sample_index": 0, "seen_samples": [0]})],
+          sent_since(n))
+    check("…and the new take is the one waiting", (job_on(ann) or {}).get("id") == "job-6", job_on(ann))
+
+    # -- a duplicate of a character whose take waits sends nothing for the copy
     copy_ = ann.copy()
     copy_.name = "Ann copy"
     bpy.context.scene.collection.objects.link(copy_)

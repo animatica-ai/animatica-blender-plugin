@@ -86,8 +86,8 @@ With **Share how I judge takes** on (it is, unless you turn it off: **Edit →
 Preferences → Add-ons → Animatica → Privacy**), the addon tells Animatica Cloud
 how each take ended, to help us improve the service:
 
-- kept (Keep All, or working on it: generating the next stretch, fine-tuning
-  it in Marionette), thrown away (Discard), or made again (Redo)
+- kept (Keep, Keep All, or fine-tuning it in Marionette), thrown away
+  (Discard), or made again (Redo, or Generate over a take you didn't keep)
 - which version was showing, and which versions you looked at
 - how many keys you changed on the take first
 
