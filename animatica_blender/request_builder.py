@@ -135,7 +135,7 @@ def generation_blockers(
 
     blocks = [b for b in prompt_blocks or () if getattr(b, "enabled", True)]
     if blocks and all(is_locked(b) for b in blocks):
-        return ["Every block is locked: unlock one, or add one, to generate"]
+        return ["Every block is kept: unlock one on the Timeline, or add one, to generate"]
     # what the next Generate makes: locked blocks are left as they are
     blocks = [b for b in generation_blocks(blocks, scene) if getattr(b, "enabled", True)]
     texts = [(b.prompt or "").strip() for b in blocks]
