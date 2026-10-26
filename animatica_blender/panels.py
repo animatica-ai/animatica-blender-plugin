@@ -329,11 +329,9 @@ class ANIMATICA_PT_main(AnimaticaPanelBase, Panel):
             # greyed, and saying why instead of "Generate Motion" without a word
             row.operator("animatica.generate", text=blockers[0])
         elif in_preview:
-            # as on the bar: Generate keeps the take and makes the blocks it left;
-            # another go at this one is Redo, in the review box above
-            from . import toolbar
-            if toolbar._more_to_make(context, arm_live):
-                row.operator("animatica.toolbar_generate", text="Generate the Rest")
+            # as on the bar: Generate waits until the take is kept (Keep, in the
+            # review box above); another go at this one is Redo
+            pass
         else:
             row.operator("animatica.generate", text="Generate")
 
@@ -566,7 +564,7 @@ def _draw_review(layout, context, settings, arm) -> None:
     # Another character focused while this take waits: say why nothing switched.
     focused = properties.armature_of(context.view_layer.objects.active)
     if single and settings.follow_active and focused is not None and focused != arm:
-        info.label(text=f"Fine-tune or Discard this take to switch to {focused.name}", icon='INFO')
+        info.label(text=f"Keep or Discard this take to switch to {focused.name}", icon='INFO')
     loops = [a.animation_data.action.get("animatica_loop") for a in arms
              if a.animation_data and a.animation_data.action]
     loops = [lp for lp in loops if lp]
@@ -627,8 +625,9 @@ def _draw_review(layout, context, settings, arm) -> None:
         sub.label(text=f"Seed {last}")
         lock = row.row()
         lock.enabled = not locked
-        lock.operator("animatica.lock_global_seed", text="Locked" if locked else "Lock",
-                      icon='LOCKED' if locked else 'UNLOCKED')
+        # a pin, not a padlock: the padlock is a kept block's
+        lock.operator("animatica.lock_global_seed", text="Reusing" if locked else "Reuse",
+                      icon='PINNED' if locked else 'UNPINNED')
     # Live on the takes: the travel is muted, not removed, so it comes back.
     sub = box.column()
     sub.use_property_split = True
@@ -640,8 +639,9 @@ def _draw_review(layout, context, settings, arm) -> None:
     row = box.row(align=True)
     row.scale_y = 1.3
     if single:
-        # the bar's own choices, in its words: no Accept (fine-tuning keeps
-        # the take), Redo for another go, Discard to throw it away
+        # the bar's own choices, in its words: Keep sets it in stone, Redo
+        # for another go, Discard to throw it away
+        row.operator("animatica.accept", icon='CHECKMARK', text="Keep")
         row.operator("animatica.toolbar_redo", icon='FILE_REFRESH', text="Redo")
         row.operator("animatica.keep_frame", icon='KEYFRAME_HLT', text="Key This Frame")
         row.operator("animatica.reject", icon='X', text="Discard")
@@ -844,7 +844,7 @@ class ANIMATICA_PT_settings(AnimaticaPanelBase, Panel):
         if last_seed > 0 and last_seed != int(settings.seed):
             row = layout.row(align=True)
             row.label(text=f"Last run used seed {last_seed}")
-            row.operator("animatica.lock_global_seed", text="Lock", icon='LOCKED')
+            row.operator("animatica.lock_global_seed", text="Reuse", icon='PINNED')
 
         layout.prop(settings, "quality_preset")
         if settings.quality_preset == "CUSTOM":
