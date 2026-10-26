@@ -1149,6 +1149,7 @@ class ANIMATICA_OT_generate(Operator):
     _inplace_was_on = False
     _loop_spot = None
     _start_time: float = 0.0
+    _job_id: str = ""
 
     def _regen_own_take(self, context, arm) -> None:
         """Generate again over a take on a rig that had no action of its own.
@@ -1376,6 +1377,7 @@ class ANIMATICA_OT_generate(Operator):
             mmcp_client.clear_failure()
             client = mmcp_client.MmcpClient(server_url)
             self._result = client.generate(req)
+            self._job_id = client.last_job_id
         except Exception as exc:                         # noqa: BLE001 — surfaced to UI
             self._error = exc
 
@@ -1472,6 +1474,10 @@ class ANIMATICA_OT_generate(Operator):
                 loop_spot=getattr(self, "_loop_spot", None),
                 source_action_name=settings.source_action_name,
             )
+            # What the artist makes of the take is reported against its job
+            # (and a take it replaced unjudged was regenerated).
+            from . import feedback
+            feedback.note_job(arm, self._job_id, self._result)
 
             # The artist's edits on the take replaced are on the source already
             # (execute); again here for a take from an older version, which
@@ -1716,6 +1722,17 @@ class ANIMATICA_OT_accept(Operator):
         return s.is_previewing and not s.is_generating
 
     def execute(self, context):
+        # Taken first: keeping the take closes its session and folds the
+        # edits in. Kept without Accept (promote off: see keep_take) is
+        # reported as such -- a softer yes.
+        from . import feedback
+        review = feedback.review(properties._live_armature(context.scene.animatica.target_armature))
+        result = self._keep(context)
+        if result == {'FINISHED'}:
+            feedback.send(review, "accepted" if self.promote else "kept")
+        return result
+
+    def _keep(self, context):
         s = context.scene.animatica
         arm = _live_target_armature_or_clear(s)
         if arm is not None and _refuse_in_tweak_mode(self, [arm]):
@@ -1877,6 +1894,14 @@ class ANIMATICA_OT_reject(Operator):
         return s.is_previewing and not s.is_generating
 
     def execute(self, context):
+        from . import feedback
+        review = feedback.review(properties._live_armature(context.scene.animatica.target_armature))
+        result = self._throw_away(context)
+        if result == {'FINISHED'}:
+            feedback.send(review, "rejected")
+        return result
+
+    def _throw_away(self, context):
         s   = context.scene.animatica
         arm = _live_target_armature_or_clear(s)
         if arm is not None and _refuse_in_tweak_mode(self, [arm]):

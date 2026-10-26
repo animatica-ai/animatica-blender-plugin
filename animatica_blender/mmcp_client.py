@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import sys
 import threading
 import time
@@ -822,6 +823,15 @@ class MmcpError(Exception):
 # Client
 # ---------------------------------------------------------------------------
 
+_JOB_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+
+
+def _job_id_of(value) -> str:
+    """A job id as the server sent it, or nothing if it does not look like one."""
+    value = value.strip() if isinstance(value, str) else ""
+    return value if _JOB_ID.match(value) else ""
+
+
 class MmcpClient:
     """Single-purpose MMCP client.
 
@@ -836,6 +846,11 @@ class MmcpClient:
         self.base_url = (base_url or get_server_url()).rstrip("/")
         self.timeout = timeout or self.DEFAULT_TIMEOUT_SECONDS
         self._caps: dict[str, Any] | None = None
+        #: The job the last ``generate`` made, when the server says (Animatica
+        #: Cloud's ``X-Job-Id``): what the take's Accept / Reject is about.
+        self.last_job_id: str = ""
+        #: The same, one per request, for the last ``generate_batch``.
+        self.last_job_ids: list[str] = []
 
     # --- Capabilities ------------------------------------------------------
 
@@ -930,10 +945,13 @@ class MmcpClient:
                     expire_session("your session expired. Sign in again")
                     raise
             with resp:
+                self.last_job_id = _job_id_of(resp.headers.get("X-Job-Id"))
                 if resp.status == 200:
                     return json.loads(resp.read())
                 if resp.status == 202:
                     location = resp.headers.get("Location") or ""
+                    self.last_job_id = (self.last_job_id
+                                        or _job_id_of(location.rstrip("/").rsplit("/", 1)[-1]))
                     retry_after = float(resp.headers.get("Retry-After") or "2")
                     return self._poll_job(location, retry_after)
                 raise MmcpError.from_response(resp.status, resp.read())
@@ -961,6 +979,7 @@ class MmcpClient:
         if len(results) != len(requests):
             raise MmcpError(code="internal_error",
                             message=f"{len(results)} results for {len(requests)} requests")
+        self.last_job_ids = [_job_id_of(item.get("job_id")) for item in results]
         out: list = []
         for item in results:
             if "gltf" in item:

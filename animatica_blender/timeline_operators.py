@@ -1859,6 +1859,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
     _anchor_frames = None
     _start_time = 0.0
     _inplace_was_on = False
+    _job_id = ""
 
     @classmethod
     def poll(cls, context):
@@ -2064,6 +2065,7 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
             mmcp_client.clear_failure()
             client = mmcp_client.MmcpClient(server_url)
             self._result = client.generate(req)
+            self._job_id = client.last_job_id
         except Exception as exc:                          # noqa: BLE001 — surfaced to UI
             self._error = exc
 
@@ -2148,6 +2150,9 @@ class ANIMATICA_OT_regenerate_block(bpy.types.Operator):
         # it was on the old one. Done here, so cleanup leaves it alone.
         self._inplace_was_on = False
         _regen_after(arm, preview_action, s, spliced=True)
+        # The take the block was redone in was regenerated; this job is the take now.
+        from . import feedback
+        feedback.note_job(arm, self._job_id, self._result)
 
         self._cleanup(context)
         for area in context.screen.areas:

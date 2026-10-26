@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [Unreleased]
+
+### Added
+
+- **Share how you judge takes.** How each take ends — kept (Keep, Keep All, or fine-tuning it in
+  Marionette), thrown away with Discard, or made again (Redo, or Generate over a take you didn't
+  keep) — is sent to Animatica Cloud against the generation it came from, with the version that
+  was showing, the versions looked at, and how many keys were changed first, to help us improve
+  the service. On by default; turn it off under **Privacy** in the add-on's preferences. Nothing
+  is sent to a self-hosted server, signed out, or with online access off.
+
 ## [1.0.12] — 2026-10-26
 
 ### Changed
