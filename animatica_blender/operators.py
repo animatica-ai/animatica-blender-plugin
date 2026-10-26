@@ -1640,11 +1640,11 @@ def _remove_orphan_takes(*, past_fake_user: bool = False) -> int:
 
 
 def keep_take(context) -> bool:
-    """A take still being judged is kept the moment it is worked on: an edit
-    on it, or the next Generate. It was Accept's job, a click that changed
-    nothing you could see; now the take is yours when it arrives, Redo and
-    Discard stay while you judge it, and fine-tuning it is the keeping.
-    True when a take was kept."""
+    """Keep the take still being judged because it is being fine-tuned:
+    Marionette's handles call this on their first edit, so the take is kept
+    (its blocks locked) without the edit becoming key poses that would steer
+    the next Generate through every tweak. Keep on the bar is the other way
+    to keep it. True when a take was kept."""
     s = getattr(context.scene, "animatica", None)
     if s is None or not s.is_previewing or s.is_generating:
         return False
@@ -1698,7 +1698,7 @@ def _keep_as_own_action(arm, take, source) -> None:
 
 class ANIMATICA_OT_accept(Operator):
     bl_idname = "animatica.accept"
-    bl_label = "Accept"
+    bl_label = "Keep Take"
     bl_description = (
         "Keep this take and lock its blocks. You can edit the motion, and "
         "Generate and Redo leave it as it is. Unlock a block to make it again"
@@ -2618,7 +2618,7 @@ class ANIMATICA_OT_randomize_seed(Operator):
 
 class ANIMATICA_OT_lock_global_seed(Operator):
     bl_idname = "animatica.lock_global_seed"
-    bl_label = "Lock Seed"
+    bl_label = "Reuse Seed"
     bl_description = (
         "Copy the seed the last generation actually ran with into Seed, so the "
         "next Generate reproduces it. Useful after generating with Seed = 0"

@@ -1177,7 +1177,7 @@ class ANIMATICA_OT_timeline_strip_context_menu(bpy.types.Operator):
                 op = layout.operator(
                     "animatica.reuse_block_seed",
                     text="Reuse seed (pin it)",
-                    icon="LOCKED",
+                    icon="PINNED",
                 )
                 op.index = self._hit_index
             layout.separator()

@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries for 0.4.0 and earlier describe the addon under its former name,
 Proscenium, and keep the identifiers those releases actually shipped.
 
+## [Unreleased]
+
+### Changed
+
+- **Keep.** A take waiting for review has a **Keep** button again, on the floating bar and in the
+  sidebar, beside Redo and Discard. Keep sets the take in stone: its motion stays, its blocks lock,
+  and the next Generate and Redo leave them alone. Since the editing tools moved to Marionette,
+  nothing in Choreographer kept a single take, and the review said there was "nothing to accept".
+- **Generate waits for the decision.** During a review the bar no longer offers Generate, and
+  Generate no longer keeps the take on its own: it would only make it again, which is Redo. Keep
+  the take, and Generate makes the blocks you haven't kept.
+- The seed's **Lock** is now **Reuse**, with a pin: the padlock is a kept block's. "Every block is
+  locked" now reads "Every block is kept".
+
 ## [1.0.11] — 2026-10-24
 
 ### Fixed

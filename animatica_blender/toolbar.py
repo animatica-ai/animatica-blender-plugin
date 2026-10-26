@@ -408,20 +408,17 @@ def _clipboard_items(context, group) -> list:
 
 
 def _review_items(context, arm, keyed) -> list:
-    """A take waiting for review: Generate (blocks left), Redo, its versions,
-    Reject. Empty when there is none."""
+    """A take waiting for review: Keep, Redo, its versions, Discard. Empty
+    when there is none."""
     from . import batch, variations
     s = context.scene.animatica
     if not s.is_previewing or batch.pending(s) or batch.failures(s):
         return []
-    # no Accept: the take is yours when it comes, fine-tuning it keeps it. What
-    # there is to decide: make the rest (Generate, when blocks are left),
-    # retry this one, or throw it away
-    out = []
-    if _more_to_make(context, arm):
-        out.append(Item("generate", "generate", "animatica.toolbar_generate", label="Generate",
-                        primary=True, group=5))
-    out += [
+    # What there is to decide, as for a batch: keep it (its motion stays and
+    # its blocks lock, so Generate and Redo leave them alone), try again, or
+    # throw it away. Generate waits for the decision: until the take is kept,
+    # it would only make it again
+    out = [Item("keep_take", "accept", "animatica.accept", label="Keep", primary=True, group=5),
            # one Redo: the block under the playhead, Shift for the whole take
            Item("redo", "redo", "animatica.toolbar_redo", label="Redo", group=6)]
     take = variations.take_of(arm)
@@ -435,16 +432,15 @@ def _review_items(context, arm, keyed) -> list:
     return out
 
 
-def _more_to_make(context, arm) -> bool:
-    """Whether there is a block the take did not cover (and nobody locked):
-    something left for Generate while the take is judged."""
+def _take_blocks(context, arm) -> int:
+    """How many blocks the take on *arm* covers: the ones Keep locks."""
     s = context.scene.animatica
-    span = arm.get("animatica_take_range")
+    span = arm.get("animatica_take_range") if arm is not None else None
     if span is None or len(span) < 2:
-        return False
+        return 0
     lo, hi = int(span[0]), int(span[1])
-    return any(getattr(b, "enabled", True) and not b.locked and not (b.frame_start < hi and b.frame_end > lo)
-               for b in s.prompt_blocks)
+    return sum(1 for b in s.prompt_blocks
+               if getattr(b, "enabled", True) and not b.locked and b.frame_start < hi and b.frame_end > lo)
 
 
 def _working(s):
@@ -1173,7 +1169,8 @@ TIPS = {
     "generate": ("Generate", "Make the take, the generated motion. It passes through your key poses, follows your prompts and ends at your waypoints"),
     "working": ("Cancel", "Stop generating the take"),
     "redo": ("Redo", "Make the block under the playhead again (Shift: the whole take). The new take still passes through your key poses. To keep a good moment, use Key This Frame first"),
-    "reject": ("Discard", "Throw this take away and go back to what you had. Your key poses and prompts stay. There is no Accept button: a take is kept as soon as you start fine-tuning it"),
+    "reject": ("Discard", "Throw this take away and go back to what you had. Your key poses and prompts stay"),
+    "keep_take": ("Keep", "Keep this take: its motion stays and its blocks lock, so Generate and Redo leave them as they are. To make a block again later, unlock it on the Timeline"),
     "var_prev": ("Previous Version", "Show the previous version of the take"),
     "var_next": ("Next Version", "Show the next version of the take"),
     "options": ("Take Options", "Set Loop, In Place and versions. With versions, one Generate gives you several takes to choose from"),
@@ -1237,10 +1234,13 @@ def tip(context, it) -> str:
         line = "This frame is already a key pose"
     elif it.id == "waypoint" and it.badge:
         line = _waypoint_hint(context) + ". " + line
-    elif it.id == "accept":
-        from . import key_poses
-        n = len(key_poses.take_keys(context.scene))
-        line = f"Keep this take. It passes through your {n} key pose{'s' if n != 1 else ''}" if n else line
+    elif it.id == "keep_take":
+        from . import properties
+        n = _take_blocks(context, properties._live_armature(s.target_armature))
+        if n:
+            line = (f"Keep this take: its motion stays and its {n} block{'s' if n != 1 else ''} lock, "
+                    "so Generate and Redo leave them as they are. To make one again later, unlock it "
+                    "on the Timeline")
     elif it.id in ("generate", "connect"):
         kind, text, _op = gate(context)
         from . import key_poses
@@ -1541,9 +1541,8 @@ class ANIMATICA_OT_toolbar_generate(bpy.types.Operator):
         from . import batch
         if batch.batch_selection(context):
             return bpy.ops.animatica.generate_batch('INVOKE_DEFAULT')
-        # the take being judged is kept first: Generate makes the rest
-        from .operators import keep_take
-        keep_take(context)
+        # a take still being judged is not kept by this: Keep is what sets it
+        # in stone, and Generate makes every block nobody kept
         return bpy.ops.animatica.generate('INVOKE_DEFAULT')
 
 

@@ -40,8 +40,8 @@ Use **Save As** to keep your changes somewhere of your own.
 With **Follow Selection** on (the arrow icon next to the Armature field, on by
 default), selecting a character — its armature or its body — makes it the one
 Animatica animates, with its own prompts and key poses. While a take is being
-made or reviewed, the character stays until you Accept or Reject; the review
-says *Accept or Reject to switch to …*.
+made or reviewed, the character stays until you Keep or Discard the take; the
+review says *Keep or Discard this take to switch to …*.
 
 With **Animatica Cloud** you can generate onto many custom armatures, not only
 the ready-made character.
@@ -80,45 +80,52 @@ Under **Generate Motion**:
 
 ### Reviewing a take
 
-A new take waits for you in the **Reviewing take** box at the top of the panel.
-Play it in the viewport, then decide.
+A new take waits for you to judge it, on the floating bar and in the
+**Reviewing take** box at the top of the panel. Play it in the viewport, then
+decide:
 
-- **Variation 1 of N** — with Variations above 1, the arrows flip between the
-  versions without generating again. Accept keeps the one showing.
-- **Seed N** and **Lock** — the seed this take used. Lock it to get this take
+- **Keep** — sets the take in stone. Its motion stays, and the blocks it made
+  lock (a padlock, and a darker block framed in white on the Timeline), so the
+  next Generate and Redo leave them alone. The take becomes the character's own
+  action, under your action's name, with keys you can edit; the action you had
+  before is kept, hidden, as *.Animatica before: …*.
+- **Redo** — makes the block under the playhead again (Shift: the whole take).
+- **Discard** — throws the take away and puts back exactly what you had: your
+  action, your pose and the scene's frame range. Keys you added or changed
+  during the review are kept.
+
+Until you keep the take, Generate waits: it would only make the take again,
+which is what Redo is for. Keep it, and Generate makes the blocks you have not
+kept, into the kept motion either side, so you can work through a sequence a
+block or two at a time. To make a kept block again, unlock it: the padlock next
+to its prompt, or right-click it on the Timeline. With
+[Animatica Marionette](configuration.md#posing-by-hand), fine-tuning a take
+with the handles keeps it too.
+
+Also in the review:
+
+- **Variations** — with Variations above 1, the number buttons switch between
+  the versions without generating again. Keep keeps the one showing.
+- **Seed N** and **Reuse** — the seed this take used. Reuse it to get this take
   again next time; otherwise every Generate is a new take.
 - **In place** — switch it on or off for this take. Switching it off brings
   the travel back.
-- **Generate Again** — a new take with the same direction.
+- **Key This Frame** — turns the take's pose at this frame into a key pose, so
+  a Redo passes through it.
 - **Regenerate Active Block** — with two or more prompt blocks, makes the
   selected block again and keeps its neighbours.
 
-**Accept** keeps the take.
-
-Each accepted take is added to the NLA as its own named clip, on its own
-track (*Animatica: <prompt>*), above the takes you accepted earlier, which stay
-where they are. A take with several prompt blocks becomes one clip per block,
-each on its own track, so every block exports as its own animation. The action
-you had before you generated is kept too, stashed on a muted *[Action Stash]*
-track, and your keys either side of the take keep playing. A kept loop keeps
-cycling to the end of the scene. The one exception is a take generated into a
-gap between your own keys: that one is filled into your action instead.
-
-In NLA tweak mode, Generate, Accept and Reject wait: press **Tab** in the NLA
+In NLA tweak mode, Generate, Keep and Discard wait: press **Tab** in the NLA
 editor to leave it first.
-
-**Reject** throws the take away and puts back exactly what you had: your
-action, your pose and the scene's frame range. Keys you added or changed
-during the review are kept. Takes you accepted earlier stay.
 
 A few things you can rely on:
 
-- Accept, Reject and Generate are one undo step each.
+- Keep, Discard and Generate are one undo step each.
 - Saving the file during a review is safe. Reopen it and the take is still
-  waiting, and Reject still knows what to put back.
-- A loop keeps cycling after you accept it.
-- What In place took out is kept with the accepted take as its root motion,
-  so it is not lost.
+  waiting, and Discard still knows what to put back.
+- A loop keeps cycling after you keep it.
+- What In place took out is kept with the take as its root motion, so it is
+  not lost.
 
 ### Several characters at once
 
