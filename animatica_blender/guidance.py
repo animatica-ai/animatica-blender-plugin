@@ -110,11 +110,14 @@ def next_step(context) -> dict | None:
     if s.is_previewing:
         out.append(dict(
             id="review",
-            text=("Fine-tune the take with the handles \u00b7 Redo tries again \u00b7 Discard throws it away" if pro
-                  else "Redo tries again \u00b7 Discard throws it away \u00b7 Key This Frame keeps a pose you like"),
-            why="There is nothing to accept, because the take is already in your scene. Your first "
-                "edit on it keeps it and locks its blocks, so a later Generate leaves them alone. "
-                "Key This Frame turns a frame you like into a key pose, and a Redo then passes through it",
+            # in the batch's words: one way to judge a take, however it was made
+            text=("Judge the take: Keep or fine-tune it \u00b7 Redo tries again \u00b7 Discard throws it away" if pro
+                  else "Judge the take: Keep keeps it \u00b7 Redo tries again \u00b7 Discard throws it away"),
+            why="Keep sets the take in stone: its motion stays and its blocks lock, so a later Generate "
+                "or Redo leaves them alone (unlock a block on the Timeline to make it again). Until then "
+                "Generate waits, and Redo makes it again. "
+                + ("Fine-tuning it with the handles keeps it too. " if pro else "")
+                + "Key This Frame turns a frame you like into a key pose, and a Redo then passes through it",
             op=None, props={}))
     elif waiting or failures:
         pass                        # the batch's hint, above
@@ -127,6 +130,16 @@ def next_step(context) -> dict | None:
                 "frames around it follow by Reach and Intensity (the curve on the bar). The onion "
                 "skins and the trail show them move as you drag",
             op="animatica.hint_finetune", props={}))
+    elif in_take and _kept_here(s, scene):
+        # a kept take: Redo leaves a locked block alone, so say how to make it again
+        out.append(dict(
+            id="finetune",
+            text="Change a pose in the kept take: pose the character and key it (I)",
+            why=f"Poses are changed with Blender's own tools here ({posing.PRO_NAME} adds handles that "
+                "carry an edit through the frames around it). This block is kept, so Redo and Generate "
+                "leave it alone. To make it again around a new key pose, unlock it on the Timeline, "
+                "Set Key Pose, then Redo",
+            op=None, props={}))
     elif in_take:
         # without the handles: Blender's own posing, a key pose, and Redo around it
         out.append(dict(
@@ -325,3 +338,10 @@ def unregister():
     bpy.utils.unregister_class(ANIMATICA_OT_hint_why)
     bpy.utils.unregister_class(ANIMATICA_OT_hint_finetune)
     bpy.utils.unregister_class(ANIMATICA_OT_blocks_over_keys)
+
+
+def _kept_here(settings, scene) -> bool:
+    """Is the block under the playhead kept (locked)?"""
+    from .toolbar import block_at
+    i = block_at(settings, int(scene.frame_current))
+    return 0 <= i < len(settings.prompt_blocks) and bool(settings.prompt_blocks[i].locked)

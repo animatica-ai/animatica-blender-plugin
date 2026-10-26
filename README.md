@@ -22,7 +22,7 @@ armature. Not happy? **Reject** and try again.
 - **Follow Selection** — select a character to animate it
 - **Example scenes** — open a finished set, ready to generate
 - **Single poses** — **Generate Pose at Frame** for one frame without replacing your whole action
-- **Review before committing** — every take waits for **Accept** or **Reject**
+- **Review before committing** — every take waits for you: **Keep** it (its blocks lock, so the next Generate leaves them alone), **Redo** it, or **Discard** it
 - **Built-in updates** — the addon tells you when a new version is out and installs it on one click
 
 Generation runs in the cloud by default ([Animatica Cloud](https://animatica.ai)),
@@ -53,7 +53,7 @@ Later versions install from inside Blender; see [installation](docs/installation
 3. Pick your **Armature**, or **Add Ready-Made Character** if you're starting from ours
    (or open an example scene from the icon in the panel's header)
 4. Type a prompt, add key poses or waypoints if you like, then **Generate Motion**
-5. **Accept** to keep the take, or **Reject** to go back to what you had
+5. **Keep** the take, **Redo** it, or **Discard** it to go back to what you had
 
 New here? Watch the **[video tutorial playlist](https://www.youtube.com/watch?v=Wc349qOwjfM&list=PLAJ2UfUYhFQKZpFS8eh1eGUWJ0PAys1n1)**
 on YouTube for a walkthrough in Blender.

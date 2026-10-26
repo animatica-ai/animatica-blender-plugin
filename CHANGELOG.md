@@ -12,12 +12,26 @@ Proscenium, and keep the identifiers those releases actually shipped.
 
 ### Added
 
-- **Share how you judge takes.** How each take ends — kept (Keep All, or worked on: the next
-  stretch generated, fine-tuning begun), thrown away with Discard, or made again with Redo —
-  is sent to Animatica Cloud against the generation it came from, with the version that was
-  showing, the versions looked at, and how many keys were changed first, to help us improve
-  the service. On by default; turn it off under **Privacy** in the add-on's preferences.
-  Nothing is sent to a self-hosted server, signed out, or with online access off.
+- **Share how you judge takes.** How each take ends — kept (Keep, Keep All, or fine-tuning it in
+  Marionette), thrown away with Discard, or made again (Redo, or Generate over a take you didn't
+  keep) — is sent to Animatica Cloud against the generation it came from, with the version that
+  was showing, the versions looked at, and how many keys were changed first, to help us improve
+  the service. On by default; turn it off under **Privacy** in the add-on's preferences. Nothing
+  is sent to a self-hosted server, signed out, or with online access off.
+
+## [1.0.12] — 2026-10-26
+
+### Changed
+
+- **Keep.** A take waiting for review has a **Keep** button again, on the floating bar and in the
+  sidebar, beside Redo and Discard. Keep sets the take in stone: its motion stays, its blocks lock,
+  and the next Generate and Redo leave them alone. Since the editing tools moved to Marionette,
+  nothing in Choreographer kept a single take, and the review said there was "nothing to accept".
+- **Generate waits for the decision.** During a review the bar no longer offers Generate, and
+  Generate no longer keeps the take on its own: it would only make it again, which is Redo. Keep
+  the take, and Generate makes the blocks you haven't kept.
+- The seed's **Lock** is now **Reuse**, with a pin: the padlock is a kept block's. "Every block is
+  locked" now reads "Every block is kept".
 
 ## [1.0.11] — 2026-10-24
 
