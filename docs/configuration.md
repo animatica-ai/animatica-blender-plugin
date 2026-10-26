@@ -77,6 +77,22 @@ not online.
 
 It does not send file paths, scene names or object names. On Animatica Cloud
 your session goes with it; to a self-hosted server it goes to that server
-only, with no Animatica session.
+only, with no Animatica session. Animatica Cloud keeps the request and the
+take it made with your account.
+
+**What you made of a take**
+
+With **Share how I judge takes** on (it is, unless you turn it off: **Edit →
+Preferences → Add-ons → Animatica → Privacy**), the addon tells Animatica Cloud
+how each take ended, to help us improve the service:
+
+- kept (Keep All, or working on it: generating the next stretch, fine-tuning
+  it in Marionette), thrown away (Discard), or made again (Redo)
+- which version was showing, and which versions you looked at
+- how many keys you changed on the take first
+
+It goes against the generation the take came from, and nothing else goes with
+it. Nothing is sent to a self-hosted server, signed out, or with online access
+off.
 
 Next: [Using Animatica](usage.md)

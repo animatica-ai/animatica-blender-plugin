@@ -38,7 +38,7 @@ import bpy
 from bpy.props import BoolProperty, StringProperty
 from bpy.types import Operator
 
-from . import constraints_ui, mmcp_client, properties, request_builder, variations
+from . import constraints_ui, feedback, mmcp_client, properties, request_builder, variations
 from .operators import ends_cleanly
 
 #: requests in flight at once; the rest queue behind them
@@ -145,6 +145,7 @@ class _Job:
     done: bool = False
     ok: bool = False                # its take is on the character, waiting for review
     error: str = ""
+    job_id: str = ""              # the server's name for it, for the take's verdict
     extra: dict = field(default_factory=dict)
 
 
@@ -158,16 +159,32 @@ def _submit(pool, jobs, url, model_caps) -> None:
     """
     if not model_caps.get("supports_batch"):
         for job in jobs:
-            job.future = pool.submit(lambda r=job.req: mmcp_client.MmcpClient(url).generate(r))
+            job.future = pool.submit(_generate_one, url, job)
         return
     size = max(1, int((model_caps.get("limits") or {}).get("max_batch_size") or 16))
     for i in range(0, len(jobs), size):
         chunk = jobs[i:i + size]
         for job in chunk:
             job.future = Future()
-        whole = pool.submit(lambda reqs=[j.req for j in chunk]:
-                            mmcp_client.MmcpClient(url).generate_batch(reqs))
+        whole = pool.submit(_generate_chunk, url, chunk)
         whole.add_done_callback(lambda f, chunk=chunk: _fan_out(f, chunk))
+
+
+def _generate_one(url, job):
+    """One character's request. Worker thread. Notes the job the server made of it."""
+    client = mmcp_client.MmcpClient(url)
+    result = client.generate(job.req)
+    job.job_id = client.last_job_id
+    return result
+
+
+def _generate_chunk(url, chunk):
+    """Several characters in one request. Worker thread. Notes each one's job."""
+    client = mmcp_client.MmcpClient(url)
+    results = client.generate_batch([j.req for j in chunk])
+    for job, job_id in zip(chunk, client.last_job_ids):
+        job.job_id = job_id
+    return results
 
 
 def _fan_out(whole, chunk) -> None:
@@ -375,6 +392,7 @@ class ANIMATICA_OT_generate_batch(Operator):
                 # Its variations, to flip through in the review.
                 variations.remember(arm, result, action,
                                     splice_target_name=job.splice_target_name, **bake)
+                feedback.note_job(arm, job.job_id, result)
                 # The source is kept alive while the take waits (a fake user,
                 # given by the take's preview session, and taken back by the
                 # Accept / Reject that ends it).

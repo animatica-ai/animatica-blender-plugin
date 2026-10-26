@@ -591,6 +591,17 @@ class AnimaticaAddonPreferences(AddonPreferences):
         default="",
         description="Your Animatica plan (free, pro, team or admin)",
     )
+    # What the artist makes of each take, sent against its generation to help
+    # improve the service (see feedback.py). Animatica Cloud only.
+    share_feedback: BoolProperty(
+        name="Share how I judge takes",
+        default=True,
+        description=(
+            "Tell Animatica Cloud which takes you keep, throw away or make again, "
+            "to help us improve the service. Turn it off to share none of it. "
+            "Nothing is sent to a self-hosted server"
+        ),
+    )
 
     # The Autoposer's own settings — model source, token, cache, threads —
     # merged in below the class body. Blender allows one AddonPreferences per
@@ -637,6 +648,22 @@ class AnimaticaAddonPreferences(AddonPreferences):
             else:
                 box.label(text="Sign in to generate motion", icon='USER')
             box.operator("animatica.signin", icon='IMPORT', text="Sign in")
+
+        # --- Privacy ----------------------------------------------------------
+        # Its own heading, signed in or not: the way to say no has to be found
+        # before anything is sent, not inside the row of an account.
+        layout.separator()
+        layout.label(text="Privacy", icon='HIDE_OFF')
+        box = layout.box()
+        if self.self_hosted:
+            box.label(text="Self-hosted: nothing is shared with Animatica", icon='INFO')
+        else:
+            box.prop(self, "share_feedback")
+            col = box.column(align=True)
+            col.active = False
+            col.label(text="Whether you keep, discard or redo each take, with the version you")
+            col.label(text="picked, goes to Animatica Cloud to help us improve the service.")
+            col.label(text="Off: none of it is sent.")
 
         # --- Server -----------------------------------------------------------
         layout.separator()

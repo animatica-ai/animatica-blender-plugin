@@ -32,6 +32,8 @@ class Take:
     index: int
     action_name: str
     bake: dict = field(default_factory=dict)
+    #: the server's job these versions are of (see feedback.note_job)
+    job_id: str = ""
 
 
 #: armature name -> the take on it that has variations
@@ -95,6 +97,8 @@ def show(context, arm, index: int) -> None:
         action.name = name
     take.index = index
     take.action_name = action.name
+    from . import feedback
+    feedback.shown(arm, index, job_id=take.job_id, samples=take.count)
     # everything drawn from the motion is of the version before: the ghosts,
     # the trail, the plan. A version can be baked into the same action, so
     # nothing else tells them (the ghosts stayed those of the first version)

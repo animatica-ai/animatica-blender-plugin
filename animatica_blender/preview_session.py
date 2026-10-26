@@ -165,6 +165,13 @@ def _set_action(arm, data, role, action) -> None:
 
 # --- whether it still holds -----------------------------------------------------
 
+def is_copy(arm) -> bool:
+    """True when the session on *arm* is only a copy of another character's
+    (see :func:`_copied_from`): its take is not one to judge."""
+    data = get(arm)
+    return data is not None and _copied_from(arm, data)
+
+
 def _copied_from(arm, data) -> bool:
     """True when *arm* only carries a copy of another character's session: a
     duplicate (Shift+D copies custom properties) of a character whose take
